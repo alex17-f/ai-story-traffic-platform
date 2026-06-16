@@ -740,6 +740,12 @@ function renderTelegramCenter() {
         <h2>Команды</h2>
         <div class="category-list">
           <a>/start</a>
+          <a>/status</a>
+          <a>/stats</a>
+          <a>/drafts</a>
+          <a>/approve</a>
+          <a>/reject</a>
+          <a>/help</a>
           <a>/stories</a>
           <a>/images</a>
           <a>/audience</a>
@@ -2005,10 +2011,57 @@ async function telegramAutopilot(chatId) {
   return sendTelegramMessage(chatId, `🤖 <b>AI Autopilot</b>\n\n${status}\n\nData Layer:\n${escapeHtml(realData.notice)}\n\nЧего не хватает:\n${escapeHtml(warnings)}\n\nРекомендации:\n${escapeHtml((brain.recommendations || []).slice(0, 4).join("\n"))}`, mainTelegramKeyboard());
 }
 
+async function telegramStatus(chatId) {
+  const fb = facebookConfigStatus();
+  const tg = telegramConfigStatus();
+  const realData = buildRealDataLayer();
+  const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
+  return sendTelegramMessage(chatId, `✅ <b>System Status</b>\n\nTelegram: ${tg.configured ? "connected" : "not connected"}\nFacebook: ${fb.configured ? "connected" : "not connected"}\nDatabase: ${pgPool ? "PostgreSQL" : "JSON backup mode"}\nProject Brain: ${brain.updated_at ? "active" : "needs refresh"}\n\n${escapeHtml(realData.notice)}`, mainTelegramKeyboard());
+}
+
+async function telegramStats(chatId) {
+  const stories = readStories();
+  const posts = readFacebookPosts();
+  const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
+  const stats = brain.publication_statistics || {};
+  return sendTelegramMessage(chatId, `📊 <b>Stats</b>\n\nStories: ${stories.length}\nDrafts: ${stats.draft || 0}\nReview: ${stats.review || 0}\nApproved: ${stats.approved || 0}\nScheduled: ${stats.scheduled || 0}\nPublished: ${stats.published || 0}\nRejected: ${stats.rejected || 0}\n\nFacebook posts loaded: ${posts.length}\nViews: ${stats.total_views || 0}\nClicks: ${stats.total_clicks || 0}`, mainTelegramKeyboard());
+}
+
+async function telegramDrafts(chatId) {
+  const stories = readStories()
+    .filter((story) => ["draft", "review", "approved"].includes(normalizeStoryStatus(story.status)))
+    .slice(0, 8);
+  if (!stories.length) return sendTelegramMessage(chatId, "Черновиков и историй на проверке сейчас нет.", mainTelegramKeyboard());
+  const text = stories.map((story, index) => `${index + 1}. <b>${escapeHtml(story.title)}</b>\nID: <code>${escapeHtml(story.id)}</code>\nСтатус: ${storyTelegramStatus(story)}\nТема: ${escapeHtml(story.category)}`).join("\n\n");
+  return sendTelegramMessage(chatId, `📝 <b>Drafts / Review</b>\n\n${text}`, {
+    inline_keyboard: stories.map((story) => [
+      { text: `✅ ${shortText(story.title, 24)}`, callback_data: `approve:${story.id}` },
+      { text: "✏ Edit", callback_data: `rewrite:${story.id}` },
+      { text: "❌ Reject", callback_data: `reject:${story.id}` }
+    ]).concat([[{ text: "⬅ Меню", callback_data: "menu:start" }]])
+  });
+}
+
+async function telegramApproveCommand(chatId, id) {
+  if (!id) return telegramDrafts(chatId);
+  const result = setStoryStatusFromTelegram(id, "approve");
+  return sendTelegramMessage(chatId, result ? `✅ Approved: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(result.status)}\n\nNothing was published automatically.` : "История не найдена.", mainTelegramKeyboard());
+}
+
+async function telegramRejectCommand(chatId, id) {
+  if (!id) return telegramDrafts(chatId);
+  const result = setStoryStatusFromTelegram(id, "reject");
+  return sendTelegramMessage(chatId, result ? `❌ Rejected: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(result.status)}\n\nNothing was deleted or published.` : "История не найдена.", mainTelegramKeyboard());
+}
+
 async function telegramSettings(chatId) {
   const fb = facebookConfigStatus();
   const tg = telegramConfigStatus();
   return sendTelegramMessage(chatId, `⚙ <b>Настройки</b>\n\nFacebook API: ${fb.configured ? "✅" : "⏳"}\nTelegram: ${tg.configured ? "✅" : "⏳"}\nPostgreSQL: ${pgPool ? "✅" : "JSON backup mode"}\n\nСекреты хранятся только локально в .env или environment variables.`, mainTelegramKeyboard());
+}
+
+async function telegramHelp(chatId) {
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status — system connection status\n/stats — stories and traffic stats\n/drafts — drafts and stories waiting for review\n/approve — show approval list\n/approve STORY_ID — approve a story locally\n/reject — show rejection list\n/reject STORY_ID — reject a story locally\n/help — command list\n\nButtons:\n✅ Approve — marks story as approved\n✏ Edit — returns story to review\n❌ Reject — marks story as rejected\n\nPublishing is never automatic.`, mainTelegramKeyboard());
 }
 
 function setStoryStatusFromTelegram(id, action) {
@@ -2059,6 +2112,12 @@ async function handleTelegramMessage(message) {
     return sendTelegramMessage(chatId, "Этот бот привязан к другому CHAT_ID.");
   }
   if (text === "/start") return telegramStart(chatId);
+  if (text === "/help") return telegramHelp(chatId);
+  if (text === "/status") return telegramStatus(chatId);
+  if (text === "/stats") return telegramStats(chatId);
+  if (text === "/drafts") return telegramDrafts(chatId);
+  if (text === "/approve" || text.startsWith("/approve ")) return telegramApproveCommand(chatId, text.split(/\s+/)[1]);
+  if (text === "/reject" || text.startsWith("/reject ")) return telegramRejectCommand(chatId, text.split(/\s+/)[1]);
   if (text === "/stories") return telegramStories(chatId);
   if (text === "/images") return telegramImages(chatId);
   if (text === "/audience") return telegramAudience(chatId);
