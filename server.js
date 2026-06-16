@@ -398,7 +398,9 @@ function shortCode() {
 
 function absoluteUrl(req, pathname) {
   const host = req.headers.host || `localhost:${PORT}`;
-  return `http://${host}${pathname}`;
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || (host.includes("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
+  return `${protocol}://${host}${pathname}`;
 }
 
 function storySummary(story, req) {
