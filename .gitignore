@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+data/facebook_connection.local.json
+node_modules/
+work/
+outputs/

@@ -1,0 +1,18 @@
+{
+  "name": "ai-story-traffic-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MVP site and admin panel for Facebook story traffic.",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node scripts/check-syntax.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:import-json": "node scripts/import-json-to-postgres.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
