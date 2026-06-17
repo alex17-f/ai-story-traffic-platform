@@ -612,6 +612,7 @@ function metaConfigSummary(req) {
       META_APP_ID: Boolean(process.env.META_APP_ID),
       META_APP_SECRET: Boolean(process.env.META_APP_SECRET),
       FACEBOOK_REDIRECT_URI: Boolean(process.env.FACEBOOK_REDIRECT_URI),
+      FACEBOOK_LOGIN_CONFIG_ID: Boolean(process.env.FACEBOOK_LOGIN_CONFIG_ID),
       FACEBOOK_PAGE_ID: config.has_page_id,
       FACEBOOK_PAGE_ACCESS_TOKEN: config.has_page_access_token
     },
@@ -654,6 +655,7 @@ function renderFacebookSetupWizard(req) {
               ${fieldRow("META_APP_ID", meta.fields.META_APP_ID, "ID приложения в Meta Developers.")}
               ${fieldRow("META_APP_SECRET", meta.fields.META_APP_SECRET, "Секрет приложения. Хранить только локально.")}
               ${fieldRow("FACEBOOK_REDIRECT_URI", meta.fields.FACEBOOK_REDIRECT_URI, "Callback URL для OAuth. Можно не указывать, тогда используется локальный адрес.")}
+              ${fieldRow("FACEBOOK_LOGIN_CONFIG_ID", meta.fields.FACEBOOK_LOGIN_CONFIG_ID, "Configuration ID из Facebook Login for Business. Нужен для Page permissions.")}
               ${fieldRow("FACEBOOK_PAGE_ID", meta.fields.FACEBOOK_PAGE_ID, "Page ID появится после OAuth или может быть указан вручную.")}
               ${fieldRow("FACEBOOK_PAGE_ACCESS_TOKEN", meta.fields.FACEBOOK_PAGE_ACCESS_TOKEN, "Page Access Token появится после OAuth или может быть указан вручную.")}
             </tbody>
@@ -668,6 +670,8 @@ function renderFacebookSetupWizard(req) {
           <li>Создайте приложение или откройте существующее.</li>
           <li>Скопируйте <code>App ID</code> в <code>META_APP_ID</code>.</li>
           <li>Скопируйте <code>App Secret</code> в <code>META_APP_SECRET</code>. Не отправляйте его в чат.</li>
+          <li>Добавьте продукт <strong>Facebook Login for Business</strong> и создайте configuration с <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>read_insights</code>.</li>
+          <li>Скопируйте <code>Configuration ID</code> в <code>FACEBOOK_LOGIN_CONFIG_ID</code>. Это нужно, чтобы Page permissions не падали с <code>Invalid Scopes</code>.</li>
           <li>В Facebook Login / OAuth settings добавьте Valid OAuth Redirect URI.</li>
           <li>После этого вернитесь сюда и нажмите <strong>Connect Facebook</strong>.</li>
         </ol>
@@ -2532,6 +2536,7 @@ function securityAudit() {
     meta_app_id_present: Boolean(process.env.META_APP_ID),
     meta_app_secret_present: Boolean(process.env.META_APP_SECRET),
     facebook_redirect_uri_present: Boolean(process.env.FACEBOOK_REDIRECT_URI),
+    facebook_login_config_id_present: Boolean(process.env.FACEBOOK_LOGIN_CONFIG_ID),
     facebook_page_id_present: fb.has_page_id,
     facebook_page_token_present: fb.has_page_access_token,
     facebook_connection_file_gitignored: /data\/facebook_connection\.local\.json/.test(gitignore),
@@ -2623,9 +2628,13 @@ function startFacebookOAuth(req, res) {
     redirect_uri: facebookOAuthRedirectUri(req),
     state,
     response_type: "code",
-    auth_type: "rerequest",
-    scope: "pages_show_list,pages_read_engagement,read_insights"
+    auth_type: "rerequest"
   });
+  if (process.env.FACEBOOK_LOGIN_CONFIG_ID) {
+    params.set("config_id", process.env.FACEBOOK_LOGIN_CONFIG_ID);
+  } else {
+    params.set("scope", "pages_show_list,pages_read_engagement,read_insights");
+  }
   redirect(res, `https://www.facebook.com/v20.0/dialog/oauth?${params.toString()}`);
 }
 

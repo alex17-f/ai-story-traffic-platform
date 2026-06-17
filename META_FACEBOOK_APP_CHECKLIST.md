@@ -18,6 +18,24 @@ https://developers.facebook.com/apps/
 
 Create or open your app.
 
+## Required Product
+
+Add **Facebook Login for Business**.
+
+Create a Business Login configuration with these read-only permissions:
+
+- `pages_show_list`
+- `pages_read_engagement`
+- `read_insights`
+
+Copy the Configuration ID into:
+
+```env
+FACEBOOK_LOGIN_CONFIG_ID=
+```
+
+If this is missing, Meta can show `Invalid Scopes` for Page permissions.
+
 ## OAuth Redirect URI
 
 Local development:
@@ -42,6 +60,7 @@ Local `.env`:
 META_APP_ID=
 META_APP_SECRET=
 FACEBOOK_REDIRECT_URI=http://127.0.0.1:4173/auth/facebook/callback
+FACEBOOK_LOGIN_CONFIG_ID=
 ```
 
 Vercel:
@@ -50,6 +69,7 @@ Vercel:
 META_APP_ID=
 META_APP_SECRET=
 FACEBOOK_REDIRECT_URI=https://YOUR-VERCEL-DOMAIN.vercel.app/auth/facebook/callback
+FACEBOOK_LOGIN_CONFIG_ID=
 ```
 
 ## Permissions Used
@@ -70,4 +90,3 @@ These are for reading page data and insights. Publishing permissions are not req
 6. Select the Page.
 7. Click `Load Page Posts`.
 8. Open `/audience-insights`.
-
