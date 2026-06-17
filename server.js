@@ -14,6 +14,12 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
 const FACEBOOK_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
+const facebookReadPermissions = [
+  "pages_show_list",
+  "pages_read_engagement",
+  "pages_read_user_content",
+  "read_insights"
+];
 
 function loadLocalEnv() {
   if (!fs.existsSync(ENV_FILE)) return;
@@ -752,7 +758,7 @@ function renderFacebookSetupWizard(req) {
           <li>Скопируйте <code>App ID</code> в <code>META_APP_ID</code>.</li>
           <li>Скопируйте <code>App Secret</code> в <code>META_APP_SECRET</code>. Не отправляйте его в чат.</li>
           <li>Добавьте сценарий <strong>Manage everything on your Page</strong>. Это Pages API use case для доступа к Facebook Page.</li>
-          <li>Внутри этого сценария настройте <strong>Facebook Login for Business</strong> и создайте configuration с <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>read_insights</code>.</li>
+          <li>Внутри этого сценария настройте <strong>Facebook Login for Business</strong> и создайте configuration с <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_read_user_content</code>, <code>read_insights</code>.</li>
           <li>Скопируйте <code>Configuration ID</code> в <code>FACEBOOK_LOGIN_CONFIG_ID</code>. Это нужно, чтобы Page permissions не падали с <code>Invalid Scopes</code>.</li>
           <li>В Facebook Login / OAuth settings добавьте Valid OAuth Redirect URI.</li>
           <li>После этого вернитесь сюда и нажмите <strong>Connect Facebook</strong>.</li>
@@ -2682,6 +2688,57 @@ function facebookCredentials(req) {
   };
 }
 
+function summarizeGrantedPermissions(permissionsResponse) {
+  return (permissionsResponse?.data || [])
+    .filter((item) => item.status === "granted")
+    .map((item) => item.permission)
+    .sort();
+}
+
+function missingFacebookPermissions(granted = []) {
+  return facebookReadPermissions.filter((permission) => !granted.includes(permission));
+}
+
+async function loadFacebookPermissionDiagnostics(req) {
+  const connection = readFacebookConnection(req);
+  const userToken = connection.user_token || "";
+  const diagnostics = {
+    selected_page_id: process.env.FACEBOOK_PAGE_ID || connection.page_id || "",
+    token_type: connection.user_token_type || (userToken ? "bearer" : ""),
+    has_user_token: Boolean(userToken),
+    has_page_access_token: Boolean(process.env.FACEBOOK_PAGE_ACCESS_TOKEN || connection.page_access_token),
+    granted_scopes: connection.granted_permissions || [],
+    missing_scopes: missingFacebookPermissions(connection.granted_permissions || []),
+    accounts: connection.accounts_summary || []
+  };
+  if (!userToken) return diagnostics;
+  const permissions = await graphGet(`https://graph.facebook.com/v20.0/me/permissions?${new URLSearchParams({
+    access_token: userToken
+  }).toString()}`, "me-permissions");
+  const accounts = await graphGet(`https://graph.facebook.com/v20.0/me/accounts?${new URLSearchParams({
+    fields: "id,name,category,tasks",
+    access_token: userToken
+  }).toString()}`, "me-accounts-diagnostics");
+  diagnostics.granted_scopes = summarizeGrantedPermissions(permissions);
+  diagnostics.missing_scopes = missingFacebookPermissions(diagnostics.granted_scopes);
+  diagnostics.accounts = (accounts.data || []).map((page) => ({
+    id: page.id,
+    name: page.name,
+    category: page.category || "",
+    tasks: page.tasks || []
+  }));
+  facebookLog("permissions", {
+    selected_page_id: diagnostics.selected_page_id,
+    token_type: diagnostics.token_type,
+    user_token: diagnostics.has_user_token,
+    page_access_token: diagnostics.has_page_access_token,
+    granted_scopes: diagnostics.granted_scopes.join(","),
+    missing_scopes: diagnostics.missing_scopes.join(","),
+    accounts_count: diagnostics.accounts.length
+  });
+  return diagnostics;
+}
+
 function redirect(res, location) {
   res.writeHead(302, { location });
   res.end();
@@ -2742,8 +2799,12 @@ function startFacebookOAuth(req, res) {
   if (process.env.FACEBOOK_LOGIN_CONFIG_ID) {
     params.set("config_id", process.env.FACEBOOK_LOGIN_CONFIG_ID);
   } else {
-    params.set("scope", "pages_show_list,pages_read_engagement,read_insights");
+    params.set("scope", facebookReadPermissions.join(","));
   }
+  facebookLog("oauth-start", {
+    uses_config_id: Boolean(process.env.FACEBOOK_LOGIN_CONFIG_ID),
+    requested_scopes: process.env.FACEBOOK_LOGIN_CONFIG_ID ? "config_id" : facebookReadPermissions.join(",")
+  });
   redirect(res, `https://www.facebook.com/v20.0/dialog/oauth?${params.toString()}`);
 }
 
@@ -2779,6 +2840,10 @@ async function handleFacebookOAuthCallback(req, res, url) {
   try {
     const tokenData = await exchangeFacebookCode(req, code);
     const userToken = tokenData.access_token;
+    const permissions = await graphGet(`https://graph.facebook.com/v20.0/me/permissions?${new URLSearchParams({
+      access_token: userToken
+    }).toString()}`, "me-permissions");
+    const grantedPermissions = summarizeGrantedPermissions(permissions);
     const pages = await graphGet(`https://graph.facebook.com/v20.0/me/accounts?${new URLSearchParams({
       fields: "id,name,category,access_token,tasks",
       access_token: userToken
@@ -2806,10 +2871,27 @@ async function handleFacebookOAuthCallback(req, res, url) {
       page_category: selected.category,
       page_access_token: selected.access_token,
       pending_pages: safePages,
+      granted_permissions: grantedPermissions,
+      missing_permissions: missingFacebookPermissions(grantedPermissions),
+      accounts_summary: safePages.map((page) => ({
+        id: page.id,
+        name: page.name,
+        category: page.category || "",
+        tasks: page.tasks || []
+      })),
       oauth_state: "",
       connected_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }, res, req);
+    facebookLog("oauth-callback", {
+      selected_page_id: selected.id,
+      token_type: tokenData.token_type || "bearer",
+      user_token: Boolean(userToken),
+      page_access_token: Boolean(selected.access_token),
+      granted_scopes: grantedPermissions.join(","),
+      missing_scopes: missingFacebookPermissions(grantedPermissions).join(","),
+      accounts_count: safePages.length
+    });
     return redirect(res, `/facebook-connect?connected=1${safePages.length > 1 ? "&select=1" : ""}`);
   } catch (error) {
     return redirect(res, `/facebook-connect?error=${encodeURIComponent(error.message)}`);
@@ -2829,6 +2911,12 @@ function selectFacebookPage(req, res, pageId) {
     page_name: page.name,
     page_category: page.category || "",
     page_access_token: page.access_token,
+    accounts_summary: (connection.pending_pages || []).map((item) => ({
+      id: item.id,
+      name: item.name,
+      category: item.category || "",
+      tasks: item.tasks || []
+    })),
     updated_at: new Date().toISOString()
   }, res, req);
   facebookLog("select-page", { selected_page_id: page.id, page_access_token: Boolean(page.access_token) });
@@ -3067,13 +3155,17 @@ async function loadFacebookPosts(req, options = {}) {
   const url = `https://graph.facebook.com/v20.0/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=25&access_token=${token}`;
   const { response, data } = await graphFetchJson(url, "posts", 20000);
   if (!response.ok || data.error) {
+    const metaMessage = data.error?.message || "Meta Graph API не смог загрузить посты.";
+    const permissionHint = /pages_read_engagement|permissions|permission|\(#10\)/i.test(metaMessage)
+      ? ` Missing permissions likely: ${facebookReadPermissions.join(", ")}. Reconnect Facebook after adding permissions.`
+      : "";
     return {
       ok: false,
       configured: true,
       posts: [],
       code: "meta_api_error",
       meta_status: response.status,
-      message: data.error?.message || "Meta Graph API не смог загрузить посты."
+      message: `${metaMessage}${permissionHint}`
     };
   }
 
@@ -3176,6 +3268,21 @@ async function handleApi(req, res, pathname) {
       stored_posts: readFacebookPosts().length,
       last_sync_at: readProjectBrain().updated_at || null
     });
+  }
+
+  if (pathname === "/api/facebook/permissions" && req.method === "GET") {
+    try {
+      return sendJson(res, 200, {
+        ok: true,
+        ...(await loadFacebookPermissionDiagnostics(req))
+      });
+    } catch (error) {
+      return sendJson(res, 200, {
+        ok: false,
+        code: "permission_diagnostics_failed",
+        message: safeMetaError(error)
+      });
+    }
   }
 
   if (pathname === "/api/facebook/meta-config" && req.method === "GET") {
