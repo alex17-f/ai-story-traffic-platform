@@ -3170,9 +3170,19 @@ async function loadFacebookPosts(req, options = {}) {
   facebookLog("posts-token-source", { selected_page_id: pageId, page_token_source: pageAccessTokenSource });
   if (!response.ok || data.error) {
     const metaMessage = data.error?.message || "Meta Graph API не смог загрузить посты.";
-    const permissionHint = /pages_read_engagement|permissions|permission|\(#10\)/i.test(metaMessage)
-      ? ` Missing permissions likely: ${facebookReadPermissions.join(", ")}. Reconnect Facebook after adding permissions.`
-      : "";
+    const connection = readFacebookConnection(req);
+    const grantedPermissions = connection.granted_permissions || [];
+    const missingScopes = missingFacebookPermissions(grantedPermissions);
+    let permissionHint = "";
+    if (/pages_read_engagement|permissions|permission|\(#10\)/i.test(metaMessage)) {
+      if (missingScopes.length) {
+        permissionHint = ` Missing permissions likely: ${missingScopes.join(", ")}. Reconnect Facebook after adding permissions.`;
+      } else if (pageAccessTokenSource === "env") {
+        permissionHint = " OAuth permissions look granted, but Load Page Posts used the environment Page token. Remove stale FACEBOOK_PAGE_ACCESS_TOKEN or reconnect Facebook so the OAuth Page token is used.";
+      } else {
+        permissionHint = " OAuth permissions look granted. Reconnect Facebook and re-select the Page so Meta issues a fresh Page Access Token for this Page.";
+      }
+    }
     return {
       ok: false,
       configured: true,
@@ -3182,6 +3192,8 @@ async function loadFacebookPosts(req, options = {}) {
       message: `${metaMessage}${permissionHint}`,
       diagnostics: {
         requested_scopes: facebookReadPermissions,
+        granted_scopes: grantedPermissions,
+        missing_scopes: missingScopes,
         selected_page_id: pageId,
         token_type: "page_access_token",
         page_token_source: pageAccessTokenSource,
