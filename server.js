@@ -31,6 +31,10 @@ const facebookFeedFields = [
 ].join(",");
 const facebookPostFieldProfiles = [
   {
+    name: "engagement",
+    fields: facebookFeedFields
+  },
+  {
     name: "content_basic",
     fields: ["id", "message", "created_time", "permalink_url"].join(",")
   },
@@ -57,7 +61,7 @@ const facebookLegacyPostsFields = [
   "likes.summary(true).limit(0)",
   "comments.summary(true).limit(0)"
 ].join(",");
-const facebookPostEndpointOrder = ["published_posts", "posts"];
+const facebookPostEndpointOrder = ["published_posts"];
 
 function loadLocalEnv() {
   if (!fs.existsSync(ENV_FILE)) return;
@@ -3407,6 +3411,129 @@ function publicPostsAttempt(attempt, pageId, tokenSource, pageTasks) {
   };
 }
 
+async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessToken, attempts, refresh, pageId, pageAccessTokenSource, fields, options = {} }) {
+  const startedAt = Date.now();
+  const maxPages = Math.max(1, Math.min(Number(options.maxPages || process.env.FACEBOOK_SYNC_MAX_PAGES || 10), 10));
+  const maxPosts = Math.max(1, Math.min(Number(options.maxPosts || process.env.FACEBOOK_SYNC_MAX_POSTS || 250), 250));
+  const timeoutMs = Math.max(5000, Math.min(Number(options.timeoutMs || process.env.FACEBOOK_SYNC_TIMEOUT_MS || 50000), 55000));
+  const token = encodeURIComponent(pageAccessToken);
+  const existingPosts = readFacebookPosts();
+  const fetchedPosts = [];
+  let pages = 1;
+  let nextUrl = selectedAttempt.paging_next;
+
+  try {
+    const firstPostsWithInsights = await Promise.all((selectedAttempt.data.data || []).map(async (post) => ({
+      ...post,
+      insights: await fetchFacebookPostInsights(post.id, token)
+    })));
+    fetchedPosts.push(...firstPostsWithInsights.map((post) =>
+      normalizeFacebookPost(post, existingPosts.find((item) => item.facebook_post_id === post.id))
+    ));
+  } catch (error) {
+    return {
+      ok: false,
+      configured: true,
+      posts: [],
+      code: "facebook_posts_normalize_failed",
+      message: safeMetaError(error),
+      diagnostics: { selected_endpoint: selectedAttempt.edge, selected_field_profile: selectedAttempt.field_profile, attempts }
+    };
+  }
+
+  try {
+    while (nextUrl && pages < maxPages && fetchedPosts.length < maxPosts && Date.now() - startedAt < timeoutMs) {
+      const page = await fetchFacebookPostsPage(nextUrl, token, [...existingPosts, ...fetchedPosts]);
+      const remaining = maxPosts - fetchedPosts.length;
+      fetchedPosts.push(...page.posts.slice(0, remaining));
+      nextUrl = page.next;
+      pages += 1;
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      configured: true,
+      posts: [],
+      code: "meta_api_error",
+      message: error.message || "Meta Graph API could not load paginated posts.",
+      meta_status: error.metaStatus || null,
+      diagnostics: {
+        graph_api_version: FACEBOOK_GRAPH_VERSION,
+        selected_endpoint: selectedAttempt.edge,
+        selected_field_profile: selectedAttempt.field_profile,
+        endpoint: selectedAttempt.endpoint,
+        fields,
+        selected_page_id: pageId,
+        token_type: "page_access_token",
+        page_token_source: pageAccessTokenSource,
+        page_tasks: refresh.page_tasks || [],
+        uses_env_token: false,
+        meta_status: error.metaStatus || null,
+        meta_error: error.metaError || null,
+        attempts
+      }
+    };
+  }
+
+  const incomingById = new Map();
+  let duplicateInApi = 0;
+  for (const post of fetchedPosts) {
+    if (!post.facebook_post_id) continue;
+    if (incomingById.has(post.facebook_post_id)) {
+      duplicateInApi += 1;
+      continue;
+    }
+    incomingById.set(post.facebook_post_id, post);
+  }
+
+  const mergedById = new Map(existingPosts.map((post) => [post.facebook_post_id, post]));
+  let savedNew = 0;
+  let updatedExisting = 0;
+  for (const [postId, post] of incomingById.entries()) {
+    const existing = mergedById.get(postId);
+    if (existing) {
+      updatedExisting += 1;
+      mergedById.set(postId, {
+        ...post,
+        created_at: existing.created_at || post.created_at
+      });
+    } else {
+      savedNew += 1;
+      mergedById.set(postId, post);
+    }
+  }
+
+  const skippedDuplicates = updatedExisting + duplicateInApi;
+  const merged = [...mergedById.values()].sort((a, b) => b.total_score - a.total_score);
+  writeFacebookPosts(merged);
+  await updateProjectBrain();
+
+  const stoppedByTimeout = Boolean(nextUrl && Date.now() - startedAt >= timeoutMs);
+  const stoppedByMaxPosts = Boolean(nextUrl && fetchedPosts.length >= maxPosts);
+  return {
+    ok: true,
+    configured: true,
+    posts: merged,
+    summary: {
+      loaded_posts: fetchedPosts.length,
+      saved_new_posts: savedNew,
+      skipped_duplicates: skippedDuplicates,
+      updated_existing_posts: updatedExisting,
+      duplicate_posts_in_api: duplicateInApi,
+      pages_loaded: pages,
+      max_pages: maxPages,
+      max_posts: maxPosts,
+      stopped_by_timeout: stoppedByTimeout,
+      stopped_by_max_posts: stoppedByMaxPosts,
+      has_more: Boolean(nextUrl),
+      selected_endpoint: selectedAttempt.edge,
+      selected_field_profile: selectedAttempt.field_profile,
+      attempts
+    },
+    message: `Loaded ${fetchedPosts.length} posts. Saved new ${savedNew} posts. Skipped duplicates ${skippedDuplicates} posts. Updated existing ${updatedExisting} posts.`
+  };
+}
+
 function graphDataCount(data) {
   if (Array.isArray(data?.data)) return data.data.length;
   if (data && typeof data === "object" && !data.error) return 1;
@@ -3800,6 +3927,17 @@ async function loadFacebookPosts(req, options = {}) {
       }
     };
   }
+
+  return await loadAndSavePaginatedFacebookPosts({
+    selectedAttempt,
+    pageAccessToken,
+    attempts,
+    refresh,
+    pageId,
+    pageAccessTokenSource,
+    fields,
+    options
+  });
 
   if (allPages) {
     const existingPosts = readFacebookPosts();
