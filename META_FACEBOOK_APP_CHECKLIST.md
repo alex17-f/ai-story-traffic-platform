@@ -20,9 +20,9 @@ Create or open your app.
 
 ## Required Product
 
-Add **Facebook Login for Business**.
+Add the **Manage everything on your Page** use case. This is the Pages API use case that exposes Page permissions.
 
-Create a Business Login configuration with these read-only permissions:
+Inside that use case, customize **Facebook Login for Business** and create a configuration with these read-only permissions:
 
 - `pages_show_list`
 - `pages_read_engagement`
@@ -35,6 +35,8 @@ FACEBOOK_LOGIN_CONFIG_ID=
 ```
 
 If this is missing, Meta can show `Invalid Scopes` for Page permissions.
+
+If the current app only shows the use case **Authenticate and request data from users with Facebook Login**, and **Manage everything on your Page** is not available in Add use cases, create a new Meta app using the Pages API use case. A consumer login-only app cannot request these Page permissions.
 
 ## OAuth Redirect URI
 

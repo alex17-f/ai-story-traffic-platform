@@ -670,7 +670,8 @@ function renderFacebookSetupWizard(req) {
           <li>Создайте приложение или откройте существующее.</li>
           <li>Скопируйте <code>App ID</code> в <code>META_APP_ID</code>.</li>
           <li>Скопируйте <code>App Secret</code> в <code>META_APP_SECRET</code>. Не отправляйте его в чат.</li>
-          <li>Добавьте продукт <strong>Facebook Login for Business</strong> и создайте configuration с <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>read_insights</code>.</li>
+          <li>Добавьте сценарий <strong>Manage everything on your Page</strong>. Это Pages API use case для доступа к Facebook Page.</li>
+          <li>Внутри этого сценария настройте <strong>Facebook Login for Business</strong> и создайте configuration с <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>read_insights</code>.</li>
           <li>Скопируйте <code>Configuration ID</code> в <code>FACEBOOK_LOGIN_CONFIG_ID</code>. Это нужно, чтобы Page permissions не падали с <code>Invalid Scopes</code>.</li>
           <li>В Facebook Login / OAuth settings добавьте Valid OAuth Redirect URI.</li>
           <li>После этого вернитесь сюда и нажмите <strong>Connect Facebook</strong>.</li>
