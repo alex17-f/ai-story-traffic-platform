@@ -26,7 +26,6 @@ Inside that use case, customize **Facebook Login for Business** and create a con
 
 - `pages_show_list`
 - `pages_read_engagement`
-- `pages_read_user_content`
 - `read_insights`
 
 Copy the Configuration ID into:
@@ -79,7 +78,6 @@ FACEBOOK_LOGIN_CONFIG_ID=
 
 - `pages_show_list`
 - `pages_read_engagement`
-- `pages_read_user_content`
 - `read_insights`
 
 These are for reading page data and insights. Publishing permissions are not requested.

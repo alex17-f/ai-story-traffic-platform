@@ -61,9 +61,9 @@ In your Meta App settings, add this OAuth redirect URI for local development:
 http://127.0.0.1:4173/auth/facebook/callback
 ```
 
-For Page permissions, the Meta app must include the **Manage everything on your Page** use case. Inside that use case, create a **Facebook Login for Business** configuration in Meta Developers and put its Configuration ID in `FACEBOOK_LOGIN_CONFIG_ID`. Without this Pages use case and Business Login configuration, Meta can reject `pages_show_list`, `pages_read_engagement`, `pages_read_user_content`, and `read_insights` as invalid scopes.
+For Page permissions, the Meta app must include the **Manage everything on your Page** use case. Inside that use case, create a **Facebook Login for Business** configuration in Meta Developers and put its Configuration ID in `FACEBOOK_LOGIN_CONFIG_ID`. Without this Pages use case and Business Login configuration, Meta can reject `pages_show_list`, `pages_read_engagement`, and `read_insights` as invalid scopes.
 
-The app only requests read-only Page permissions: `pages_show_list`, `pages_read_engagement`, `pages_read_user_content`, and `read_insights`.
+The app only requests read-only Page permissions: `pages_show_list`, `pages_read_engagement`, and `read_insights`.
 
 After login, Page access is stored locally in `data/facebook_connection.local.json`. This file is ignored by git and must not be shared.
 
