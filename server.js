@@ -25,9 +25,9 @@ const facebookFeedFields = [
   "message",
   "created_time",
   "permalink_url",
-  "attachments{media_type,url}",
   "reactions.summary(true)",
-  "comments.summary(true)"
+  "comments.summary(true)",
+  "attachments{media_type,url}"
 ].join(",");
 const facebookLegacyPostsFields = [
   "id",
@@ -633,6 +633,7 @@ function renderFacebookConnect(url, req) {
           <a class="primary-btn" href="/auth/facebook/start">Connect Facebook</a>
           <button id="fbConnectCheckBtn" class="secondary-btn" type="button">Check Connection</button>
           <button id="fbConnectLoadBtn" class="primary-btn" type="button">Load Page Posts</button>
+          <button id="fbConnectDebugBtn" class="secondary-btn" type="button">Debug Load Posts</button>
           <button id="fbConnectAnalyzeBtn" class="secondary-btn" type="button">Analyze Page</button>
         </div>
         <p id="fbConnectMessage" class="helper-text">Read-only mode: система только читает и анализирует данные, публикация отключена.</p>
@@ -691,6 +692,7 @@ function renderFacebookConnect(url, req) {
       }
       document.getElementById("fbConnectCheckBtn").addEventListener("click", () => runConnectAction("/api/facebook/check", "Checking connection..."));
       document.getElementById("fbConnectLoadBtn").addEventListener("click", () => runConnectAction("/api/facebook/posts", "Loading Page posts..."));
+      document.getElementById("fbConnectDebugBtn").addEventListener("click", () => runConnectAction("/api/facebook/posts-debug", "Debugging Page posts request..."));
       document.getElementById("fbConnectAnalyzeBtn").addEventListener("click", () => runConnectAction("/api/facebook/analyze", "Analyzing Page..."));
       document.querySelectorAll("[data-page-id]").forEach((button) => {
         button.addEventListener("click", async () => {
@@ -3258,6 +3260,60 @@ async function fetchFacebookPostsPage(url, token, existingPosts) {
   };
 }
 
+async function debugFacebookPostsRequest(req) {
+  const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentials(req);
+  const tokenDebug = await loadFacebookTokenDebug(req);
+  const endpoint = pageId ? metaEndpoint(`/${pageId}/feed`, { fields: facebookFeedFields, limit: "25" }) : "";
+  const oldEndpoint = pageId ? metaEndpoint(`/${pageId}/posts`, { fields: facebookLegacyPostsFields, limit: "25" }) : "";
+  const base = {
+    ok: false,
+    endpoint,
+    old_endpoint: oldEndpoint,
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    fields: facebookFeedFields,
+    page_id: pageId,
+    token_source: pageAccessTokenSource,
+    token_type: "page_access_token",
+    uses_env_token: false,
+    page_token_valid: Boolean(tokenDebug.page_token?.debug?.is_valid),
+    page_token_belongs_to_selected_page: Boolean(tokenDebug.page_token_belongs_to_selected_page),
+    meta_status: null,
+    meta_error: null,
+    posts_count: 0
+  };
+  if (!pageId || !pageAccessToken) {
+    return {
+      ...base,
+      code: "facebook_oauth_page_token_missing",
+      message: "OAuth Page ID or OAuth Page Access Token is missing. Reconnect Facebook and select the Page again."
+    };
+  }
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/feed?fields=${encodeURIComponent(facebookFeedFields)}&limit=25&access_token=${encodeURIComponent(pageAccessToken)}`;
+  const { response, data } = await graphFetchJson(url, "posts-debug", 20000);
+  const postsCount = Array.isArray(data.data) ? data.data.length : 0;
+  facebookLog("posts-debug", {
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    endpoint_url: endpoint,
+    selected_page_id: pageId,
+    page_token_source: pageAccessTokenSource,
+    page_token_valid: base.page_token_valid,
+    page_token_belongs_to_selected_page: base.page_token_belongs_to_selected_page,
+    meta_status: response.status,
+    posts_count: postsCount,
+    meta_error: data.error?.message || ""
+  });
+  return {
+    ...base,
+    ok: response.ok && !data.error,
+    meta_status: response.status,
+    meta_error: safeMetaErrorObject(data.error),
+    posts_count: postsCount,
+    message: response.ok && !data.error
+      ? `Facebook feed request works. Posts returned: ${postsCount}.`
+      : (data.error?.message || "Meta Graph API could not load Page feed.")
+  };
+}
+
 async function loadFacebookPosts(req, options = {}) {
   const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentials(req);
   const missing = [
@@ -3540,6 +3596,18 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/facebook/posts" && req.method === "GET") {
     return sendJson(res, 200, await loadFacebookPosts(req));
+  }
+
+  if (pathname === "/api/facebook/posts-debug" && req.method === "GET") {
+    try {
+      return sendJson(res, 200, await debugFacebookPostsRequest(req));
+    } catch (error) {
+      return sendJson(res, 200, {
+        ok: false,
+        code: "posts_debug_failed",
+        message: safeMetaError(error)
+      });
+    }
   }
 
   if (pathname === "/api/facebook/refresh" && req.method === "GET") {
