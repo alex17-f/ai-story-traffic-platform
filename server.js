@@ -29,6 +29,24 @@ const facebookFeedFields = [
   "comments.summary(true)",
   "attachments{media_type,url}"
 ].join(",");
+const facebookPostFieldProfiles = [
+  {
+    name: "content_basic",
+    fields: ["id", "message", "created_time", "permalink_url"].join(",")
+  },
+  {
+    name: "basic",
+    fields: ["id", "created_time", "permalink_url"].join(",")
+  },
+  {
+    name: "minimal",
+    fields: ["id", "created_time"].join(",")
+  },
+  {
+    name: "default",
+    fields: ""
+  }
+];
 const facebookLegacyPostsFields = [
   "id",
   "message",
@@ -3340,18 +3358,27 @@ async function fetchFacebookPostsPage(url, token, existingPosts) {
 }
 
 function facebookPostsEndpoint(pageId, edge, fields = facebookFeedFields, limit = "25") {
-  return metaEndpoint(`/${pageId}/${edge}`, { fields, limit });
+  return metaEndpoint(`/${pageId}/${edge}`, {
+    ...(fields ? { fields } : {}),
+    limit
+  });
 }
 
-async function requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit = "25") {
-  const fields = facebookFeedFields;
+async function requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit = "25", fieldProfile = facebookPostFieldProfiles[0]) {
+  const fields = fieldProfile.fields;
   const endpoint = facebookPostsEndpoint(pageId, edge, fields, limit);
-  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/${edge}?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${encodeURIComponent(pageAccessToken)}`;
+  const params = new URLSearchParams({
+    ...(fields ? { fields } : {}),
+    limit,
+    access_token: pageAccessToken
+  });
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/${edge}?${params.toString()}`;
   const { response, data } = await graphFetchJson(url, `posts-${edge}`, 20000);
   return {
     edge,
     endpoint,
     graph_api_version: FACEBOOK_GRAPH_VERSION,
+    field_profile: fieldProfile.name,
     fields,
     status: response.status,
     ok: response.ok && !data.error,
@@ -3367,6 +3394,7 @@ function publicPostsAttempt(attempt, pageId, tokenSource, pageTasks) {
     endpoint_name: attempt.edge,
     endpoint: attempt.endpoint,
     graph_api_version: attempt.graph_api_version,
+    field_profile: attempt.field_profile,
     fields: attempt.fields,
     page_id: pageId,
     token_source: tokenSource,
@@ -3622,17 +3650,20 @@ async function debugAllFacebookPostEndpoints(req, res) {
     };
   }
   for (const edge of facebookPostEndpointOrder) {
-    const attempt = await requestFacebookPostsEdge(pageId, pageAccessToken, edge, "25");
-    const publicAttempt = publicPostsAttempt(attempt, pageId, pageAccessTokenSource, refresh.page_tasks || []);
-    base.attempts.push(publicAttempt);
-    if (attempt.ok) {
-      return {
-        ...base,
-        ok: true,
-        selected_endpoint: edge,
-        posts_count: attempt.posts_count,
-        message: `Facebook ${edge} request works. Posts returned: ${attempt.posts_count}.`
-      };
+    for (const fieldProfile of facebookPostFieldProfiles) {
+      const attempt = await requestFacebookPostsEdge(pageId, pageAccessToken, edge, "25", fieldProfile);
+      const publicAttempt = publicPostsAttempt(attempt, pageId, pageAccessTokenSource, refresh.page_tasks || []);
+      base.attempts.push(publicAttempt);
+      if (attempt.ok) {
+        return {
+          ...base,
+          ok: true,
+          selected_endpoint: edge,
+          selected_field_profile: fieldProfile.name,
+          posts_count: attempt.posts_count,
+          message: `Facebook ${edge} request works with ${fieldProfile.name} fields. Posts returned: ${attempt.posts_count}.`
+        };
+      }
     }
   }
   return {
@@ -3704,24 +3735,28 @@ async function loadFacebookPosts(req, options = {}) {
   const attempts = [];
   let selectedAttempt = null;
   for (const edge of facebookPostEndpointOrder) {
-    const attempt = await requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit);
-    const publicAttempt = publicPostsAttempt(attempt, pageId, pageAccessTokenSource, refresh.page_tasks || []);
-    attempts.push(publicAttempt);
-    facebookLog("posts-fallback-attempt", {
-      graph_api_version: FACEBOOK_GRAPH_VERSION,
-      endpoint_url: attempt.endpoint,
-      selected_page_id: pageId,
-      page_token_source: pageAccessTokenSource,
-      page_tasks: (refresh.page_tasks || []).join(","),
-      status: attempt.status,
-      ok: attempt.ok,
-      posts_count: attempt.posts_count,
-      meta_error: attempt.error?.message || ""
-    });
-    if (attempt.ok) {
-      selectedAttempt = attempt;
-      break;
+    for (const fieldProfile of facebookPostFieldProfiles) {
+      const attempt = await requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit, fieldProfile);
+      const publicAttempt = publicPostsAttempt(attempt, pageId, pageAccessTokenSource, refresh.page_tasks || []);
+      attempts.push(publicAttempt);
+      facebookLog("posts-fallback-attempt", {
+        graph_api_version: FACEBOOK_GRAPH_VERSION,
+        endpoint_url: attempt.endpoint,
+        field_profile: attempt.field_profile,
+        selected_page_id: pageId,
+        page_token_source: pageAccessTokenSource,
+        page_tasks: (refresh.page_tasks || []).join(","),
+        status: attempt.status,
+        ok: attempt.ok,
+        posts_count: attempt.posts_count,
+        meta_error: attempt.error?.message || ""
+      });
+      if (attempt.ok) {
+        selectedAttempt = attempt;
+        break;
+      }
     }
+    if (selectedAttempt) break;
   }
 
   if (!selectedAttempt) {
@@ -3830,8 +3865,8 @@ async function loadFacebookPosts(req, options = {}) {
       ok: true,
       configured: true,
       posts: merged,
-      summary: { count: merged.length, loaded: posts.length, pages, best_score: merged[0]?.total_score || 0, selected_endpoint: selectedAttempt.edge },
-      message: `Historical sync complete via ${selectedAttempt.edge}. Loaded posts: ${posts.length}, API pages: ${pages}. Project Brain updated.`
+      summary: { count: merged.length, loaded: posts.length, pages, best_score: merged[0]?.total_score || 0, selected_endpoint: selectedAttempt.edge, selected_field_profile: selectedAttempt.field_profile },
+      message: `Historical sync complete via ${selectedAttempt.edge} (${selectedAttempt.field_profile}). Loaded posts: ${posts.length}, API pages: ${pages}. Project Brain updated.`
     };
   }
 
@@ -3860,6 +3895,7 @@ async function loadFacebookPosts(req, options = {}) {
       best_score: merged[0]?.total_score || 0,
       loaded: posts.length,
       selected_endpoint: selectedAttempt.edge,
+      selected_field_profile: selectedAttempt.field_profile,
       attempts
     },
     message: `Загружено и сохранено постов: ${posts.length}. Таблица отсортирована по лучшим результатам.`
