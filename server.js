@@ -39,7 +39,7 @@ const facebookLegacyPostsFields = [
   "likes.summary(true).limit(0)",
   "comments.summary(true).limit(0)"
 ].join(",");
-const facebookPostEndpointOrder = ["published_posts", "posts", "feed"];
+const facebookPostEndpointOrder = ["published_posts", "posts"];
 
 function loadLocalEnv() {
   if (!fs.existsSync(ENV_FILE)) return;
@@ -2858,7 +2858,8 @@ async function loadFacebookPermissionDiagnostics(req) {
     granted_scopes: connection.granted_permissions || [],
     missing_scopes: missingFacebookPermissions(connection.granted_permissions || []),
     old_posts_endpoint: pageId ? metaEndpoint(`/${pageId}/posts`, { fields: facebookLegacyPostsFields, limit: "25" }) : "",
-    posts_endpoint: pageId ? metaEndpoint(`/${pageId}/feed`, { fields: facebookFeedFields, limit: "25" }) : "",
+    posts_endpoint: pageId ? metaEndpoint(`/${pageId}/published_posts`, { fields: facebookFeedFields, limit: "25" }) : "",
+    fallback_posts_endpoint: pageId ? metaEndpoint(`/${pageId}/posts`, { fields: facebookFeedFields, limit: "25" }) : "",
     fields: facebookFeedFields,
     accounts: connection.accounts_summary || []
   };
@@ -3456,18 +3457,7 @@ async function runFacebookGraphTestFull(req, res) {
     await graphProbe({
       label: "page_object",
       path: `/${pageId}`,
-      params: { fields: "id,name,category,tasks,fan_count" },
-      token: pageAccessToken,
-      tokenType: "page_access_token",
-      tokenSource: pageAccessTokenSource,
-      grantedScopes: pageScopes,
-      pageId,
-      pageTasks
-    }),
-    await graphProbe({
-      label: "page_feed",
-      path: `/${pageId}/feed`,
-      params: { limit: "1" },
+      params: { fields: "id,name,category,fan_count" },
       token: pageAccessToken,
       tokenType: "page_access_token",
       tokenSource: pageAccessTokenSource,
@@ -3496,21 +3486,10 @@ async function runFacebookGraphTestFull(req, res) {
       grantedScopes: pageScopes,
       pageId,
       pageTasks
-    }),
-    await graphProbe({
-      label: "page_promotable_posts",
-      path: `/${pageId}/promotable_posts`,
-      params: { limit: "1" },
-      token: pageAccessToken,
-      tokenType: "page_access_token",
-      tokenSource: pageAccessTokenSource,
-      grantedScopes: pageScopes,
-      pageId,
-      pageTasks
     })
   ];
   const successfulReadEdge = probes.find((probe) =>
-    ["page_feed", "page_posts", "page_published_posts", "page_promotable_posts"].includes(probe.label) && probe.ok
+    ["page_posts", "page_published_posts"].includes(probe.label) && probe.ok
   );
   return {
     ok: Boolean(successfulReadEdge),
@@ -3659,7 +3638,7 @@ async function debugAllFacebookPostEndpoints(req, res) {
   return {
     ...base,
     code: "all_facebook_post_edges_failed",
-    message: "All Facebook post read endpoints failed. Code path is using OAuth Page Access Token, but Meta rejected every read edge.",
+    message: "All Facebook post read endpoints failed. Code path is using OAuth Page Access Token, but Meta rejected published_posts and posts.",
     final_diagnosis: {
       code_ok: true,
       token_valid: base.page_token_valid,
@@ -3674,60 +3653,6 @@ async function debugAllFacebookPostEndpoints(req, res) {
         "Roles: confirm the Facebook account is Admin/Developer/Tester and has Page tasks CREATE_CONTENT, MANAGE, MODERATE, ANALYZE."
       ]
     }
-  };
-}
-
-async function debugSingleFacebookFeedRequest(req) {
-  const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentials(req);
-  const tokenDebug = await loadFacebookTokenDebug(req);
-  const endpoint = pageId ? metaEndpoint(`/${pageId}/feed`, { fields: facebookFeedFields, limit: "25" }) : "";
-  const oldEndpoint = pageId ? metaEndpoint(`/${pageId}/posts`, { fields: facebookLegacyPostsFields, limit: "25" }) : "";
-  const base = {
-    ok: false,
-    endpoint,
-    old_endpoint: oldEndpoint,
-    graph_api_version: FACEBOOK_GRAPH_VERSION,
-    fields: facebookFeedFields,
-    page_id: pageId,
-    token_source: pageAccessTokenSource,
-    token_type: "page_access_token",
-    uses_env_token: false,
-    page_token_valid: Boolean(tokenDebug.page_token?.debug?.is_valid),
-    page_token_belongs_to_selected_page: Boolean(tokenDebug.page_token_belongs_to_selected_page),
-    meta_status: null,
-    meta_error: null,
-    posts_count: 0
-  };
-  if (!pageId || !pageAccessToken) {
-    return {
-      ...base,
-      code: "facebook_oauth_page_token_missing",
-      message: "OAuth Page ID or OAuth Page Access Token is missing. Reconnect Facebook and select the Page again."
-    };
-  }
-  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/feed?fields=${encodeURIComponent(facebookFeedFields)}&limit=25&access_token=${encodeURIComponent(pageAccessToken)}`;
-  const { response, data } = await graphFetchJson(url, "posts-debug", 20000);
-  const postsCount = Array.isArray(data.data) ? data.data.length : 0;
-  facebookLog("posts-debug", {
-    graph_api_version: FACEBOOK_GRAPH_VERSION,
-    endpoint_url: endpoint,
-    selected_page_id: pageId,
-    page_token_source: pageAccessTokenSource,
-    page_token_valid: base.page_token_valid,
-    page_token_belongs_to_selected_page: base.page_token_belongs_to_selected_page,
-    meta_status: response.status,
-    posts_count: postsCount,
-    meta_error: data.error?.message || ""
-  });
-  return {
-    ...base,
-    ok: response.ok && !data.error,
-    meta_status: response.status,
-    meta_error: safeMetaErrorObject(data.error),
-    posts_count: postsCount,
-    message: response.ok && !data.error
-      ? `Facebook feed request works. Posts returned: ${postsCount}.`
-      : (data.error?.message || "Meta Graph API could not load Page feed.")
   };
 }
 
@@ -3755,7 +3680,8 @@ async function loadFacebookPosts(req, options = {}) {
       diagnostics: {
         graph_api_version: FACEBOOK_GRAPH_VERSION,
         old_endpoint: pageId ? metaEndpoint(`/${pageId}/posts`, { fields: facebookLegacyPostsFields, limit: "25" }) : "",
-        new_endpoint: pageId ? metaEndpoint(`/${pageId}/feed`, { fields: facebookFeedFields, limit: "25" }) : "",
+        new_endpoint: pageId ? metaEndpoint(`/${pageId}/published_posts`, { fields: facebookFeedFields, limit: "25" }) : "",
+        fallback_endpoint: pageId ? metaEndpoint(`/${pageId}/posts`, { fields: facebookFeedFields, limit: "25" }) : "",
         fields: facebookFeedFields,
         selected_page_id: pageId,
         token_type: "page_access_token",
@@ -3775,7 +3701,6 @@ async function loadFacebookPosts(req, options = {}) {
   const fields = facebookFeedFields;
   const limit = "25";
   const oldPostsEndpoint = metaEndpoint(`/${pageId}/posts`, { fields: facebookLegacyPostsFields, limit });
-  const feedEndpoint = metaEndpoint(`/${pageId}/feed`, { fields, limit });
   const attempts = [];
   let selectedAttempt = null;
   for (const edge of facebookPostEndpointOrder) {
@@ -3806,7 +3731,7 @@ async function loadFacebookPosts(req, options = {}) {
       configured: true,
       posts: [],
       code: "all_facebook_post_edges_failed",
-      message: "All Facebook post read endpoints failed. OAuth Page token is valid/granted, but Meta rejected published_posts, posts, and feed.",
+    message: "All Facebook post read endpoints failed. OAuth Page token is valid/granted, but Meta rejected published_posts and posts.",
       meta_status: attempts[0]?.status || null,
       diagnostics: {
         requested_scopes: facebookReadPermissions,
