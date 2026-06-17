@@ -39,6 +39,7 @@ const facebookLegacyPostsFields = [
   "likes.summary(true).limit(0)",
   "comments.summary(true).limit(0)"
 ].join(",");
+const facebookPostEndpointOrder = ["published_posts", "posts", "feed"];
 
 function loadLocalEnv() {
   if (!fs.existsSync(ENV_FILE)) return;
@@ -692,7 +693,7 @@ function renderFacebookConnect(url, req) {
       }
       document.getElementById("fbConnectCheckBtn").addEventListener("click", () => runConnectAction("/api/facebook/check", "Checking connection..."));
       document.getElementById("fbConnectLoadBtn").addEventListener("click", () => runConnectAction("/api/facebook/posts", "Loading Page posts..."));
-      document.getElementById("fbConnectDebugBtn").addEventListener("click", () => runConnectAction("/api/facebook/posts-debug", "Debugging Page posts request..."));
+      document.getElementById("fbConnectDebugBtn").addEventListener("click", () => runConnectAction("/api/facebook/posts-debug-all", "Debugging all Page post endpoints..."));
       document.getElementById("fbConnectAnalyzeBtn").addEventListener("click", () => runConnectAction("/api/facebook/analyze", "Analyzing Page..."));
       document.querySelectorAll("[data-page-id]").forEach((button) => {
         button.addEventListener("click", async () => {
@@ -2752,6 +2753,83 @@ function facebookOAuthPageCredentials(req) {
   };
 }
 
+function safeFacebookAccounts(accounts = []) {
+  return accounts.map((page) => ({
+    id: page.id || "",
+    name: page.name || "",
+    category: page.category || "",
+    tasks: Array.isArray(page.tasks) ? page.tasks : [],
+    has_access_token: Boolean(page.access_token)
+  }));
+}
+
+function pageTasksForConnection(connection, pageId) {
+  const pages = [
+    ...(Array.isArray(connection.pending_pages) ? connection.pending_pages : []),
+    ...(Array.isArray(connection.accounts_summary) ? connection.accounts_summary : [])
+  ];
+  return pages.find((page) => page.id === pageId)?.tasks || [];
+}
+
+async function refreshOAuthPageConnection(req, res) {
+  const connection = readFacebookConnection(req);
+  const selectedPageId = connection.page_id || "";
+  const userToken = connection.user_token || "";
+  const result = {
+    connection,
+    refreshed: false,
+    selected_page_id: selectedPageId,
+    page_tasks: pageTasksForConnection(connection, selectedPageId),
+    accounts: safeFacebookAccounts(connection.accounts_summary || connection.pending_pages || []),
+    meta_status: null,
+    meta_error: null
+  };
+  if (!selectedPageId || !userToken) return result;
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me/accounts?${new URLSearchParams({
+    fields: "access_token,name,id,tasks,category",
+    access_token: userToken
+  }).toString()}`;
+  const { response, data } = await graphFetchJson(url, "me-accounts-refresh", 15000);
+  result.meta_status = response.status;
+  result.meta_error = safeMetaErrorObject(data.error);
+  if (!response.ok || data.error) return result;
+  const pages = data.data || [];
+  result.accounts = safeFacebookAccounts(pages);
+  const selected = pages.find((page) => page.id === selectedPageId);
+  result.page_tasks = selected?.tasks || result.page_tasks;
+  if (!selected?.access_token) return result;
+  const safePages = pages.map((page) => ({
+    id: page.id,
+    name: page.name,
+    category: page.category || "",
+    access_token: page.access_token,
+    tasks: page.tasks || []
+  }));
+  const nextConnection = {
+    ...connection,
+    page_id: selected.id,
+    page_name: selected.name,
+    page_category: selected.category || "",
+    page_access_token: selected.access_token,
+    pending_pages: safePages,
+    accounts_summary: safeFacebookAccounts(pages),
+    updated_at: new Date().toISOString()
+  };
+  saveFacebookConnection(nextConnection, res, req);
+  result.connection = nextConnection;
+  result.refreshed = true;
+  return result;
+}
+
+function facebookOAuthPageCredentialsFromConnection(connection) {
+  return {
+    pageId: connection.page_id || "",
+    pageAccessToken: connection.page_access_token || "",
+    pageIdSource: connection.page_id ? "oauth" : "",
+    pageAccessTokenSource: connection.page_access_token ? "oauth" : ""
+  };
+}
+
 function summarizeGrantedPermissions(permissionsResponse) {
   return (permissionsResponse?.data || [])
     .filter((item) => item.status === "granted")
@@ -3260,7 +3338,174 @@ async function fetchFacebookPostsPage(url, token, existingPosts) {
   };
 }
 
+function facebookPostsEndpoint(pageId, edge, fields = facebookFeedFields, limit = "25") {
+  return metaEndpoint(`/${pageId}/${edge}`, { fields, limit });
+}
+
+async function requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit = "25") {
+  const fields = facebookFeedFields;
+  const endpoint = facebookPostsEndpoint(pageId, edge, fields, limit);
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/${edge}?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${encodeURIComponent(pageAccessToken)}`;
+  const { response, data } = await graphFetchJson(url, `posts-${edge}`, 20000);
+  return {
+    edge,
+    endpoint,
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    fields,
+    status: response.status,
+    ok: response.ok && !data.error,
+    error: safeMetaErrorObject(data.error),
+    posts_count: Array.isArray(data.data) ? data.data.length : 0,
+    data,
+    paging_next: data.paging?.next || ""
+  };
+}
+
+function publicPostsAttempt(attempt, pageId, tokenSource, pageTasks) {
+  return {
+    endpoint_name: attempt.edge,
+    endpoint: attempt.endpoint,
+    graph_api_version: attempt.graph_api_version,
+    fields: attempt.fields,
+    page_id: pageId,
+    token_source: tokenSource,
+    token_type: "page_access_token",
+    page_tasks: pageTasks,
+    status: attempt.status,
+    ok: attempt.ok,
+    error: attempt.error,
+    posts_count: attempt.posts_count
+  };
+}
+
 async function debugFacebookPostsRequest(req) {
+  const debugAll = await debugAllFacebookPostEndpoints(req);
+  const firstAttempt = debugAll.attempts?.[0] || null;
+  const successfulAttempt = debugAll.attempts?.find((attempt) => attempt.ok) || null;
+  return {
+    ok: Boolean(successfulAttempt),
+    endpoint: successfulAttempt?.endpoint || firstAttempt?.endpoint || "",
+    old_endpoint: debugAll.legacy_endpoint || "",
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    fields: facebookFeedFields,
+    page_id: debugAll.page_id,
+    token_source: debugAll.token_source,
+    token_type: "page_access_token",
+    uses_env_token: false,
+    page_token_valid: debugAll.page_token_valid,
+    page_token_belongs_to_selected_page: debugAll.page_token_belongs_to_selected_page,
+    meta_status: successfulAttempt?.status || firstAttempt?.status || null,
+    meta_error: successfulAttempt ? null : (firstAttempt?.error || null),
+    posts_count: successfulAttempt?.posts_count || 0,
+    selected_endpoint: successfulAttempt?.endpoint_name || "",
+    attempts: debugAll.attempts,
+    final_diagnosis: debugAll.final_diagnosis,
+    message: successfulAttempt
+      ? `Facebook ${successfulAttempt.endpoint_name} request works. Posts returned: ${successfulAttempt.posts_count}.`
+      : debugAll.message
+  };
+}
+
+async function debugAllFacebookPostEndpoints(req, res) {
+  const refresh = await refreshOAuthPageConnection(req, res);
+  const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentialsFromConnection(refresh.connection);
+  const userToken = refresh.connection.user_token || "";
+  const userTokenDebug = await debugFacebookToken(userToken, "user");
+  const pageTokenDebug = await debugFacebookToken(pageAccessToken, "page");
+  let pageTokenMe = null;
+  let pageTokenBelongsToSelectedPage = false;
+  if (pageAccessToken) {
+    const meUrl = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me?${new URLSearchParams({
+      fields: "id,name",
+      access_token: pageAccessToken
+    }).toString()}`;
+    const { response, data } = await graphFetchJson(meUrl, "posts-debug-page-token-me", 15000);
+    pageTokenMe = {
+      meta_status: response.status,
+      id: data.id || "",
+      name: data.name || "",
+      error: safeMetaErrorObject(data.error)
+    };
+    pageTokenBelongsToSelectedPage = Boolean(pageId && data.id === pageId);
+  }
+  const base = {
+    ok: false,
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    page_id: pageId,
+    token_source: pageAccessTokenSource,
+    token_type: "page_access_token",
+    uses_env_token: false,
+    page_tasks: refresh.page_tasks || [],
+    me_accounts: {
+      status: refresh.meta_status,
+      error: refresh.meta_error,
+      accounts: refresh.accounts || []
+    },
+    page_token_refreshed_from_me_accounts: refresh.refreshed,
+    user_token_present: Boolean(userToken),
+    page_token_present: Boolean(pageAccessToken),
+    page_token_valid: Boolean(pageTokenDebug.debug?.is_valid),
+    page_token_belongs_to_selected_page: pageTokenBelongsToSelectedPage,
+    page_token_me: pageTokenMe,
+    user_token_debug: userTokenDebug,
+    page_token_debug: pageTokenDebug,
+    legacy_endpoint: pageId ? facebookPostsEndpoint(pageId, "posts", facebookLegacyPostsFields, "25") : "",
+    attempts: [],
+    selected_endpoint: "",
+    posts_count: 0,
+    final_diagnosis: null,
+    message: ""
+  };
+  if (!pageId || !pageAccessToken) {
+    return {
+      ...base,
+      code: "facebook_oauth_page_token_missing",
+      message: "OAuth Page ID or OAuth Page Access Token is missing. Reconnect Facebook and select the Page again.",
+      final_diagnosis: {
+        code_ok: true,
+        token_valid: base.page_token_valid,
+        permissions_granted: false,
+        likely_reason: "OAuth Page token is missing in this browser session.",
+        manual_steps: ["Reconnect Facebook", "Select the target Page", "Run Debug Load Posts again"]
+      }
+    };
+  }
+  for (const edge of facebookPostEndpointOrder) {
+    const attempt = await requestFacebookPostsEdge(pageId, pageAccessToken, edge, "25");
+    const publicAttempt = publicPostsAttempt(attempt, pageId, pageAccessTokenSource, refresh.page_tasks || []);
+    base.attempts.push(publicAttempt);
+    if (attempt.ok) {
+      return {
+        ...base,
+        ok: true,
+        selected_endpoint: edge,
+        posts_count: attempt.posts_count,
+        message: `Facebook ${edge} request works. Posts returned: ${attempt.posts_count}.`
+      };
+    }
+  }
+  return {
+    ...base,
+    code: "all_facebook_post_edges_failed",
+    message: "All Facebook post read endpoints failed. Code path is using OAuth Page Access Token, but Meta rejected every read edge.",
+    final_diagnosis: {
+      code_ok: true,
+      token_valid: base.page_token_valid,
+      token_belongs_to_selected_page: base.page_token_belongs_to_selected_page,
+      permissions_granted: base.page_token_debug?.debug?.scopes?.includes("pages_read_engagement") || false,
+      likely_reason: "Meta requires App Review, Live mode, Business verification, or Page Public Content Access for this app/page combination.",
+      manual_steps: [
+        "Meta Developers -> App Review -> Permissions and Features: request Advanced Access for pages_read_engagement and read_insights.",
+        "Meta Developers -> App settings -> Basic: verify app is in Live mode when testing outside app roles.",
+        "Meta Business verification: complete verification if Meta requires it for Page permissions.",
+        "Permissions and Features: request Page Public Content Access if the app must read pages it does not fully manage.",
+        "Roles: confirm the Facebook account is Admin/Developer/Tester and has Page tasks CREATE_CONTENT, MANAGE, MODERATE, ANALYZE."
+      ]
+    }
+  };
+}
+
+async function debugSingleFacebookFeedRequest(req) {
   const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentials(req);
   const tokenDebug = await loadFacebookTokenDebug(req);
   const endpoint = pageId ? metaEndpoint(`/${pageId}/feed`, { fields: facebookFeedFields, limit: "25" }) : "";
@@ -3315,7 +3560,8 @@ async function debugFacebookPostsRequest(req) {
 }
 
 async function loadFacebookPosts(req, options = {}) {
-  const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentials(req);
+  const refresh = await refreshOAuthPageConnection(req, options.res);
+  const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentialsFromConnection(refresh.connection);
   const missing = [
     !pageId ? "OAuth Page ID" : "",
     !pageAccessToken ? "OAuth Page Access Token" : ""
@@ -3342,6 +3588,12 @@ async function loadFacebookPosts(req, options = {}) {
         selected_page_id: pageId,
         token_type: "page_access_token",
         page_token_source: pageAccessTokenSource || "",
+        page_tasks: refresh.page_tasks || [],
+        me_accounts: {
+          status: refresh.meta_status,
+          error: refresh.meta_error,
+          accounts: refresh.accounts || []
+        },
         uses_env_token: false
       }
     };
@@ -3352,12 +3604,92 @@ async function loadFacebookPosts(req, options = {}) {
   const limit = "25";
   const oldPostsEndpoint = metaEndpoint(`/${pageId}/posts`, { fields: facebookLegacyPostsFields, limit });
   const feedEndpoint = metaEndpoint(`/${pageId}/feed`, { fields, limit });
+  const attempts = [];
+  let selectedAttempt = null;
+  for (const edge of facebookPostEndpointOrder) {
+    const attempt = await requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit);
+    const publicAttempt = publicPostsAttempt(attempt, pageId, pageAccessTokenSource, refresh.page_tasks || []);
+    attempts.push(publicAttempt);
+    facebookLog("posts-fallback-attempt", {
+      graph_api_version: FACEBOOK_GRAPH_VERSION,
+      endpoint_url: attempt.endpoint,
+      selected_page_id: pageId,
+      page_token_source: pageAccessTokenSource,
+      page_tasks: (refresh.page_tasks || []).join(","),
+      status: attempt.status,
+      ok: attempt.ok,
+      posts_count: attempt.posts_count,
+      meta_error: attempt.error?.message || ""
+    });
+    if (attempt.ok) {
+      selectedAttempt = attempt;
+      break;
+    }
+  }
+
+  if (!selectedAttempt) {
+    const pageTokenDebug = await debugFacebookToken(pageAccessToken, "page");
+    return {
+      ok: false,
+      configured: true,
+      posts: [],
+      code: "all_facebook_post_edges_failed",
+      message: "All Facebook post read endpoints failed. OAuth Page token is valid/granted, but Meta rejected published_posts, posts, and feed.",
+      meta_status: attempts[0]?.status || null,
+      diagnostics: {
+        requested_scopes: facebookReadPermissions,
+        selected_page_id: pageId,
+        token_type: "page_access_token",
+        page_token_source: pageAccessTokenSource,
+        page_tasks: refresh.page_tasks || [],
+        me_accounts: {
+          status: refresh.meta_status,
+          error: refresh.meta_error,
+          accounts: refresh.accounts || []
+        },
+        uses_env_token: false,
+        graph_api_version: FACEBOOK_GRAPH_VERSION,
+        fields,
+        attempts,
+        page_token_debug: pageTokenDebug,
+        final_diagnosis: {
+          code_ok: true,
+          token_valid: Boolean(pageTokenDebug.debug?.is_valid),
+          permissions_granted: pageTokenDebug.debug?.scopes?.includes("pages_read_engagement") || false,
+          likely_reason: "Meta requires App Review, Live mode, Business verification, or Page Public Content Access for this app/page combination.",
+          manual_steps: [
+            "Meta Developers -> App Review -> Permissions and Features: request Advanced Access for pages_read_engagement and read_insights.",
+            "Meta Developers -> App settings -> Basic: verify app is Live if testing outside app roles.",
+            "Meta Business verification: complete verification if Meta requires it for Page permissions.",
+            "Permissions and Features: request Page Public Content Access if the app must read pages it does not fully manage.",
+            "Roles: confirm the Facebook account is Admin/Developer/Tester and has Page tasks CREATE_CONTENT, MANAGE, MODERATE, ANALYZE."
+          ]
+        }
+      }
+    };
+  }
 
   if (allPages) {
     const existingPosts = readFacebookPosts();
-    const loaded = [];
-    let nextUrl = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/feed?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${token}`;
-    let pages = 0;
+    let loaded = [];
+    try {
+      const firstPostsWithInsights = await Promise.all((selectedAttempt.data.data || []).map(async (post) => ({
+        ...post,
+        insights: await fetchFacebookPostInsights(post.id, token)
+      })));
+      loaded = firstPostsWithInsights.map((post) => normalizeFacebookPost(post, existingPosts.find((item) => item.facebook_post_id === post.id)));
+    } catch (error) {
+      return {
+        ok: false,
+        configured: true,
+        posts: [],
+        code: "facebook_posts_normalize_failed",
+        message: safeMetaError(error),
+        diagnostics: { selected_endpoint: selectedAttempt.edge, attempts }
+      };
+    }
+    let nextUrl = selectedAttempt.paging_next;
+    let pages = 1;
     const maxPages = Number(process.env.FACEBOOK_SYNC_MAX_PAGES || 25);
     try {
       while (nextUrl && pages < maxPages) {
@@ -3376,15 +3708,17 @@ async function loadFacebookPosts(req, options = {}) {
         meta_status: error.metaStatus || null,
         diagnostics: {
           graph_api_version: FACEBOOK_GRAPH_VERSION,
-          old_endpoint: oldPostsEndpoint,
-          new_endpoint: feedEndpoint,
+          selected_endpoint: selectedAttempt.edge,
+          endpoint: selectedAttempt.endpoint,
           fields,
           selected_page_id: pageId,
           token_type: "page_access_token",
           page_token_source: pageAccessTokenSource,
+          page_tasks: refresh.page_tasks || [],
           uses_env_token: false,
           meta_status: error.metaStatus || null,
-          meta_error: error.metaError || null
+          meta_error: error.metaError || null,
+          attempts
         }
       };
     }
@@ -3399,56 +3733,12 @@ async function loadFacebookPosts(req, options = {}) {
       ok: true,
       configured: true,
       posts: merged,
-      summary: { count: merged.length, loaded: posts.length, pages, best_score: merged[0]?.total_score || 0 },
-      message: `Historical sync complete. Loaded posts: ${posts.length}, API pages: ${pages}. Project Brain updated.`
+      summary: { count: merged.length, loaded: posts.length, pages, best_score: merged[0]?.total_score || 0, selected_endpoint: selectedAttempt.edge },
+      message: `Historical sync complete via ${selectedAttempt.edge}. Loaded posts: ${posts.length}, API pages: ${pages}. Project Brain updated.`
     };
   }
 
-  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/feed?fields=${encodeURIComponent(fields)}&limit=${limit}&access_token=${token}`;
-  const { response, data } = await graphFetchJson(url, "posts", 20000);
-  facebookLog("posts-token-source", {
-    graph_api_version: FACEBOOK_GRAPH_VERSION,
-    selected_page_id: pageId,
-    endpoint_url: feedEndpoint,
-    page_token_source: pageAccessTokenSource
-  });
-  if (!response.ok || data.error) {
-    const metaMessage = data.error?.message || "Meta Graph API не смог загрузить посты.";
-    const connection = readFacebookConnection(req);
-    const grantedPermissions = connection.granted_permissions || [];
-    const missingScopes = missingFacebookPermissions(grantedPermissions);
-    let permissionHint = "";
-    if (/pages_read_engagement|permissions|permission|\(#10\)/i.test(metaMessage)) {
-      if (missingScopes.length) {
-        permissionHint = ` Missing permissions likely: ${missingScopes.join(", ")}. Reconnect Facebook after adding permissions.`;
-      } else {
-        permissionHint = " OAuth permissions look granted. Reconnect Facebook and re-select the Page so Meta issues a fresh Page Access Token for this Page.";
-      }
-    }
-    return {
-      ok: false,
-      configured: true,
-      posts: [],
-      code: "meta_api_error",
-      meta_status: response.status,
-      message: `${metaMessage}${permissionHint}`,
-      diagnostics: {
-        requested_scopes: facebookReadPermissions,
-        granted_scopes: grantedPermissions,
-        missing_scopes: missingScopes,
-        selected_page_id: pageId,
-        token_type: "page_access_token",
-        page_token_source: pageAccessTokenSource,
-        old_endpoint: oldPostsEndpoint,
-        new_endpoint: feedEndpoint,
-        fields,
-        uses_env_token: false,
-        graph_api_version: FACEBOOK_GRAPH_VERSION,
-        meta_status: response.status,
-        meta_error: safeMetaErrorObject(data.error)
-      }
-    };
-  }
+  const data = selectedAttempt.data;
 
   const existingPosts = readFacebookPosts();
   const postsWithInsights = await Promise.all((data.data || []).map(async (post) => ({
@@ -3470,7 +3760,10 @@ async function loadFacebookPosts(req, options = {}) {
     posts: merged,
     summary: {
       count: merged.length,
-      best_score: merged[0]?.total_score || 0
+      best_score: merged[0]?.total_score || 0,
+      loaded: posts.length,
+      selected_endpoint: selectedAttempt.edge,
+      attempts
     },
     message: `Загружено и сохранено постов: ${posts.length}. Таблица отсортирована по лучшим результатам.`
   };
@@ -3595,7 +3888,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === "/api/facebook/posts" && req.method === "GET") {
-    return sendJson(res, 200, await loadFacebookPosts(req));
+    return sendJson(res, 200, await loadFacebookPosts(req, { res }));
   }
 
   if (pathname === "/api/facebook/posts-debug" && req.method === "GET") {
@@ -3610,12 +3903,24 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  if (pathname === "/api/facebook/posts-debug-all" && req.method === "GET") {
+    try {
+      return sendJson(res, 200, await debugAllFacebookPostEndpoints(req, res));
+    } catch (error) {
+      return sendJson(res, 200, {
+        ok: false,
+        code: "posts_debug_all_failed",
+        message: safeMetaError(error)
+      });
+    }
+  }
+
   if (pathname === "/api/facebook/refresh" && req.method === "GET") {
-    return sendJson(res, 200, await loadFacebookPosts(req));
+    return sendJson(res, 200, await loadFacebookPosts(req, { res }));
   }
 
   if (pathname === "/api/facebook/sync" && req.method === "GET") {
-    return sendJson(res, 200, await loadFacebookPosts(req, { allPages: true }));
+    return sendJson(res, 200, await loadFacebookPosts(req, { allPages: true, res }));
   }
 
   if (pathname === "/api/facebook/select-page" && req.method === "POST") {
