@@ -3378,6 +3378,178 @@ function publicPostsAttempt(attempt, pageId, tokenSource, pageTasks) {
   };
 }
 
+function graphDataCount(data) {
+  if (Array.isArray(data?.data)) return data.data.length;
+  if (data && typeof data === "object" && !data.error) return 1;
+  return 0;
+}
+
+async function graphProbe({ label, path: graphPath, params = {}, token, tokenType, tokenSource, grantedScopes, pageId, pageTasks }) {
+  const endpoint = metaEndpoint(graphPath, params);
+  const base = {
+    label,
+    endpoint,
+    status: null,
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    token_source: tokenSource,
+    token_type: tokenType,
+    granted_scopes: grantedScopes || [],
+    page_id: pageId || "",
+    page_tasks: pageTasks || [],
+    meta_error: null,
+    data_count: 0
+  };
+  if (!token) {
+    return {
+      ...base,
+      code: "token_missing",
+      meta_error: { message: `${tokenType} is missing for this probe.` }
+    };
+  }
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}${graphPath}?${new URLSearchParams({
+    ...params,
+    access_token: token
+  }).toString()}`;
+  const { response, data } = await graphFetchJson(url, `graph-test-${label}`, 20000);
+  return {
+    ...base,
+    status: response.status,
+    ok: response.ok && !data.error,
+    meta_error: safeMetaErrorObject(data.error),
+    data_count: graphDataCount(data),
+    sample_keys: data && typeof data === "object" ? Object.keys(data).filter((key) => key !== "paging").slice(0, 12) : []
+  };
+}
+
+async function runFacebookGraphTestFull(req, res) {
+  const refresh = await refreshOAuthPageConnection(req, res);
+  const connection = refresh.connection;
+  const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentialsFromConnection(connection);
+  const userToken = connection.user_token || "";
+  const userTokenDebug = await debugFacebookToken(userToken, "user");
+  const pageTokenDebug = await debugFacebookToken(pageAccessToken, "page");
+  const userScopes = userTokenDebug.debug?.scopes || connection.granted_permissions || [];
+  const pageScopes = pageTokenDebug.debug?.scopes || [];
+  const pageTasks = refresh.page_tasks || pageTasksForConnection(connection, pageId);
+  const probes = [
+    await graphProbe({
+      label: "me_page_token",
+      path: "/me",
+      token: pageAccessToken,
+      tokenType: "page_access_token",
+      tokenSource: pageAccessTokenSource,
+      grantedScopes: pageScopes,
+      pageId,
+      pageTasks
+    }),
+    await graphProbe({
+      label: "me_accounts_user_token",
+      path: "/me/accounts",
+      params: { fields: "id,name,tasks,category,access_token" },
+      token: userToken,
+      tokenType: "user_access_token",
+      tokenSource: userToken ? "oauth" : "",
+      grantedScopes: userScopes,
+      pageId,
+      pageTasks
+    }),
+    await graphProbe({
+      label: "page_object",
+      path: `/${pageId}`,
+      params: { fields: "id,name,category,tasks,fan_count" },
+      token: pageAccessToken,
+      tokenType: "page_access_token",
+      tokenSource: pageAccessTokenSource,
+      grantedScopes: pageScopes,
+      pageId,
+      pageTasks
+    }),
+    await graphProbe({
+      label: "page_feed",
+      path: `/${pageId}/feed`,
+      params: { limit: "1" },
+      token: pageAccessToken,
+      tokenType: "page_access_token",
+      tokenSource: pageAccessTokenSource,
+      grantedScopes: pageScopes,
+      pageId,
+      pageTasks
+    }),
+    await graphProbe({
+      label: "page_posts",
+      path: `/${pageId}/posts`,
+      params: { limit: "1" },
+      token: pageAccessToken,
+      tokenType: "page_access_token",
+      tokenSource: pageAccessTokenSource,
+      grantedScopes: pageScopes,
+      pageId,
+      pageTasks
+    }),
+    await graphProbe({
+      label: "page_published_posts",
+      path: `/${pageId}/published_posts`,
+      params: { limit: "1" },
+      token: pageAccessToken,
+      tokenType: "page_access_token",
+      tokenSource: pageAccessTokenSource,
+      grantedScopes: pageScopes,
+      pageId,
+      pageTasks
+    }),
+    await graphProbe({
+      label: "page_promotable_posts",
+      path: `/${pageId}/promotable_posts`,
+      params: { limit: "1" },
+      token: pageAccessToken,
+      tokenType: "page_access_token",
+      tokenSource: pageAccessTokenSource,
+      grantedScopes: pageScopes,
+      pageId,
+      pageTasks
+    })
+  ];
+  const successfulReadEdge = probes.find((probe) =>
+    ["page_feed", "page_posts", "page_published_posts", "page_promotable_posts"].includes(probe.label) && probe.ok
+  );
+  return {
+    ok: Boolean(successfulReadEdge),
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    page_id: pageId,
+    token_source: pageAccessTokenSource,
+    token_type: "page_access_token",
+    user_token_present: Boolean(userToken),
+    page_token_present: Boolean(pageAccessToken),
+    page_token_valid: Boolean(pageTokenDebug.debug?.is_valid),
+    page_token_belongs_to_selected_page: Boolean(pageId && (pageTokenDebug.debug?.profile_id === pageId || pageTokenDebug.debug?.user_id === pageId)),
+    page_tasks: pageTasks,
+    me_accounts_refresh: {
+      status: refresh.meta_status,
+      error: refresh.meta_error,
+      refreshed: refresh.refreshed,
+      accounts: refresh.accounts || []
+    },
+    user_token_debug: userTokenDebug,
+    page_token_debug: pageTokenDebug,
+    successful_endpoint: successfulReadEdge?.endpoint || "",
+    probes,
+    final_diagnosis: successfulReadEdge ? null : {
+      code_ok: true,
+      token_valid: Boolean(pageTokenDebug.debug?.is_valid),
+      permissions_granted: pageScopes.includes("pages_read_engagement") || userScopes.includes("pages_read_engagement"),
+      likely_reason: "Meta accepted OAuth but rejected all Page read edges. This usually means the app needs Advanced Access/App Review for pages_read_engagement/read_insights, Page Public Content Access for public content, Live mode for non-role users, or Business Verification.",
+      manual_steps: [
+        "Meta Developers -> App Review -> Permissions and Features: search pages_read_engagement and request Advanced Access.",
+        "Meta Developers -> App Review -> Permissions and Features: search read_insights and request Advanced Access if analytics are needed.",
+        "Meta Developers -> App Review -> Permissions and Features: search Page Public Content Access and request it if reading public Page content is required.",
+        "Meta Developers -> App settings -> Basic: confirm the app is Live for users outside app roles.",
+        "Meta Developers -> Roles: confirm the Facebook account is Developer/Admin/Tester and also has Page tasks on the selected Page.",
+        "Meta Business Settings: complete Business Verification if Meta asks for it during permission review."
+      ]
+    }
+  };
+}
+
 async function debugFacebookPostsRequest(req) {
   const debugAll = await debugAllFacebookPostEndpoints(req);
   const firstAttempt = debugAll.attempts?.[0] || null;
@@ -3910,6 +4082,18 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, {
         ok: false,
         code: "posts_debug_all_failed",
+        message: safeMetaError(error)
+      });
+    }
+  }
+
+  if (pathname === "/api/facebook/graph-test-full" && req.method === "GET") {
+    try {
+      return sendJson(res, 200, await runFacebookGraphTestFull(req, res));
+    } catch (error) {
+      return sendJson(res, 200, {
+        ok: false,
+        code: "graph_test_full_failed",
         message: safeMetaError(error)
       });
     }
