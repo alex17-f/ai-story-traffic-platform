@@ -14,6 +14,7 @@ const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
 const FACEBOOK_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
+const FACEBOOK_GRAPH_VERSION = "v20.0";
 const facebookReadPermissions = [
   "pages_show_list",
   "pages_read_engagement",
@@ -411,7 +412,7 @@ function absoluteUrl(req, pathname) {
 }
 
 function parseCookies(req) {
-  return Object.fromEntries(String(req.headers.cookie || "")
+  return Object.fromEntries(String(req?.headers?.cookie || "")
     .split(";")
     .map((part) => part.trim())
     .filter(Boolean)
@@ -468,6 +469,21 @@ function facebookLog(endpoint, details = {}) {
     return [key, value];
   }));
   console.log(`[facebook] ${endpoint} ${JSON.stringify(safeDetails)}`);
+}
+
+function metaEndpoint(pathname, params = {}) {
+  const safeParams = new URLSearchParams(params);
+  safeParams.delete("access_token");
+  const query = safeParams.toString();
+  return `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}${pathname}${query ? `?${query}` : ""}`;
+}
+
+function safeMetaErrorObject(error) {
+  if (!error || typeof error !== "object") return null;
+  return JSON.parse(JSON.stringify(error, (key, value) => {
+    if (/token/i.test(key)) return "[redacted]";
+    return typeof value === "string" ? safeMetaError(value) : value;
+  }));
 }
 
 function storySummary(story, req) {
@@ -2684,12 +2700,19 @@ async function persistFacebookConnection(connection) {
 }
 
 function facebookCredentials(req) {
-  const connection = readFacebookConnection(req);
+  const stored = storageCache.facebookConnection || {};
+  const cookie = decryptFacebookConnection(parseCookies(req)[FACEBOOK_CONNECTION_COOKIE]);
+  const connection = Object.keys(cookie).length ? { ...stored, ...cookie } : stored;
+  const pageTokenSource = cookie.page_access_token
+    ? "cookie"
+    : (stored.page_access_token
+    ? "oauth"
+    : (process.env.FACEBOOK_PAGE_ACCESS_TOKEN ? "env" : ""));
   return {
     pageId: connection.page_id || process.env.FACEBOOK_PAGE_ID || "",
     pageAccessToken: connection.page_access_token || process.env.FACEBOOK_PAGE_ACCESS_TOKEN || "",
-    pageIdSource: connection.page_id ? "oauth" : (process.env.FACEBOOK_PAGE_ID ? "env" : ""),
-    pageAccessTokenSource: connection.page_access_token ? "oauth" : (process.env.FACEBOOK_PAGE_ACCESS_TOKEN ? "env" : "")
+    pageIdSource: cookie.page_id ? "cookie" : (stored.page_id ? "oauth" : (process.env.FACEBOOK_PAGE_ID ? "env" : "")),
+    pageAccessTokenSource: pageTokenSource
   };
 }
 
@@ -2707,24 +2730,27 @@ function missingFacebookPermissions(granted = []) {
 async function loadFacebookPermissionDiagnostics(req) {
   const connection = readFacebookConnection(req);
   const userToken = connection.user_token || "";
+  const { pageId, pageAccessToken, pageAccessTokenSource } = facebookCredentials(req);
   const diagnostics = {
     requested_scopes: facebookReadPermissions,
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
     oauth_flow: process.env.FACEBOOK_LOGIN_CONFIG_ID ? "facebook_login_for_business_config" : "standard_scope",
     uses_facebook_login_for_business: Boolean(process.env.FACEBOOK_LOGIN_CONFIG_ID),
-    selected_page_id: connection.page_id || process.env.FACEBOOK_PAGE_ID || "",
+    selected_page_id: pageId,
     token_type: connection.user_token_type || (userToken ? "bearer" : ""),
-    page_token_source: connection.page_access_token ? "oauth" : (process.env.FACEBOOK_PAGE_ACCESS_TOKEN ? "env" : ""),
+    page_token_source: pageAccessTokenSource,
     has_user_token: Boolean(userToken),
-    has_page_access_token: Boolean(connection.page_access_token || process.env.FACEBOOK_PAGE_ACCESS_TOKEN),
+    has_page_access_token: Boolean(pageAccessToken),
     granted_scopes: connection.granted_permissions || [],
     missing_scopes: missingFacebookPermissions(connection.granted_permissions || []),
+    posts_endpoint: pageId ? metaEndpoint(`/${pageId}/posts`, { limit: "25" }) : "",
     accounts: connection.accounts_summary || []
   };
   if (!userToken) return diagnostics;
-  const permissions = await graphGet(`https://graph.facebook.com/v20.0/me/permissions?${new URLSearchParams({
+  const permissions = await graphGet(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me/permissions?${new URLSearchParams({
     access_token: userToken
   }).toString()}`, "me-permissions");
-  const accounts = await graphGet(`https://graph.facebook.com/v20.0/me/accounts?${new URLSearchParams({
+  const accounts = await graphGet(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me/accounts?${new URLSearchParams({
     fields: "id,name,category,tasks",
     access_token: userToken
   }).toString()}`, "me-accounts-diagnostics");
@@ -2786,6 +2812,99 @@ async function graphGet(url, endpoint = "graphGet") {
   return data;
 }
 
+function summarizeDebugToken(data) {
+  const token = data?.data || {};
+  return {
+    app_id: token.app_id || "",
+    type: token.type || "",
+    application: token.application || "",
+    data_access_expires_at: token.data_access_expires_at || 0,
+    expires_at: token.expires_at || 0,
+    is_valid: Boolean(token.is_valid),
+    scopes: Array.isArray(token.scopes) ? token.scopes.sort() : [],
+    profile_id: token.profile_id || "",
+    user_id: token.user_id || "",
+    error: safeMetaErrorObject(token.error)
+  };
+}
+
+async function debugFacebookToken(inputToken, label) {
+  if (!inputToken) {
+    return {
+      present: false,
+      label,
+      debug: null,
+      meta_status: null,
+      meta_error: null
+    };
+  }
+  if (!process.env.META_APP_ID || !process.env.META_APP_SECRET) {
+    return {
+      present: true,
+      label,
+      debug: null,
+      meta_status: null,
+      meta_error: "META_APP_ID or META_APP_SECRET is missing."
+    };
+  }
+  const appToken = `${process.env.META_APP_ID}|${process.env.META_APP_SECRET}`;
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/debug_token?${new URLSearchParams({
+    input_token: inputToken,
+    access_token: appToken
+  }).toString()}`;
+  const { response, data } = await graphFetchJson(url, `debug-token-${label}`, 15000);
+  return {
+    present: true,
+    label,
+    debug: summarizeDebugToken(data),
+    meta_status: response.status,
+    meta_error: safeMetaErrorObject(data.error)
+  };
+}
+
+async function loadFacebookTokenDebug(req) {
+  const connection = readFacebookConnection(req);
+  const { pageId, pageAccessToken, pageAccessTokenSource } = facebookCredentials(req);
+  const userToken = connection.user_token || "";
+  const result = {
+    ok: true,
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    selected_page_id: pageId,
+    page_token_source: pageAccessTokenSource,
+    user_token_present: Boolean(userToken),
+    page_token_present: Boolean(pageAccessToken),
+    user_token: await debugFacebookToken(userToken, "user"),
+    page_token: await debugFacebookToken(pageAccessToken, "page"),
+    page_token_me: null,
+    page_token_belongs_to_selected_page: false
+  };
+  if (pageAccessToken) {
+    const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me?${new URLSearchParams({
+      fields: "id,name",
+      access_token: pageAccessToken
+    }).toString()}`;
+    const { response, data } = await graphFetchJson(url, "page-token-me", 15000);
+    result.page_token_me = {
+      meta_status: response.status,
+      id: data.id || "",
+      name: data.name || "",
+      error: safeMetaErrorObject(data.error)
+    };
+    result.page_token_belongs_to_selected_page = Boolean(pageId && data.id === pageId);
+  }
+  facebookLog("token-debug", {
+    graph_api_version: result.graph_api_version,
+    selected_page_id: result.selected_page_id,
+    page_token_source: result.page_token_source,
+    user_token: result.user_token_present,
+    page_token: result.page_token_present,
+    page_token_profile_id: result.page_token?.debug?.profile_id || "",
+    page_token_me_id: result.page_token_me?.id || "",
+    page_token_belongs_to_selected_page: result.page_token_belongs_to_selected_page
+  });
+  return result;
+}
+
 function facebookOAuthRedirectUri(req) {
   return configuredRedirectUri(req);
 }
@@ -2817,19 +2936,19 @@ function startFacebookOAuth(req, res) {
     uses_config_id: Boolean(process.env.FACEBOOK_LOGIN_CONFIG_ID),
     requested_scopes: process.env.FACEBOOK_LOGIN_CONFIG_ID ? "config_id" : facebookReadPermissions.join(",")
   });
-  redirect(res, `https://www.facebook.com/v20.0/dialog/oauth?${params.toString()}`);
+  redirect(res, `https://www.facebook.com/${FACEBOOK_GRAPH_VERSION}/dialog/oauth?${params.toString()}`);
 }
 
 async function exchangeFacebookCode(req, code) {
   const redirectUri = facebookOAuthRedirectUri(req);
-  const shortToken = await graphGet(`https://graph.facebook.com/v20.0/oauth/access_token?${new URLSearchParams({
+  const shortToken = await graphGet(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/oauth/access_token?${new URLSearchParams({
     client_id: process.env.META_APP_ID,
     redirect_uri: redirectUri,
     client_secret: process.env.META_APP_SECRET,
     code
   }).toString()}`);
   try {
-    return await graphGet(`https://graph.facebook.com/v20.0/oauth/access_token?${new URLSearchParams({
+    return await graphGet(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/oauth/access_token?${new URLSearchParams({
       grant_type: "fb_exchange_token",
       client_id: process.env.META_APP_ID,
       client_secret: process.env.META_APP_SECRET,
@@ -2852,11 +2971,11 @@ async function handleFacebookOAuthCallback(req, res, url) {
   try {
     const tokenData = await exchangeFacebookCode(req, code);
     const userToken = tokenData.access_token;
-    const permissions = await graphGet(`https://graph.facebook.com/v20.0/me/permissions?${new URLSearchParams({
+    const permissions = await graphGet(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me/permissions?${new URLSearchParams({
       access_token: userToken
     }).toString()}`, "me-permissions");
     const grantedPermissions = summarizeGrantedPermissions(permissions);
-    const pages = await graphGet(`https://graph.facebook.com/v20.0/me/accounts?${new URLSearchParams({
+    const pages = await graphGet(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/me/accounts?${new URLSearchParams({
       fields: "id,name,category,access_token,tasks",
       access_token: userToken
     }).toString()}`);
@@ -3035,7 +3154,7 @@ function normalizeFacebookPost(post, existing) {
 
 async function fetchFacebookPostInsights(postId, token) {
   const metrics = "post_impressions_unique,post_clicks,post_clicks_by_type";
-  const url = `https://graph.facebook.com/v20.0/${postId}/insights?metric=${encodeURIComponent(metrics)}&access_token=${token}`;
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}/insights?metric=${encodeURIComponent(metrics)}&access_token=${token}`;
   try {
     const { response, data } = await graphFetchJson(url, "post-insights", 12000);
     if (!response.ok || data.error) return { data: [] };
@@ -3062,7 +3181,7 @@ async function checkFacebookConnection(req) {
   if (!pageId) return { ok: false, code: "page_id_missing", message: "Facebook Page ID is missing. Select a Page after OAuth." };
   if (!pageAccessToken) return { ok: false, code: "page_access_token_missing", message: "Facebook Page Access Token is missing. Reconnect Facebook and grant Page permissions." };
   const token = encodeURIComponent(pageAccessToken);
-  const url = `https://graph.facebook.com/v20.0/${pageId}?fields=id,name&access_token=${token}`;
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}?fields=id,name&access_token=${token}`;
   const { response, data } = await graphFetchJson(url, "check");
   facebookLog("check-token-source", { selected_page_id: pageId, page_token_source: pageAccessTokenSource });
   if (!response.ok || data.error) {
@@ -3130,7 +3249,7 @@ async function loadFacebookPosts(req, options = {}) {
   if (allPages) {
     const existingPosts = readFacebookPosts();
     const loaded = [];
-    let nextUrl = `https://graph.facebook.com/v20.0/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=100&access_token=${token}`;
+    let nextUrl = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=100&access_token=${token}`;
     let pages = 0;
     const maxPages = Number(process.env.FACEBOOK_SYNC_MAX_PAGES || 25);
     try {
@@ -3165,9 +3284,15 @@ async function loadFacebookPosts(req, options = {}) {
     };
   }
 
-  const url = `https://graph.facebook.com/v20.0/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=25&access_token=${token}`;
+  const postsEndpoint = metaEndpoint(`/${pageId}/posts`, { fields, limit: "25" });
+  const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/posts?fields=${encodeURIComponent(fields)}&limit=25&access_token=${token}`;
   const { response, data } = await graphFetchJson(url, "posts", 20000);
-  facebookLog("posts-token-source", { selected_page_id: pageId, page_token_source: pageAccessTokenSource });
+  facebookLog("posts-token-source", {
+    graph_api_version: FACEBOOK_GRAPH_VERSION,
+    selected_page_id: pageId,
+    endpoint_url: postsEndpoint,
+    page_token_source: pageAccessTokenSource
+  });
   if (!response.ok || data.error) {
     const metaMessage = data.error?.message || "Meta Graph API не смог загрузить посты.";
     const connection = readFacebookConnection(req);
@@ -3197,7 +3322,10 @@ async function loadFacebookPosts(req, options = {}) {
         selected_page_id: pageId,
         token_type: "page_access_token",
         page_token_source: pageAccessTokenSource,
-        meta_status: response.status
+        endpoint_url: postsEndpoint,
+        graph_api_version: FACEBOOK_GRAPH_VERSION,
+        meta_status: response.status,
+        meta_error: safeMetaErrorObject(data.error)
       }
     };
   }
@@ -3313,6 +3441,18 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, {
         ok: false,
         code: "permission_diagnostics_failed",
+        message: safeMetaError(error)
+      });
+    }
+  }
+
+  if (pathname === "/api/facebook/token-debug" && req.method === "GET") {
+    try {
+      return sendJson(res, 200, await loadFacebookTokenDebug(req));
+    } catch (error) {
+      return sendJson(res, 200, {
+        ok: false,
+        code: "token_debug_failed",
         message: safeMetaError(error)
       });
     }
