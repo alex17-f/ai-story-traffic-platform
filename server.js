@@ -10,6 +10,10 @@ const FACEBOOK_POSTS_FILE = path.join(ROOT, "data", "facebook_posts.json");
 const COMPETITORS_FILE = path.join(ROOT, "data", "competitors.json");
 const PROJECT_BRAIN_FILE = path.join(ROOT, "data", "project_brain.json");
 const FACEBOOK_CONNECTION_FILE = path.join(ROOT, "data", "facebook_connection.local.json");
+const INTERNET_RESEARCH_FILE = path.join(ROOT, "data", "internet_research.json");
+const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
+const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
+const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
@@ -139,6 +143,68 @@ function writeCompetitors(competitors) {
   persistCompetitors(competitors);
 }
 
+function autopilotV1BrainState() {
+  return readProjectBrain().internet_research?.autopilot_v1 || {};
+}
+
+function readAutopilotV1Collection(cacheKey, brainKey) {
+  const brainItems = autopilotV1BrainState()[brainKey];
+  if (Array.isArray(brainItems) && brainItems.length) return brainItems;
+  return storageCache[cacheKey] || [];
+}
+
+async function writeAutopilotV1Collection(cacheKey, filePath, brainKey, items) {
+  storageCache[cacheKey] = items;
+  writeJsonBackup(filePath, items);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object"
+    ? brain.internet_research
+    : {};
+  brain.internet_research = {
+    ...currentResearch,
+    autopilot_v1: {
+      ...(currentResearch.autopilot_v1 || {}),
+      [brainKey]: items,
+      updated_at: new Date().toISOString()
+    }
+  };
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return items;
+}
+
+function readInternetResearchItems() {
+  return readAutopilotV1Collection("internetResearchItems", "internet_research_items");
+}
+
+async function writeInternetResearchItems(items) {
+  return writeAutopilotV1Collection("internetResearchItems", INTERNET_RESEARCH_FILE, "internet_research_items", items);
+}
+
+function readStoryIdeas() {
+  return readAutopilotV1Collection("storyIdeas", "story_ideas");
+}
+
+async function writeStoryIdeas(items) {
+  return writeAutopilotV1Collection("storyIdeas", STORY_IDEAS_FILE, "story_ideas", items);
+}
+
+function readImageQueue() {
+  return readAutopilotV1Collection("imageQueue", "image_queue");
+}
+
+async function writeImageQueue(items) {
+  return writeAutopilotV1Collection("imageQueue", IMAGE_QUEUE_FILE, "image_queue", items);
+}
+
+function readContentPlan() {
+  return readAutopilotV1Collection("contentPlan", "content_plan");
+}
+
+async function writeContentPlan(items) {
+  return writeAutopilotV1Collection("contentPlan", CONTENT_PLAN_FILE, "content_plan", items);
+}
+
 function readJsonArray(filePath) {
   if (!fs.existsSync(filePath)) return [];
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -166,6 +232,10 @@ const storageCache = {
   stories: readJsonArray(DATA_FILE),
   facebookPosts: readJsonArray(FACEBOOK_POSTS_FILE),
   competitors: readJsonArray(COMPETITORS_FILE),
+  internetResearchItems: readJsonArray(INTERNET_RESEARCH_FILE),
+  storyIdeas: readJsonArray(STORY_IDEAS_FILE),
+  imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
+  contentPlan: readJsonArray(CONTENT_PLAN_FILE),
   projectBrain: fs.existsSync(PROJECT_BRAIN_FILE)
     ? JSON.parse(fs.readFileSync(PROJECT_BRAIN_FILE, "utf8"))
     : {
@@ -570,6 +640,7 @@ function renderHeader() {
       <a href="/audience-insights">Audience Insights</a>
       <a href="/telegram-center">Telegram Center</a>
       <a href="/ai-autopilot">AI Autopilot</a>
+      <a href="/ai-autopilot-v1">Autopilot v1</a>
       <a href="/production-status">Production Status</a>
     </nav>
   </header>`;
@@ -894,6 +965,12 @@ function renderTelegramCenter() {
         <div class="category-list">
           <a>/start</a>
           <a>/status</a>
+          <a>/load_posts</a>
+          <a>/analyze</a>
+          <a>/research</a>
+          <a>/ideas</a>
+          <a>/plan</a>
+          <a>/schedule</a>
           <a>/stats</a>
           <a>/drafts</a>
           <a>/approve</a>
@@ -1877,7 +1954,11 @@ function rebuildProjectBrain() {
     total_reach: posts.reduce((sum, post) => sum + Number(post.reach_count || 0), 0),
     total_link_clicks: posts.reduce((sum, post) => sum + Number(post.link_clicks_count || 0), 0)
   };
-  const internetResearch = buildInternetResearchSnapshot(audience, competitor, stories);
+  const existingAutopilotV1 = readProjectBrain().internet_research?.autopilot_v1;
+  const internetResearch = {
+    ...buildInternetResearchSnapshot(audience, competitor, stories),
+    ...(existingAutopilotV1 ? { autopilot_v1: existingAutopilotV1 } : {})
+  };
   const workHistory = stories.slice(0, 20).map((story, index) => ({
     story_number: index + 1,
     topic: story.category,
@@ -1956,6 +2037,653 @@ function autopilotStatus() {
     ["Website Analytics", "⏳"],
     ["Competitor Live Analysis", "⏳"]
   ];
+}
+
+function storyHook(message = "") {
+  const clean = String(message || "").replace(/\s+/g, " ").trim();
+  return clean.split(/(?<=[.!?])\s+/).filter(Boolean).slice(0, 2).join(" ").slice(0, 220);
+}
+
+function hookPattern(message = "") {
+  const hook = storyHook(message).toLowerCase();
+  if (!hook) return "no text";
+  if (/[?]/.test(hook)) return "question hook";
+  if (/secret|letter|envelope|truth|old|found|hidden|тайн|письм|конверт|правд/i.test(hook)) return "hidden truth hook";
+  if (/mother|son|daughter|family|husband|wife|мать|сын|дочь|семь|муж|жен/i.test(hook)) return "family conflict hook";
+  if (/money|inherit|house|apartment|наслед|квартир|дом|деньг/i.test(hook)) return "inheritance or money hook";
+  if (/suddenly|never expected|вдруг|не ожид/i.test(hook)) return "sudden twist hook";
+  return "emotional scene hook";
+}
+
+function storyFormatFromPost(post) {
+  const text = post.message || "";
+  const chars = Number(post.text_length || text.length || 0);
+  const paragraphs = Number(post.paragraphs_count || text.split(/\n+/).filter(Boolean).length || 1);
+  const hasImage = Boolean(post.image_url || post.full_picture || post.image_analysis?.has_image);
+  const bucket = chars < 600 ? "short" : chars <= 1200 ? "medium" : "long";
+  return `${bucket} post, ${paragraphs} paragraphs, ${hasImage ? "image" : "no image"}, ${hookPattern(text)}`;
+}
+
+function weightedGroup(posts, keyFn) {
+  const groups = new Map();
+  for (const post of posts) {
+    const key = keyFn(post) || "unknown";
+    const list = groups.get(key) || [];
+    list.push(post);
+    groups.set(key, list);
+  }
+  return [...groups.entries()].map(([name, items]) => {
+    const best = [...items].sort((a, b) => Number(b.total_score || 0) - Number(a.total_score || 0))[0];
+    return {
+      name,
+      posts_count: items.length,
+      avg_likes: metricAverage(items, "likes_count"),
+      avg_comments: metricAverage(items, "comments_count"),
+      avg_shares: metricAverage(items, "shares_count"),
+      avg_clicks: metricAverage(items, "link_clicks_count"),
+      avg_score: metricAverage(items, "total_score"),
+      sample_hook: storyHook(best?.message || "")
+    };
+  }).sort((a, b) => b.avg_score - a.avg_score || b.posts_count - a.posts_count);
+}
+
+function buildAIPageAnalysis() {
+  const posts = readFacebookPosts().map((post) => {
+    const analysis = enrichFacebookPostAnalysis(post);
+    const enriched = { ...post, ...analysis };
+    return {
+      ...enriched,
+      hook: storyHook(post.message || ""),
+      hook_pattern: hookPattern(post.message || ""),
+      format: storyFormatFromPost(enriched)
+    };
+  });
+  const bestThemes = weightedGroup(posts, (post) => post.detected_topic).slice(0, 8);
+  const bestEmotions = weightedGroup(posts, (post) => post.detected_emotion).slice(0, 8);
+  const bestHooks = weightedGroup(posts, (post) => post.hook_pattern).slice(0, 8);
+  const bestFormats = weightedGroup(posts, (post) => post.format).slice(0, 8);
+  const topPosts = [...posts].sort((a, b) => Number(b.total_score || 0) - Number(a.total_score || 0)).slice(0, 10);
+  return {
+    ok: true,
+    module: "AI Page Analyzer",
+    generated_at: new Date().toISOString(),
+    posts_analyzed: posts.length,
+    data_source: posts.length ? "stored_facebook_posts" : "no_posts_loaded",
+    best_themes: bestThemes,
+    best_emotions: bestEmotions,
+    best_hooks: bestHooks,
+    best_formats: bestFormats,
+    best_times: groupStats(posts, (post) => post.published_at ? timeBucket(post.published_at) : "unknown").slice(0, 6),
+    top_posts: topPosts.map((post) => ({
+      facebook_post_id: post.facebook_post_id,
+      published_at: post.published_at,
+      topic: post.detected_topic,
+      emotion: post.detected_emotion,
+      hook: post.hook,
+      format: post.format,
+      total_score: Number(post.total_score || 0),
+      permalink_url: post.permalink_url || ""
+    })),
+    recommendations: posts.length ? [
+      `Use theme "${bestThemes[0]?.name || "family"}" as the next priority.`,
+      `Use emotion "${bestEmotions[0]?.name || "hope"}" in the first 2 lines.`,
+      `Best hook pattern now: "${bestHooks[0]?.name || "hidden truth hook"}".`,
+      `Best format now: "${bestFormats[0]?.name || "medium post with image"}".`
+    ] : [
+      "Load Facebook Page posts first. Until then, AI Page Analyzer can only use demo assumptions.",
+      "Safe starting hypothesis: family conflict, hidden truth, realistic image, evening post."
+    ],
+    safety: {
+      publish_allowed: false,
+      approval_required: true,
+      token_values_returned: false
+    }
+  };
+}
+
+function htmlDecode(value = "") {
+  return String(value)
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/<[^>]*>/g, "")
+    .trim();
+}
+
+function cleanResearchUrl(rawUrl = "") {
+  let url = htmlDecode(rawUrl);
+  if (url.startsWith("//")) url = `https:${url}`;
+  try {
+    const parsed = new URL(url);
+    const redirected = parsed.searchParams.get("uddg");
+    return redirected ? decodeURIComponent(redirected) : parsed.href;
+  } catch {
+    return url;
+  }
+}
+
+function emotionalAngleFromTitle(title = "") {
+  const text = title.toLowerCase();
+  if (/mother|father|son|daughter|family|мать|отец|сын|дочь|семь/i.test(text)) return "family loyalty, guilt, reconciliation";
+  if (/betray|cheat|husband|wife|измен|муж|жен/i.test(text)) return "betrayal, shock, hard choice";
+  if (/inherit|will|money|house|наслед|дом|квартир|деньг/i.test(text)) return "inheritance conflict, hidden truth";
+  if (/lonely|alone|одиноч/i.test(text)) return "loneliness, hope, late-life dignity";
+  return "emotional life lesson with an unexpected turn";
+}
+
+function fallbackResearchItems(query) {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: crypto.randomUUID(),
+      source: "Love What Matters",
+      source_url: "https://www.lovewhatmatters.com/",
+      title: "Personal family and relationship stories",
+      summary: "Public trend signal: emotional first-person stories often start with a vulnerable domestic moment and build toward a moral choice.",
+      emotional_angle: "family loyalty, compassion, unexpected kindness",
+      query,
+      status: "fallback_seed",
+      created_at: now
+    },
+    {
+      id: crypto.randomUUID(),
+      source: "Reader's Digest",
+      source_url: "https://www.rd.com/list/true-stories/",
+      title: "True life story collections",
+      summary: "Public trend signal: short readable setups, ordinary people, a clear twist, and a hopeful final beat are common engagement patterns.",
+      emotional_angle: "nostalgia, surprise, hope",
+      query,
+      status: "fallback_seed",
+      created_at: now
+    },
+    {
+      id: crypto.randomUUID(),
+      source: "Public social discussions",
+      source_url: "https://www.reddit.com/r/relationships/",
+      title: "Relationship conflict discussions",
+      summary: "Public trend signal: family conflict stories draw comments when the dilemma is easy to understand and morally debatable.",
+      emotional_angle: "conflict, anger, empathy, debate",
+      query,
+      status: "fallback_seed",
+      created_at: now
+    }
+  ];
+}
+
+async function fetchTextWithTimeout(url, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { "user-agent": "AI Story Traffic Platform research bot" },
+      signal: controller.signal
+    });
+    return { ok: response.ok, status: response.status, text: await response.text() };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runInternetStoryResearch(payload = {}) {
+  const analysis = buildAIPageAnalysis();
+  const query = String(payload.query || [
+    analysis.best_themes[0]?.name || "family life stories",
+    analysis.best_emotions[0]?.name || "emotional twist",
+    "viral true story relationship"
+  ].join(" ")).trim();
+  const limit = Math.max(3, Math.min(Number(payload.limit || 8), 12));
+  let found = [];
+  let sourceStatus = "live_search";
+  let searchError = "";
+  try {
+    const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const result = await fetchTextWithTimeout(searchUrl, 12000);
+    if (!result.ok) throw new Error(`search_status_${result.status}`);
+    const matches = [...result.text.matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
+    found = matches.slice(0, limit).map((match) => {
+      const title = htmlDecode(match[2]);
+      const sourceUrl = cleanResearchUrl(match[1]);
+      let source = "web";
+      try {
+        source = new URL(sourceUrl).hostname.replace(/^www\./, "");
+      } catch {}
+      return {
+        id: crypto.randomUUID(),
+        source,
+        source_url: sourceUrl,
+        title,
+        summary: `Trend signal only: "${title}" suggests a reusable emotional angle, but the platform must create different characters, situation, structure and ending.`,
+        emotional_angle: emotionalAngleFromTitle(title),
+        query,
+        status: "researched",
+        created_at: new Date().toISOString()
+      };
+    });
+  } catch (error) {
+    sourceStatus = "fallback_seed";
+    searchError = error.message;
+    found = fallbackResearchItems(query).slice(0, limit);
+  }
+  if (!found.length) {
+    sourceStatus = "fallback_seed";
+    found = fallbackResearchItems(query).slice(0, limit);
+  }
+  const existing = readInternetResearchItems();
+  const byUrl = new Map(existing.map((item) => [item.source_url, item]));
+  let savedNew = 0;
+  for (const item of found) {
+    if (!byUrl.has(item.source_url)) savedNew += 1;
+    byUrl.set(item.source_url, { ...(byUrl.get(item.source_url) || {}), ...item, updated_at: new Date().toISOString() });
+  }
+  const items = [...byUrl.values()].sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0)).slice(0, 100);
+  await writeInternetResearchItems(items);
+  return {
+    ok: true,
+    module: "Internet Story Researcher",
+    query,
+    source_status: sourceStatus,
+    search_error: searchError,
+    found_count: found.length,
+    saved_new: savedNew,
+    items,
+    originality_rule: "Research is used only for themes, emotions and structures. Do not copy text, characters, images or endings."
+  };
+}
+
+function buildCompetitorAutopilotAnalysis() {
+  const base = buildCompetitorAnalysis();
+  const page = buildAIPageAnalysis();
+  const opportunities = (base.popular_topics || []).map((topic) => {
+    const own = (page.best_themes || []).find((item) => item.name === topic.name);
+    return {
+      topic: topic.name,
+      competitor_signal: topic.count || 0,
+      own_posts_count: own?.posts_count || 0,
+      recommendation: own ? "Compare against your loaded posts before scaling." : "Market signal exists, but your page has little/no data yet."
+    };
+  }).slice(0, 8);
+  return {
+    ok: true,
+    module: "Competitor Analyzer",
+    generated_at: new Date().toISOString(),
+    competitors_count: base.stats?.competitors_count || 0,
+    competitors: base.competitors || [],
+    popular_topics: base.popular_topics || [],
+    popular_emotions: base.popular_emotions || [],
+    image_patterns: base.best_images || [],
+    headline_patterns: base.best_headlines || [],
+    engagement_comparison: opportunities,
+    recommendations: base.recommendations || [],
+    safety: {
+      copying_allowed: false,
+      use_only_patterns: true,
+      public_data_only: true
+    }
+  };
+}
+
+function pickSignal(list, fallback, key = "name") {
+  return list?.[0]?.[key] || fallback;
+}
+
+function storyIdeaTemplate(seed, topic, emotion, hookPatternName) {
+  const names = [
+    ["Nina", "her adult son", "a locked drawer"],
+    ["Galina", "her daughter-in-law", "an old envelope"],
+    ["Tamara", "her sister", "a hospital receipt"],
+    ["Elena", "her husband", "a forgotten key"]
+  ];
+  const [hero, relation, object] = pick(names, seed);
+  const conflict = pick([
+    "a family argument about a small apartment reveals a secret kept for twenty years",
+    "an inheritance dispute turns into a confession nobody expected",
+    "a quiet kitchen conversation exposes why the family stopped speaking",
+    "a late phone call forces everyone to choose between pride and forgiveness"
+  ], seed + topic);
+  const moral = pick([
+    "Silence can protect a family for a while, but truth is the only thing that can heal it.",
+    "The person who seems cruel may be the one who carried the heaviest burden.",
+    "Money can split a family, but one honest conversation can show what was really lost.",
+    "Forgiveness does not erase the past, but it can stop the past from ruling the house."
+  ], seed + emotion);
+  return {
+    title: `${hero} found ${object} and finally understood why ${relation} had been silent`,
+    hook: `${hero} thought it was an ordinary family quarrel. Then ${object} fell out of an old bag, and everyone at the table went quiet.`,
+    plot: `${hero}, a woman in her late fifties, faces ${conflict}. The Facebook part stops at the moment when the hidden object appears. The website continuation reveals a different situation, different motives, and a final choice built around dignity, family memory and hope.`,
+    emotion,
+    moral,
+    topic,
+    hook_pattern: hookPatternName
+  };
+}
+
+async function generateStoryIdeas(payload = {}) {
+  const count = Math.max(1, Math.min(Number(payload.count || 3), 6));
+  const page = buildAIPageAnalysis();
+  const competitor = buildCompetitorAutopilotAnalysis();
+  const research = readInternetResearchItems();
+  const ideas = readStoryIdeas();
+  const now = new Date().toISOString();
+  const newIdeas = [];
+  for (let index = 0; index < count; index += 1) {
+    const seed = `${now}-${index}-${crypto.randomUUID()}`;
+    const topic = String(payload.topic || pickSignal(page.best_themes, pickSignal(competitor.popular_topics, "family"))).trim();
+    const emotion = String(payload.emotion || pickSignal(page.best_emotions, "hope and anxiety")).trim();
+    const hookName = pickSignal(page.best_hooks, "hidden truth hook");
+    newIdeas.push({
+      id: crypto.randomUUID(),
+      ...storyIdeaTemplate(seed, topic, emotion, hookName),
+      status: "needs_approval",
+      approval_required: true,
+      publish_allowed: false,
+      sources_used_as_patterns: research.slice(0, 3).map((item) => ({ title: item.title, source_url: item.source_url, emotional_angle: item.emotional_angle })),
+      originality_guard: "Create new characters, different situation, different ending and different wording. Never copy competitor or research text.",
+      created_at: now,
+      updated_at: now
+    });
+  }
+  const saved = [...newIdeas, ...ideas].slice(0, 100);
+  await writeStoryIdeas(saved);
+  return {
+    ok: true,
+    module: "Story Generator",
+    generated_count: newIdeas.length,
+    ideas: saved,
+    new_ideas: newIdeas,
+    safety: {
+      publish_allowed: false,
+      approval_required: true,
+      plagiarism_policy: "patterns only, original stories only"
+    }
+  };
+}
+
+function imagePromptForIdea(idea) {
+  return [
+    "Photorealistic everyday family photo for a life story.",
+    `Story title: ${idea.title}.`,
+    `Scene: ${idea.topic}, ${idea.emotion}, ${idea.hook_pattern}.`,
+    "Characters: realistic people aged 40-70, ordinary clothes, believable faces, natural skin texture.",
+    "Place: modest kitchen or apartment, warm natural light, tense emotional moment, documentary 35mm look.",
+    "No text, no logo, no watermark, no cartoon style, no plastic AI faces."
+  ].join(" ");
+}
+
+async function enqueueImagePromptsForIdeas() {
+  const ideas = readStoryIdeas();
+  const queue = readImageQueue();
+  const existingIdeaIds = new Set(queue.map((item) => item.story_idea_id));
+  const now = new Date().toISOString();
+  const created = [];
+  for (const idea of ideas.filter((item) => !existingIdeaIds.has(item.id)).slice(0, 20)) {
+    created.push({
+      id: crypto.randomUUID(),
+      story_idea_id: idea.id,
+      story_title: idea.title,
+      prompt: imagePromptForIdea(idea),
+      status: "pending",
+      generated_image_url: "",
+      approval_required: true,
+      publish_allowed: false,
+      created_at: now,
+      updated_at: now
+    });
+  }
+  const next = [...created, ...queue].slice(0, 150);
+  await writeImageQueue(next);
+  return {
+    ok: true,
+    module: "Image Generator Queue",
+    created_count: created.length,
+    queue: next,
+    safety: {
+      generated_image_url_is_placeholder: true,
+      approval_required: true
+    }
+  };
+}
+
+function bestPlanTimes() {
+  const analysis = buildAIPageAnalysis();
+  const buckets = (analysis.best_times || []).map((item) => item.name);
+  if (buckets.some((item) => /18:00-21:00/.test(item))) return ["18:30", "19:30", "20:15"];
+  if (buckets.some((item) => /12:00-18:00/.test(item))) return ["12:30", "15:30", "18:30"];
+  return ["11:00", "15:00", "19:00"];
+}
+
+async function createDailyContentPlan(payload = {}) {
+  const days = Math.max(1, Math.min(Number(payload.days || 1), 7));
+  const slotsPerDay = Math.max(1, Math.min(Number(payload.slots_per_day || 3), 5));
+  const ideas = readStoryIdeas();
+  const times = bestPlanTimes();
+  const now = new Date();
+  const items = [];
+  for (let day = 0; day < days; day += 1) {
+    for (let slot = 0; slot < slotsPerDay; slot += 1) {
+      const idea = ideas[(day * slotsPerDay + slot) % Math.max(ideas.length, 1)];
+      const date = new Date(now);
+      date.setDate(now.getDate() + day);
+      const [hour, minute] = (times[slot % times.length] || "19:00").split(":").map(Number);
+      date.setHours(hour, minute, 0, 0);
+      items.push({
+        id: crypto.randomUUID(),
+        scheduled_for: date.toISOString(),
+        local_time_hint: times[slot % times.length] || "19:00",
+        story_idea_id: idea?.id || "",
+        title: idea?.title || "Create a new original life story idea first",
+        topic: idea?.topic || "family",
+        emotion: idea?.emotion || "hope",
+        status: "needs_approval",
+        approval_required: true,
+        publish_allowed: false,
+        channel: "facebook_manual_after_approval",
+        created_at: new Date().toISOString()
+      });
+    }
+  }
+  const existing = readContentPlan();
+  const next = [...items, ...existing].slice(0, 100);
+  await writeContentPlan(next);
+  return {
+    ok: true,
+    module: "Scheduler",
+    created_count: items.length,
+    plan: next,
+    safety: {
+      autopublishing: false,
+      approval_required_before_publishing: true
+    }
+  };
+}
+
+function buildAutopilotV1Status() {
+  const page = buildAIPageAnalysis();
+  const competitor = buildCompetitorAutopilotAnalysis();
+  const research = readInternetResearchItems();
+  const ideas = readStoryIdeas();
+  const imageQueue = readImageQueue();
+  const plan = readContentPlan();
+  const fb = facebookConfigStatus();
+  return {
+    ok: true,
+    module: "AI Autopilot v1",
+    generated_at: new Date().toISOString(),
+    system: {
+      facebook_loading: readFacebookPosts().length > 0 ? "working" : (fb.configured ? "connected_empty" : "not_connected"),
+      project_brain: readProjectBrain().updated_at ? "active" : "needs_refresh",
+      telegram: telegramConfigStatus().configured ? "connected" : "not_connected",
+      autopublishing: "disabled",
+      approval_required: true
+    },
+    modules: {
+      ai_page_analyzer: { status: "ready", posts_analyzed: page.posts_analyzed },
+      internet_story_researcher: { status: "ready", saved_items: research.length },
+      competitor_analyzer: { status: "ready", competitors: competitor.competitors_count },
+      story_generator: { status: "ready", ideas: ideas.length },
+      image_generator_queue: { status: "ready", queued: imageQueue.length },
+      telegram_control: { status: telegramConfigStatus().configured ? "connected" : "needs_env" },
+      scheduler: { status: "ready", planned_items: plan.length }
+    },
+    top_signals: {
+      themes: page.best_themes.slice(0, 5),
+      emotions: page.best_emotions.slice(0, 5),
+      hooks: page.best_hooks.slice(0, 5),
+      formats: page.best_formats.slice(0, 5)
+    },
+    safety: {
+      no_auto_publishing: true,
+      no_competitor_copying: true,
+      no_tokens_in_logs: true
+    }
+  };
+}
+
+async function runAutopilotV1Plan() {
+  const analysis = buildAIPageAnalysis();
+  const research = await runInternetStoryResearch({});
+  const ideas = await generateStoryIdeas({ count: 3 });
+  const imageQueue = await enqueueImagePromptsForIdeas();
+  const plan = await createDailyContentPlan({ days: 1, slots_per_day: 3 });
+  const brain = await updateProjectBrain();
+  return {
+    ok: true,
+    module: "AI Autopilot v1 Orchestrator",
+    message: "Autopilot v1 prepared analysis, research, story ideas, image prompts and a manual approval content plan. Nothing was published.",
+    analysis,
+    research: { found_count: research.found_count, saved_new: research.saved_new },
+    ideas: { generated_count: ideas.generated_count, total: ideas.ideas.length },
+    image_queue: { created_count: imageQueue.created_count, total: imageQueue.queue.length },
+    content_plan: { created_count: plan.created_count, total: plan.plan.length },
+    project_brain_updated_at: brain.updated_at,
+    safety: {
+      publish_allowed: false,
+      approval_required: true
+    }
+  };
+}
+
+function renderAutopilotV1Dashboard() {
+  const status = buildAutopilotV1Status();
+  const ideas = readStoryIdeas().slice(0, 6);
+  const queue = readImageQueue().slice(0, 6);
+  const plan = readContentPlan().slice(0, 8);
+  const research = readInternetResearchItems().slice(0, 6);
+  const card = (title, value, detail) => `<article><span>${escapeHtml(title)}</span><strong>${escapeHtml(String(value))}</strong><p>${escapeHtml(detail)}</p></article>`;
+  const rows = (items, empty, mapper) => items.length
+    ? items.map(mapper).join("")
+    : `<tr><td colspan="4">${escapeHtml(empty)}</td></tr>`;
+  return layout("AI Autopilot v1", `${renderHeader()}
+    <main class="insights-page">
+      <section class="insights-hero">
+        <p class="kicker">AI Autopilot v1</p>
+        <h1>Editorial autopilot, approval first</h1>
+        <p>Central control layer for Page analysis, internet research, competitor signals, original story ideas, image prompts, Telegram commands and a daily content plan. Publishing stays disabled until you approve manually.</p>
+      </section>
+
+      <section class="insight-card">
+        <div class="section-title">
+          <div>
+            <h2>System State</h2>
+            <p class="helper-text">No tokens are printed. No Facebook publishing exists in this flow.</p>
+          </div>
+          <button class="primary-btn" data-autopilot-action="/api/autopilot/v1/run" type="button">Run Full v1 Plan</button>
+        </div>
+        <div class="autopilot-status-grid">
+          ${card("Facebook Loading", status.system.facebook_loading, `${readFacebookPosts().length} stored posts`)}
+          ${card("Project Brain", status.system.project_brain, readProjectBrain().updated_at || "Needs refresh")}
+          ${card("Telegram", status.system.telegram, "Commands: /status /load_posts /analyze /research /ideas /plan /schedule /help")}
+          ${card("Publishing", status.system.autopublishing, "Approval is required before any publishing step.")}
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Modules</h2>
+        <div class="button-row">
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/analyze" type="button">AI Page Analyzer</button>
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/research" type="button">Internet Research</button>
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/competitors" type="button">Competitor Analyzer</button>
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/ideas" type="button">Generate Ideas</button>
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/image-queue" type="button">Image Queue</button>
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/plan" type="button">Daily Plan</button>
+        </div>
+        <p id="autopilotV1Message" class="helper-text">Ready.</p>
+        <pre id="autopilotV1Output" class="debug-box"></pre>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Top Themes</h2>
+          <ol class="insight-list">${status.top_signals.themes.length ? status.top_signals.themes.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>score ${item.avg_score}, posts ${item.posts_count}</span></li>`).join("") : "<li><strong>No loaded post data yet</strong></li>"}</ol>
+        </article>
+        <article class="insight-card">
+          <h2>Top Hooks</h2>
+          <ol class="insight-list">${status.top_signals.hooks.length ? status.top_signals.hooks.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(shortText(item.sample_hook || "", 120))}</span></li>`).join("") : "<li><strong>No hooks yet</strong></li>"}</ol>
+        </article>
+      </section>
+
+      <section class="insight-card">
+        <h2>Story Ideas</h2>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Title</th><th>Topic</th><th>Emotion</th><th>Status</th></tr></thead>
+            <tbody>${rows(ideas, "No ideas yet. Click Generate Ideas.", (item) => `<tr><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.topic)}</td><td>${escapeHtml(item.emotion)}</td><td>${escapeHtml(item.status)}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Image Generator Queue</h2>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Story</th><th>Status</th><th>Prompt</th><th>Image URL</th></tr></thead>
+            <tbody>${rows(queue, "No queued image prompts yet.", (item) => `<tr><td>${escapeHtml(item.story_title)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(shortText(item.prompt, 180))}</td><td>${escapeHtml(item.generated_image_url || "placeholder")}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Daily Content Plan</h2>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Time</th><th>Title</th><th>Status</th><th>Publishing</th></tr></thead>
+            <tbody>${rows(plan, "No plan yet. Click Daily Plan.", (item) => `<tr><td>${escapeHtml(item.local_time_hint || item.scheduled_for)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.status)}</td><td>${item.publish_allowed ? "allowed" : "blocked until approval"}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Research Sources</h2>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Source</th><th>Title</th><th>Angle</th><th>Status</th></tr></thead>
+            <tbody>${rows(research, "No research saved yet.", (item) => `<tr><td>${escapeHtml(item.source)}</td><td><a href="${escapeHtml(item.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a></td><td>${escapeHtml(item.emotional_angle)}</td><td>${escapeHtml(item.status)}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script>
+      const message = document.getElementById("autopilotV1Message");
+      const output = document.getElementById("autopilotV1Output");
+      document.querySelectorAll("[data-autopilot-action]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          button.disabled = true;
+          message.textContent = "Working...";
+          output.textContent = "";
+          try {
+            const response = await fetch(button.dataset.autopilotAction, { method: "POST" });
+            const result = await response.json();
+            message.textContent = result.message || result.module || "Done.";
+            output.textContent = JSON.stringify(result, null, 2);
+          } catch (error) {
+            message.textContent = error.message;
+          } finally {
+            button.disabled = false;
+          }
+        });
+      });
+    </script>`);
 }
 
 function renderAutopilotDashboard() {
@@ -2180,6 +2908,47 @@ async function telegramStats(chatId) {
   return sendTelegramMessage(chatId, `📊 <b>Stats</b>\n\nStories: ${stories.length}\nDrafts: ${stats.draft || 0}\nReview: ${stats.review || 0}\nApproved: ${stats.approved || 0}\nScheduled: ${stats.scheduled || 0}\nPublished: ${stats.published || 0}\nRejected: ${stats.rejected || 0}\n\nFacebook posts loaded: ${posts.length}\nViews: ${stats.total_views || 0}\nClicks: ${stats.total_clicks || 0}`, mainTelegramKeyboard());
 }
 
+async function telegramLoadPosts(chatId) {
+  const result = await loadFacebookPosts();
+  const summary = result.summary || {};
+  return sendTelegramMessage(chatId, `<b>Load Page Posts</b>\n\n${escapeHtml(result.message || "Done.")}\n\nLoaded: ${summary.loaded_posts || summary.loaded || 0}\nSaved new: ${summary.saved_new_posts || 0}\nSkipped duplicates: ${summary.skipped_duplicates || 0}\nStored total: ${readFacebookPosts().length}\n\nNothing was published.`, mainTelegramKeyboard());
+}
+
+async function telegramAnalyze(chatId) {
+  const analysis = buildAIPageAnalysis();
+  await updateProjectBrain();
+  const themes = analysis.best_themes.slice(0, 3).map((item, index) => `${index + 1}. ${item.name} (${item.avg_score})`).join("\n") || "No data yet";
+  const hooks = analysis.best_hooks.slice(0, 3).map((item) => `- ${item.name}`).join("\n") || "No data yet";
+  return sendTelegramMessage(chatId, `<b>AI Page Analyzer</b>\n\nPosts analyzed: ${analysis.posts_analyzed}\n\nBest themes:\n${escapeHtml(themes)}\n\nBest hooks:\n${escapeHtml(hooks)}\n\nProject Brain updated.`, mainTelegramKeyboard());
+}
+
+async function telegramResearch(chatId) {
+  const result = await runInternetStoryResearch({});
+  const items = result.items.slice(0, 3).map((item) => `- ${item.title} (${item.emotional_angle})`).join("\n") || "No research items";
+  return sendTelegramMessage(chatId, `<b>Internet Story Researcher</b>\n\nMode: ${escapeHtml(result.source_status)}\nFound: ${result.found_count}\nSaved new: ${result.saved_new}\n\n${escapeHtml(items)}\n\nResearch is pattern-only. No copying.`, mainTelegramKeyboard());
+}
+
+async function telegramIdeas(chatId) {
+  const result = await generateStoryIdeas({ count: 3 });
+  const ideas = result.new_ideas.map((idea, index) => `${index + 1}. ${idea.title}\nEmotion: ${idea.emotion}`).join("\n\n");
+  return sendTelegramMessage(chatId, `<b>Story Generator</b>\n\nGenerated: ${result.generated_count}\n\n${escapeHtml(ideas)}\n\nStatus: needs approval. Nothing was published.`, mainTelegramKeyboard());
+}
+
+async function telegramPlan(chatId) {
+  if (!readStoryIdeas().length) await generateStoryIdeas({ count: 3 });
+  await enqueueImagePromptsForIdeas();
+  const result = await createDailyContentPlan({ days: 1, slots_per_day: 3 });
+  const plan = result.plan.slice(0, 3).map((item) => `- ${item.local_time_hint}: ${item.title}`).join("\n");
+  return sendTelegramMessage(chatId, `<b>Daily Content Plan</b>\n\nCreated: ${result.created_count}\n\n${escapeHtml(plan)}\n\nEvery item is blocked until approval.`, mainTelegramKeyboard());
+}
+
+async function telegramSchedule(chatId) {
+  const plan = readContentPlan().slice(0, 8);
+  if (!plan.length) return sendTelegramMessage(chatId, "Schedule is empty. Use /plan first.", mainTelegramKeyboard());
+  const text = plan.map((item) => `- ${item.local_time_hint || item.scheduled_for}: ${item.title}\nStatus: ${item.status}; publishing: ${item.publish_allowed ? "allowed" : "blocked until approval"}`).join("\n\n");
+  return sendTelegramMessage(chatId, `<b>Approval Schedule</b>\n\n${escapeHtml(text)}\n\nNo automatic publishing is enabled.`, mainTelegramKeyboard());
+}
+
 async function telegramDrafts(chatId) {
   const stories = readStories()
     .filter((story) => ["draft", "review", "approved"].includes(normalizeStoryStatus(story.status)))
@@ -2215,6 +2984,32 @@ async function telegramSettings(chatId) {
 
 async function telegramHelp(chatId) {
   return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status — system connection status\n/stats — stories and traffic stats\n/drafts — drafts and stories waiting for review\n/approve — show approval list\n/approve STORY_ID — approve a story locally\n/reject — show rejection list\n/reject STORY_ID — reject a story locally\n/help — command list\n\nButtons:\n✅ Approve — marks story as approved\n✏ Edit — returns story to review\n❌ Reject — marks story as rejected\n\nPublishing is never automatic.`, mainTelegramKeyboard());
+}
+
+async function telegramHelp(chatId) {
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research - run Internet Story Researcher\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/drafts - drafts and stories waiting for review\n/approve STORY_ID - approve a story locally\n/reject STORY_ID - reject a story locally\n/help - command list\n\nButtons:\nApprove - marks story as approved\nEdit - returns story to review\nReject - marks story as rejected\n\nPublishing is never automatic. Competitor and web research are pattern-only; no copying.`, mainTelegramKeyboard());
+}
+
+function telegramCommandList() {
+  return [
+    { command: "status", description: "System status" },
+    { command: "load_posts", description: "Load Facebook Page posts" },
+    { command: "analyze", description: "Analyze stored posts" },
+    { command: "research", description: "Research story trends" },
+    { command: "ideas", description: "Generate story ideas" },
+    { command: "plan", description: "Create daily plan" },
+    { command: "schedule", description: "Show approval schedule" },
+    { command: "stats", description: "Traffic stats" },
+    { command: "drafts", description: "Drafts and review queue" },
+    { command: "approve", description: "Approve by story id" },
+    { command: "reject", description: "Reject by story id" },
+    { command: "help", description: "Command list" }
+  ];
+}
+
+async function registerTelegramCommands() {
+  if (!telegramConfigStatus().configured) return null;
+  return telegramApi("setMyCommands", { commands: telegramCommandList() });
 }
 
 function setStoryStatusFromTelegram(id, action) {
@@ -2267,6 +3062,12 @@ async function handleTelegramMessage(message) {
   if (text === "/start") return telegramStart(chatId);
   if (text === "/help") return telegramHelp(chatId);
   if (text === "/status") return telegramStatus(chatId);
+  if (text === "/load_posts") return telegramLoadPosts(chatId);
+  if (text === "/analyze") return telegramAnalyze(chatId);
+  if (text === "/research") return telegramResearch(chatId);
+  if (text === "/ideas") return telegramIdeas(chatId);
+  if (text === "/plan") return telegramPlan(chatId);
+  if (text === "/schedule") return telegramSchedule(chatId);
   if (text === "/stats") return telegramStats(chatId);
   if (text === "/drafts") return telegramDrafts(chatId);
   if (text === "/approve" || text.startsWith("/approve ")) return telegramApproveCommand(chatId, text.split(/\s+/)[1]);
@@ -2331,6 +3132,7 @@ function startTelegramControlCenter() {
     return;
   }
   console.log("Telegram Control Center: enabled.");
+  registerTelegramCommands().catch((error) => console.warn(`Telegram setMyCommands failed: ${error.message}`));
   setInterval(pollTelegram, 2500);
   setInterval(sendDailyTelegramReports, 60 * 1000);
   sendTelegramMessage(process.env.CHAT_ID, "🤖 Telegram Control Center запущен.\n\nПубликация отключена. Доступны уведомления, просмотр, одобрение и отклонение.", mainTelegramKeyboard());
@@ -4252,6 +5054,48 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, securityAudit());
   }
 
+  if (pathname === "/api/autopilot/v1/status" && req.method === "GET") {
+    return sendJson(res, 200, buildAutopilotV1Status());
+  }
+
+  if (pathname === "/api/autopilot/v1/analyze" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, buildAIPageAnalysis());
+  }
+
+  if (pathname === "/api/autopilot/v1/research" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await runInternetStoryResearch(req.method === "POST" ? await parseBody(req) : {}));
+  }
+
+  if (pathname === "/api/autopilot/v1/competitors" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, buildCompetitorAutopilotAnalysis());
+  }
+
+  if (pathname === "/api/autopilot/v1/ideas" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await generateStoryIdeas(req.method === "POST" ? await parseBody(req) : {}));
+  }
+
+  if (pathname === "/api/autopilot/v1/image-queue" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await enqueueImagePromptsForIdeas());
+  }
+
+  if (pathname === "/api/autopilot/v1/plan" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await createDailyContentPlan(req.method === "POST" ? await parseBody(req) : {}));
+  }
+
+  if (pathname === "/api/autopilot/v1/schedule" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, {
+      ok: true,
+      module: "Scheduler",
+      plan: readContentPlan(),
+      message: "Schedule is approval-only. Nothing is published automatically.",
+      safety: { autopublishing: false, approval_required: true }
+    });
+  }
+
+  if (pathname === "/api/autopilot/v1/run" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await runAutopilotV1Plan());
+  }
+
   if (pathname === "/api/autopilot/refresh-brain" && req.method === "POST") {
     return sendJson(res, 200, await updateProjectBrain());
   }
@@ -4334,6 +5178,7 @@ async function router(req, res) {
     if (pathname === "/audience-insights") return send(res, 200, renderAudienceInsights());
     if (pathname === "/telegram-center") return send(res, 200, renderTelegramCenter());
     if (pathname === "/ai-autopilot") return send(res, 200, renderAutopilotDashboard());
+    if (pathname === "/ai-autopilot-v1") return send(res, 200, renderAutopilotV1Dashboard());
     if (pathname === "/production-status") return send(res, 200, renderProductionStatus());
 
     if (pathname.startsWith("/s/")) {
