@@ -2982,7 +2982,7 @@ async function telegramSettings(chatId) {
   return sendTelegramMessage(chatId, `⚙ <b>Настройки</b>\n\nFacebook API: ${fb.configured ? "✅" : "⏳"}\nTelegram: ${tg.configured ? "✅" : "⏳"}\nPostgreSQL: ${pgPool ? "✅" : "JSON backup mode"}\n\nСекреты хранятся только локально в .env или environment variables.`, mainTelegramKeyboard());
 }
 
-async function telegramHelp(chatId) {
+async function legacyTelegramHelp(chatId) {
   return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status — system connection status\n/stats — stories and traffic stats\n/drafts — drafts and stories waiting for review\n/approve — show approval list\n/approve STORY_ID — approve a story locally\n/reject — show rejection list\n/reject STORY_ID — reject a story locally\n/help — command list\n\nButtons:\n✅ Approve — marks story as approved\n✏ Edit — returns story to review\n❌ Reject — marks story as rejected\n\nPublishing is never automatic.`, mainTelegramKeyboard());
 }
 
