@@ -12,6 +12,7 @@ const PROJECT_BRAIN_FILE = path.join(ROOT, "data", "project_brain.json");
 const FACEBOOK_CONNECTION_FILE = path.join(ROOT, "data", "facebook_connection.local.json");
 const INTERNET_RESEARCH_FILE = path.join(ROOT, "data", "internet_research.json");
 const RESEARCH_STORIES_FILE = path.join(ROOT, "data", "research_stories.json");
+const GENERATED_STORIES_FILE = path.join(ROOT, "data", "generated_stories.json");
 const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
 const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
@@ -264,6 +265,31 @@ async function writeStoryIdeas(items) {
   return writeAutopilotV1Collection("storyIdeas", STORY_IDEAS_FILE, "story_ideas", items);
 }
 
+function readGeneratedStories() {
+  return readAutopilotV1Collection("generatedStories", "generated_stories");
+}
+
+async function writeGeneratedStories(items) {
+  storageCache.generatedStories = items;
+  writeJsonBackup(GENERATED_STORIES_FILE, items);
+  await persistGeneratedStories(items);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object"
+    ? brain.internet_research
+    : {};
+  brain.internet_research = {
+    ...currentResearch,
+    autopilot_v1: {
+      ...(currentResearch.autopilot_v1 || {}),
+      generated_stories: items.slice(0, 100),
+      updated_at: new Date().toISOString()
+    }
+  };
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return items;
+}
+
 function readImageQueue() {
   return readAutopilotV1Collection("imageQueue", "image_queue");
 }
@@ -309,6 +335,7 @@ const storageCache = {
   competitors: readJsonArray(COMPETITORS_FILE),
   internetResearchItems: readJsonArray(INTERNET_RESEARCH_FILE),
   researchStories: readJsonArray(RESEARCH_STORIES_FILE),
+  generatedStories: readJsonArray(GENERATED_STORIES_FILE),
   storyIdeas: readJsonArray(STORY_IDEAS_FILE),
   imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
@@ -359,6 +386,7 @@ async function initializeStorage() {
     });
     await pgPool.query("select 1");
     await ensureResearchStoriesTable();
+    await ensureGeneratedStoriesTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
     storageCache.facebookPosts = (await pgPool.query("select * from facebook_posts order by total_score desc, published_at desc")).rows;
@@ -370,6 +398,11 @@ async function initializeStorage() {
     storageCache.researchStories = (await pgPool.query("select * from research_stories order by viral_score desc, similarity_score desc, created_at desc limit 500")).rows.map((row) => ({
       ...row,
       keywords: Array.isArray(row.keywords) ? row.keywords : []
+    }));
+    storageCache.generatedStories = (await pgPool.query("select * from generated_stories order by created_at desc limit 200")).rows.map((row) => ({
+      ...row,
+      research_signals: Array.isArray(row.research_signals) ? row.research_signals : [],
+      facebook_signals: Array.isArray(row.facebook_signals) ? row.facebook_signals : []
     }));
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
@@ -435,6 +468,35 @@ async function ensureResearchStoriesTable() {
     create index if not exists research_stories_viral_score_idx on research_stories (viral_score desc);
     create index if not exists research_stories_similarity_score_idx on research_stories (similarity_score desc);
     create index if not exists research_stories_category_idx on research_stories (category);
+  `);
+}
+
+async function ensureGeneratedStoriesTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists generated_stories (
+      id text primary key,
+      title text not null,
+      category text,
+      emotion text,
+      length text,
+      hook text,
+      full_story text,
+      moral text,
+      image_prompt text,
+      viral_prediction_score integer not null default 0,
+      why_it_should_work text,
+      research_signals jsonb not null default '[]'::jsonb,
+      facebook_signals jsonb not null default '[]'::jsonb,
+      status text not null default 'needs_approval',
+      approval_required boolean not null default true,
+      publish_allowed boolean not null default false,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+    create index if not exists generated_stories_category_idx on generated_stories (category);
+    create index if not exists generated_stories_score_idx on generated_stories (viral_prediction_score desc);
+    create index if not exists generated_stories_created_at_idx on generated_stories (created_at desc);
   `);
 }
 
@@ -635,6 +697,61 @@ async function persistResearchStories(stories) {
     }
   } catch (error) {
     console.warn(`PostgreSQL research_stories persist failed: ${error.message}`);
+  }
+}
+
+async function persistGeneratedStories(stories) {
+  if (!pgPool) return;
+  try {
+    await ensureGeneratedStoriesTable();
+    for (const story of stories) {
+      await pgPool.query(
+        `insert into generated_stories (
+          id, title, category, emotion, length, hook, full_story, moral, image_prompt,
+          viral_prediction_score, why_it_should_work, research_signals, facebook_signals,
+          status, approval_required, publish_allowed, created_at, updated_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        on conflict (id) do update set
+          title = excluded.title,
+          category = excluded.category,
+          emotion = excluded.emotion,
+          length = excluded.length,
+          hook = excluded.hook,
+          full_story = excluded.full_story,
+          moral = excluded.moral,
+          image_prompt = excluded.image_prompt,
+          viral_prediction_score = excluded.viral_prediction_score,
+          why_it_should_work = excluded.why_it_should_work,
+          research_signals = excluded.research_signals,
+          facebook_signals = excluded.facebook_signals,
+          status = excluded.status,
+          approval_required = excluded.approval_required,
+          publish_allowed = excluded.publish_allowed,
+          updated_at = excluded.updated_at`,
+        [
+          story.id || crypto.randomUUID(),
+          story.title || "",
+          story.category || "",
+          story.emotion || "",
+          story.length || "medium",
+          story.hook || "",
+          story.full_story || "",
+          story.moral || "",
+          story.image_prompt || "",
+          Number(story.viral_prediction_score || 0),
+          story.why_it_should_work || "",
+          JSON.stringify(Array.isArray(story.research_signals) ? story.research_signals : []),
+          JSON.stringify(Array.isArray(story.facebook_signals) ? story.facebook_signals : []),
+          story.status || "needs_approval",
+          story.approval_required !== false,
+          Boolean(story.publish_allowed),
+          pgColumnDate(story.created_at),
+          pgColumnDate(story.updated_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL generated_stories persist failed: ${error.message}`);
   }
 }
 
@@ -2946,6 +3063,248 @@ async function generateStoryIdeas(payload = {}) {
   };
 }
 
+function normalizeGeneratedLength(value = "") {
+  return ["short", "medium", "long"].includes(String(value).toLowerCase()) ? String(value).toLowerCase() : "medium";
+}
+
+function storyLengthPlan(length) {
+  const plans = {
+    short: { paragraphs: 6, label: "short", target: "700-1000 characters" },
+    medium: { paragraphs: 9, label: "medium", target: "1200-1800 characters" },
+    long: { paragraphs: 12, label: "long", target: "2200-3200 characters" }
+  };
+  return plans[normalizeGeneratedLength(length)] || plans.medium;
+}
+
+function storyCategoryProfile(category, seed) {
+  const normalized = normalizeResearchCategory(category);
+  const profiles = {
+    betrayal: {
+      title_objects: ["a grocery receipt", "a second phone", "a hotel key card", "a bank transfer"],
+      settings: ["a small apartment kitchen", "a quiet family dinner", "a rainy bus stop", "a modest birthday party"],
+      conflicts: ["a wife thinks her husband has betrayed her", "a daughter discovers her father's double life", "a sister learns why the family savings disappeared"],
+      turns: ["the secret was not an affair, but a sacrifice made to protect someone sick", "the money went to a child nobody in the family knew about", "the person who looked guilty had been covering for someone weaker"],
+      morals: ["The first truth can wound, but the whole truth can change the heart."]
+    },
+    "mother in law": {
+      title_objects: ["an old apron pocket", "a locked drawer", "a soup recipe", "a folded hospital bill"],
+      settings: ["a cramped kitchen", "a Sunday lunch", "a village courtyard", "a hallway outside the apartment"],
+      conflicts: ["a daughter-in-law believes her mother-in-law is trying to ruin the marriage", "two women fight over the son's loyalty", "a family meal turns into a quiet humiliation"],
+      turns: ["the older woman was hiding a debt she took on for the young couple", "the harsh words came from fear, not hatred", "the daughter-in-law finds proof that the mother-in-law defended her for years"],
+      morals: ["Sometimes the hardest person in the family is also the one who carried the most pain."]
+    },
+    inheritance: {
+      title_objects: ["a will", "a house key", "a dusty envelope", "a notebook with names"],
+      settings: ["an old family house", "a notary office", "a cold stairwell", "a kitchen after the funeral"],
+      conflicts: ["siblings argue over a house before the funeral flowers fade", "a daughter is cut out of the will", "a son returns only when money is mentioned"],
+      turns: ["the smallest inheritance contains the only thing that matters", "the excluded child had already received the greatest sacrifice", "the house was left to the person who had quietly cared for everyone"],
+      morals: ["Inheritance reveals not only what people own, but what they value."]
+    },
+    love: {
+      title_objects: ["a letter", "a train ticket", "a photo", "a wedding ring"],
+      settings: ["a station platform", "a hospital corridor", "a quiet cafe", "a bench near an old house"],
+      conflicts: ["two people meet after decades of silence", "a woman learns why her first love vanished", "a husband and wife almost separate after one careless sentence"],
+      turns: ["the silence was forced by a family promise", "the lost letter finally reaches the person it was meant for", "love returns as forgiveness, not as a fairy tale"],
+      morals: ["Real love is not always loud; sometimes it waits in silence until truth is safe."]
+    },
+    revenge: {
+      title_objects: ["a recording", "a receipt", "a court letter", "a photograph"],
+      settings: ["a family celebration", "a workplace office", "a shared apartment", "a courthouse hallway"],
+      conflicts: ["a quiet woman is humiliated by relatives", "a brother takes what was not his", "a neighbor spreads a lie that ruins a family"],
+      turns: ["the revenge is not cruelty, but calm proof of the truth", "the person everyone mocked becomes the one who saves the house", "justice arrives through dignity, not shouting"],
+      morals: ["The strongest answer is sometimes a quiet truth that cannot be denied."]
+    }
+  };
+  const profile = profiles[normalized] || {
+    title_objects: ["an old envelope", "a kitchen note", "a forgotten key", "a family photograph"],
+    settings: ["a modest kitchen", "a family dinner", "a hospital corridor", "an old house"],
+    conflicts: ["a family argument reveals a secret", "an adult child learns why a parent stayed silent", "a small decision divides the family"],
+    turns: ["the person who seemed guilty had been protecting someone else", "the secret changes how everyone remembers the past", "forgiveness comes only after the hardest truth is spoken"],
+    morals: ["Family truth can arrive late, but it can still heal what silence broke."]
+  };
+  return {
+    category: normalized,
+    object: pick(profile.title_objects, `${seed}:object`),
+    setting: pick(profile.settings, `${seed}:setting`),
+    conflict: pick(profile.conflicts, `${seed}:conflict`),
+    turn: pick(profile.turns, `${seed}:turn`),
+    moral: pick(profile.morals, `${seed}:moral`)
+  };
+}
+
+function topResearchSignalsForStory(category, limit = 8) {
+  const normalized = normalizeResearchCategory(category);
+  const all = readResearchStories()
+    .map((item) => ({
+      ...item,
+      combined_score: Number(item.viral_score || 0) + Number(item.similarity_score || 0)
+    }))
+    .sort((a, b) => b.combined_score - a.combined_score);
+  const byCategory = all.filter((item) => String(item.category || "").toLowerCase() === normalized);
+  const liveTavily = byCategory.filter((item) => item.source_status === "live_search" && /tavily/i.test(item.provider || ""));
+  const liveAny = byCategory.filter((item) => item.source_status === "live_search");
+  const selected = (liveTavily.length ? liveTavily : liveAny.length ? liveAny : byCategory.length ? byCategory : all).slice(0, limit);
+  return selected.map((item) => ({
+    source: item.source || sourceFromUrl(item.url || item.source_url || ""),
+    url: item.url || item.source_url || "",
+    emotion: item.emotion || "",
+    keywords: Array.isArray(item.keywords) ? item.keywords.slice(0, 8) : [],
+    viral_score: Number(item.viral_score || 0),
+    similarity_score: Number(item.similarity_score || 0),
+    source_status: item.source_status || "",
+    provider: item.provider || ""
+  }));
+}
+
+function bestFacebookPostSignals(limit = 5) {
+  return readFacebookPosts()
+    .map((post) => ({
+      id: post.facebook_post_id || post.id || "",
+      permalink_url: post.permalink_url || "",
+      total_score: Number(post.total_score || 0),
+      likes_count: Number(post.likes_count || 0),
+      comments_count: Number(post.comments_count || 0),
+      shares_count: Number(post.shares_count || 0),
+      link_clicks_count: Number(post.link_clicks_count || 0),
+      text_length: String(post.message || "").length,
+      hook_style: shortText(String(post.message || "").split(/\n+/).filter(Boolean)[0] || "", 120)
+    }))
+    .sort((a, b) => b.total_score - a.total_score)
+    .slice(0, limit);
+}
+
+function researchKeywordBlend(signals) {
+  const words = [];
+  for (const signal of signals) {
+    for (const keyword of signal.keywords || []) {
+      if (keyword && !words.includes(keyword)) words.push(keyword);
+    }
+  }
+  return words.slice(0, 10);
+}
+
+function buildGeneratedStoryText({ profile, emotion, length, seed, keywords }) {
+  const plan = storyLengthPlan(length);
+  const hero = pick(["Mara", "Helen", "Nina", "Galina", "Elena", "Tamara"], `${seed}:hero`);
+  const relation = pick(["her adult son", "her husband", "her daughter-in-law", "her younger sister", "her late mother's neighbor"], `${seed}:relation`);
+  const witness = pick(["the kettle was still boiling", "nobody touched the tea", "the phone kept buzzing on the table", "the window was open to the evening rain"], `${seed}:witness`);
+  const title = `${hero} found ${profile.object}, and the whole family suddenly went silent`;
+  const hook = `${hero} thought the argument would end like all the others. Then she found ${profile.object} in ${profile.setting}, and even ${relation} could not look her in the eye.`;
+  const paragraphs = [
+    hook,
+    `For years, ${hero} had been the person who smoothed every quarrel over. She made tea, changed the subject, and told herself that family peace was worth a little silence.`,
+    `But that evening was different. The room felt smaller than usual, and ${witness}. What began as ${profile.conflict} turned into the kind of silence that makes people afraid to breathe.`,
+    `${hero} picked up ${profile.object} by accident. At first it looked ordinary. Then she saw one detail that did not belong, and her hands went cold.`,
+    `"Tell me this is not true," she said. No one answered. That was when she understood: the secret was not new. It had only been waiting for someone brave enough to see it.`,
+    `The first explanation hurt her pride. The second hurt her heart. Everyone had a version of the truth, but every version left one person looking like a villain.`,
+    `Then ${relation} finally spoke. The words came slowly, as if each one had been locked away for years. ${profile.turn}.`,
+    `${hero} sat down because standing suddenly felt impossible. All the anger she had carried changed shape. It did not disappear, but it stopped being simple.`,
+    `By midnight, nobody had won the argument. Still, something important had shifted: the family was no longer fighting over the surface of the story.`,
+    `In the morning, ${hero} put ${profile.object} back on the table and asked one question, softer this time: "What do we do with the truth now?"`,
+    `No one had an easy answer. But for the first time in years, they stayed in the same room long enough to look for one.`,
+    profile.moral
+  ];
+  const selected = paragraphs.slice(0, plan.paragraphs);
+  if (!selected.includes(profile.moral)) selected[selected.length - 1] = profile.moral;
+  const keywordLine = keywords.length ? `\n\nResearch signal themes used only as inspiration: ${keywords.slice(0, 5).join(", ")}.` : "";
+  return {
+    title,
+    hook,
+    full_story: selected.join("\n\n"),
+    moral: profile.moral,
+    target_length: plan.target,
+    keyword_note: keywordLine,
+    emotion
+  };
+}
+
+function imagePromptForGeneratedStory(story, profile) {
+  return [
+    "Photorealistic everyday documentary photo, not cinematic fantasy.",
+    `Scene: ${profile.setting}, emotional ${story.emotion} moment, ordinary family conflict.`,
+    "Characters: realistic people aged 45-70, natural faces, modest clothes, believable home interior.",
+    `Key object: ${profile.object}.`,
+    "Mood: tense but human, warm practical light, 35mm lens, no text, no watermark, no cartoon, no plastic AI skin."
+  ].join(" ");
+}
+
+function viralPredictionScore(researchSignals, facebookSignals, length) {
+  const researchBase = researchSignals.length
+    ? Math.round(researchSignals.reduce((sum, item) => sum + ((Number(item.viral_score || 0) + Number(item.similarity_score || 0)) / 2), 0) / researchSignals.length)
+    : 45;
+  const fbBase = facebookSignals.length
+    ? Math.min(25, Math.round(facebookSignals.reduce((sum, item) => sum + Number(item.total_score || 0), 0) / facebookSignals.length / 10))
+    : 8;
+  const lengthBoost = length === "medium" ? 7 : length === "long" ? 4 : 3;
+  return Math.max(1, Math.min(100, researchBase + fbBase + lengthBoost));
+}
+
+async function generateOriginalStoryV2(payload = {}) {
+  const category = normalizeResearchCategory(payload.category || "betrayal");
+  const length = normalizeGeneratedLength(payload.length || "medium");
+  let researchSignals = topResearchSignalsForStory(category, 8);
+  if (!researchSignals.some((item) => item.source_status === "live_search")) {
+    await runInternetStoryResearch({ category, limit: 20 });
+    researchSignals = topResearchSignalsForStory(category, 8);
+  }
+  const facebookSignals = bestFacebookPostSignals(5);
+  const topEmotion = researchSignals.find((item) => item.emotion)?.emotion || "";
+  const emotion = String(payload.emotion || topEmotion || "anxiety and hope").trim();
+  const seed = `${category}:${emotion}:${length}:${Date.now()}:${crypto.randomUUID()}`;
+  const profile = storyCategoryProfile(category, seed);
+  const keywords = researchKeywordBlend(researchSignals);
+  const draft = buildGeneratedStoryText({ profile, emotion, length, seed, keywords });
+  const score = viralPredictionScore(researchSignals, facebookSignals, length);
+  const story = {
+    id: crypto.randomUUID(),
+    title: draft.title,
+    category,
+    emotion,
+    length,
+    hook: draft.hook,
+    full_story: draft.full_story,
+    moral: draft.moral,
+    image_prompt: imagePromptForGeneratedStory(draft, profile),
+    viral_prediction_score: score,
+    why_it_should_work: [
+      `Uses ${researchSignals.filter((item) => item.source_status === "live_search").length} live research signals from high-scoring public results.`,
+      facebookSignals.length ? `Calibrated against ${facebookSignals.length} top Facebook posts from your loaded Page data.` : "Facebook Page data is not loaded enough yet, so scoring leans more on research signals.",
+      `Built around ${category}, ${emotion}, a concrete object, family tension and a late reveal.`,
+      "Original draft: new characters, new setting, new ending, no copied text."
+    ].join(" "),
+    research_signals: researchSignals,
+    facebook_signals: facebookSignals,
+    status: "needs_approval",
+    approval_required: true,
+    publish_allowed: false,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+  const saved = [story, ...readGeneratedStories()].slice(0, 200);
+  await writeGeneratedStories(saved);
+  return {
+    ok: true,
+    module: "Story Generator v2",
+    story,
+    preview: {
+      title: story.title,
+      hook: story.hook,
+      excerpt: shortText(story.full_story, 900),
+      emotion: story.emotion,
+      viral_prediction_score: story.viral_prediction_score,
+      why_it_should_work: story.why_it_should_work
+    },
+    saved: true,
+    generated_stories_count: saved.length,
+    safety: {
+      copied_research_text: false,
+      source_links_only_for_inspiration: true,
+      approval_required: true,
+      publish_allowed: false
+    }
+  };
+}
+
 function imagePromptForIdea(idea) {
   return [
     "Photorealistic everyday family photo for a life story.",
@@ -3113,6 +3472,7 @@ async function runAutopilotV1Plan() {
 function renderAutopilotV1Dashboard() {
   const status = buildAutopilotV1Status();
   const ideas = readStoryIdeas().slice(0, 6);
+  const generatedStories = readGeneratedStories().slice(0, 6);
   const queue = readImageQueue().slice(0, 6);
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
@@ -3157,6 +3517,7 @@ function renderAutopilotV1Dashboard() {
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/analyze" type="button">AI Page Analyzer</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/research" type="button">Internet Research</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/competitors" type="button">Competitor Analyzer</button>
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/generate-story" type="button">Generate Story v2</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/ideas" type="button">Generate Ideas</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/image-queue" type="button">Image Queue</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/plan" type="button">Daily Plan</button>
@@ -3174,6 +3535,16 @@ function renderAutopilotV1Dashboard() {
           <h2>Top Hooks</h2>
           <ol class="insight-list">${status.top_signals.hooks.length ? status.top_signals.hooks.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(shortText(item.sample_hook || "", 120))}</span></li>`).join("") : "<li><strong>No hooks yet</strong></li>"}</ol>
         </article>
+      </section>
+
+      <section class="insight-card">
+        <h2>Generated Stories v2</h2>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Title</th><th>Category</th><th>Emotion</th><th>Score</th></tr></thead>
+            <tbody>${rows(generatedStories, "No generated stories yet. Click Generate Story v2.", (item) => `<tr><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.emotion)}</td><td>${Number(item.viral_prediction_score || 0)} / ${escapeHtml(item.status || "needs_approval")}</td></tr>`)}</tbody>
+          </table>
+        </div>
       </section>
 
       <section class="insight-card">
@@ -3628,6 +3999,31 @@ async function telegramIdeas(chatId) {
   return sendTelegramMessage(chatId, `<b>Story Generator</b>\n\nGenerated: ${result.generated_count}\n\n${escapeHtml(ideas)}\n\nStatus: needs approval. Nothing was published.`, mainTelegramKeyboard());
 }
 
+async function telegramGenerateStory(chatId, category = "") {
+  const result = await generateOriginalStoryV2({ category: category || "betrayal", length: "medium" });
+  const story = result.story;
+  const text = [
+    "<b>Story Generator v2</b>",
+    "",
+    `Category: ${escapeHtml(story.category)}`,
+    `Emotion: ${escapeHtml(story.emotion)}`,
+    `Score: ${story.viral_prediction_score}/100`,
+    `Status: ${escapeHtml(story.status)}`,
+    "",
+    `<b>${escapeHtml(story.title)}</b>`,
+    "",
+    escapeHtml(shortText(story.hook, 500)),
+    "",
+    escapeHtml(shortText(story.full_story, 1200)),
+    "",
+    `<b>Why it should work</b>`,
+    escapeHtml(shortText(story.why_it_should_work, 700)),
+    "",
+    "Approval required. Nothing was published."
+  ].join("\n");
+  return sendTelegramMessage(chatId, text, mainTelegramKeyboard());
+}
+
 async function telegramPlan(chatId) {
   if (!readStoryIdeas().length) await generateStoryIdeas({ count: 3 });
   await enqueueImagePromptsForIdeas();
@@ -3681,7 +4077,7 @@ async function legacyTelegramHelp(chatId) {
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research - run Internet Research AI v2\n/research betrayal - research betrayal stories\n/research love - research love stories\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/drafts - drafts and stories waiting for review\n/approve STORY_ID - approve a story locally\n/reject STORY_ID - reject a story locally\n/help - command list\n\nButtons:\nApprove - marks story as approved\nEdit - returns story to review\nReject - marks story as rejected\n\nPublishing is never automatic. Research stores summaries and links only; no copying.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research - run Internet Research AI v2\n/research betrayal - research betrayal stories\n/generate betrayal - generate original story draft\n/generate love - generate love story draft\n/generate inheritance - generate inheritance story draft\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/drafts - drafts and stories waiting for review\n/approve STORY_ID - approve a story locally\n/reject STORY_ID - reject a story locally\n/help - command list\n\nButtons:\nApprove - marks story as approved\nEdit - returns story to review\nReject - marks story as rejected\n\nPublishing is never automatic. Research stores summaries and links only; no copying.`, mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
@@ -3690,6 +4086,7 @@ function telegramCommandList() {
     { command: "load_posts", description: "Load Facebook Page posts" },
     { command: "analyze", description: "Analyze stored posts" },
     { command: "research", description: "Research story trends" },
+    { command: "generate", description: "Generate original story draft" },
     { command: "ideas", description: "Generate story ideas" },
     { command: "plan", description: "Create daily plan" },
     { command: "schedule", description: "Show approval schedule" },
@@ -3779,6 +4176,7 @@ async function handleTelegramMessage(message) {
   if (command === "/load_posts") return telegramLoadPosts(chatId);
   if (command === "/analyze") return telegramAnalyze(chatId);
   if (command === "/research") return telegramResearch(chatId, args.join(" "));
+  if (command === "/generate") return telegramGenerateStory(chatId, args.join(" "));
   if (command === "/ideas") return telegramIdeas(chatId);
   if (command === "/plan") return telegramPlan(chatId);
   if (command === "/schedule") return telegramSchedule(chatId);
@@ -5824,6 +6222,10 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/autopilot/v1/ideas" && ["GET", "POST"].includes(req.method)) {
     return sendJson(res, 200, await generateStoryIdeas(req.method === "POST" ? await parseBody(req) : {}));
+  }
+
+  if (pathname === "/api/autopilot/v1/generate-story" && req.method === "POST") {
+    return sendJson(res, 200, await generateOriginalStoryV2(await parseBody(req)));
   }
 
   if (pathname === "/api/autopilot/v1/image-queue" && ["GET", "POST"].includes(req.method)) {
