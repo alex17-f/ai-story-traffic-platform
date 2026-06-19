@@ -11,6 +11,7 @@ const COMPETITORS_FILE = path.join(ROOT, "data", "competitors.json");
 const PROJECT_BRAIN_FILE = path.join(ROOT, "data", "project_brain.json");
 const FACEBOOK_CONNECTION_FILE = path.join(ROOT, "data", "facebook_connection.local.json");
 const INTERNET_RESEARCH_FILE = path.join(ROOT, "data", "internet_research.json");
+const RESEARCH_STORIES_FILE = path.join(ROOT, "data", "research_stories.json");
 const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
 const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
@@ -114,6 +115,28 @@ const writerThemes = [
   "отношения родителей и детей"
 ];
 
+const researchCategories = [
+  "betrayal",
+  "mother in law",
+  "inheritance",
+  "love",
+  "war",
+  "poverty to wealth",
+  "unexpected ending",
+  "family conflict",
+  "kindness",
+  "revenge"
+];
+
+const researchSourceProfiles = [
+  { source: "Reddit", query: "site:reddit.com/r/relationships OR site:reddit.com/r/TrueOffMyChest" },
+  { source: "News", query: "site:people.com OR site:bbc.com OR site:apnews.com" },
+  { source: "Public story websites", query: "site:lovewhatmatters.com OR site:rd.com/list/true-stories" },
+  { source: "Forums", query: "site:mumsnet.com OR site:city-data.com/forum" },
+  { source: "Facebook public pages", query: "site:facebook.com story public post" },
+  { source: "Quora", query: "site:quora.com" }
+];
+
 function readStories() {
   return storageCache.stories;
 }
@@ -182,6 +205,33 @@ async function writeInternetResearchItems(items) {
   return writeAutopilotV1Collection("internetResearchItems", INTERNET_RESEARCH_FILE, "internet_research_items", items);
 }
 
+function readResearchStories() {
+  const brainItems = autopilotV1BrainState().research_stories;
+  if (Array.isArray(brainItems) && brainItems.length) return brainItems;
+  return storageCache.researchStories || [];
+}
+
+async function writeResearchStories(stories) {
+  storageCache.researchStories = stories;
+  writeJsonBackup(RESEARCH_STORIES_FILE, stories);
+  await persistResearchStories(stories);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object"
+    ? brain.internet_research
+    : {};
+  brain.internet_research = {
+    ...currentResearch,
+    autopilot_v1: {
+      ...(currentResearch.autopilot_v1 || {}),
+      research_stories: stories.slice(0, 100),
+      updated_at: new Date().toISOString()
+    }
+  };
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return stories;
+}
+
 function readStoryIdeas() {
   return readAutopilotV1Collection("storyIdeas", "story_ideas");
 }
@@ -234,6 +284,7 @@ const storageCache = {
   facebookPosts: readJsonArray(FACEBOOK_POSTS_FILE),
   competitors: readJsonArray(COMPETITORS_FILE),
   internetResearchItems: readJsonArray(INTERNET_RESEARCH_FILE),
+  researchStories: readJsonArray(RESEARCH_STORIES_FILE),
   storyIdeas: readJsonArray(STORY_IDEAS_FILE),
   imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
@@ -283,6 +334,7 @@ async function initializeStorage() {
       ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false }
     });
     await pgPool.query("select 1");
+    await ensureResearchStoriesTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
     storageCache.facebookPosts = (await pgPool.query("select * from facebook_posts order by total_score desc, published_at desc")).rows;
@@ -290,6 +342,10 @@ async function initializeStorage() {
       ...row,
       followers_count: row.followers_count || 0,
       category: row.category || "Facebook-страница"
+    }));
+    storageCache.researchStories = (await pgPool.query("select * from research_stories order by viral_score desc, similarity_score desc, created_at desc limit 500")).rows.map((row) => ({
+      ...row,
+      keywords: Array.isArray(row.keywords) ? row.keywords : []
     }));
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
@@ -326,6 +382,32 @@ async function initializeStorage() {
     storageMode = "json";
     console.warn(`Storage: PostgreSQL unavailable, using JSON backup mode. ${error.message}`);
   }
+}
+
+async function ensureResearchStoriesTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists research_stories (
+      id text primary key,
+      title text not null,
+      url text not null unique,
+      source text,
+      summary text,
+      emotion text,
+      keywords jsonb not null default '[]'::jsonb,
+      viral_score integer not null default 0,
+      similarity_score integer not null default 0,
+      category text,
+      emotional_intensity integer not null default 0,
+      story_structure text,
+      surprise_factor integer not null default 0,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+    create index if not exists research_stories_viral_score_idx on research_stories (viral_score desc);
+    create index if not exists research_stories_similarity_score_idx on research_stories (similarity_score desc);
+    create index if not exists research_stories_category_idx on research_stories (category);
+  `);
 }
 
 async function persistStories(stories) {
@@ -474,6 +556,53 @@ async function persistCompetitors(competitors) {
     }
   } catch (error) {
     console.warn(`PostgreSQL competitors persist failed: ${error.message}`);
+  }
+}
+
+async function persistResearchStories(stories) {
+  if (!pgPool) return;
+  try {
+    await ensureResearchStoriesTable();
+    for (const story of stories) {
+      await pgPool.query(
+        `insert into research_stories (
+          id, title, url, source, summary, emotion, keywords, viral_score, similarity_score,
+          category, emotional_intensity, story_structure, surprise_factor, created_at, updated_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        on conflict (url) do update set
+          title = excluded.title,
+          source = excluded.source,
+          summary = excluded.summary,
+          emotion = excluded.emotion,
+          keywords = excluded.keywords,
+          viral_score = excluded.viral_score,
+          similarity_score = excluded.similarity_score,
+          category = excluded.category,
+          emotional_intensity = excluded.emotional_intensity,
+          story_structure = excluded.story_structure,
+          surprise_factor = excluded.surprise_factor,
+          updated_at = excluded.updated_at`,
+        [
+          story.id || crypto.randomUUID(),
+          story.title || "",
+          story.url || story.source_url || "",
+          story.source || "",
+          story.summary || "",
+          story.emotion || story.emotional_angle || "",
+          JSON.stringify(Array.isArray(story.keywords) ? story.keywords : []),
+          Number(story.viral_score || 0),
+          Number(story.similarity_score || 0),
+          story.category || "",
+          Number(story.emotional_intensity || 0),
+          story.story_structure || "",
+          Number(story.surprise_factor || 0),
+          pgColumnDate(story.created_at),
+          pgColumnDate(story.updated_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL research_stories persist failed: ${error.message}`);
   }
 }
 
@@ -2165,6 +2294,125 @@ function cleanResearchUrl(rawUrl = "") {
   }
 }
 
+function normalizeResearchCategory(category = "") {
+  const clean = String(category || "").trim().toLowerCase().replace(/[-_]+/g, " ");
+  return researchCategories.includes(clean) ? clean : "family conflict";
+}
+
+function researchKeywordsForCategory(category) {
+  const map = {
+    betrayal: ["betrayal", "affair", "cheating", "secret", "trust", "marriage"],
+    "mother in law": ["mother-in-law", "daughter-in-law", "family pressure", "kitchen", "conflict"],
+    inheritance: ["inheritance", "will", "house", "apartment", "money", "family secret"],
+    love: ["love", "reunion", "marriage", "second chance", "letter"],
+    war: ["war", "loss", "separation", "return", "memory", "sacrifice"],
+    "poverty to wealth": ["poverty", "rich", "success", "humiliation", "turnaround"],
+    "unexpected ending": ["twist", "secret", "unexpected", "truth", "reveal"],
+    "family conflict": ["family", "mother", "son", "daughter", "argument", "silence"],
+    kindness: ["kindness", "help", "stranger", "gratitude", "hope"],
+    revenge: ["revenge", "justice", "truth", "payback", "betrayal"]
+  };
+  return map[normalizeResearchCategory(category)] || map["family conflict"];
+}
+
+function detectResearchEmotion(text = "", category = "") {
+  const lower = `${text} ${category}`.toLowerCase();
+  const rules = [
+    ["betrayal", /betray|cheat|affair|secret|lied|измен|предал/i],
+    ["anger", /revenge|payback|justice|furious|rage|злость|мест/i],
+    ["hope", /kindness|help|saved|reunion|second chance|надеж|помог/i],
+    ["sadness", /war|loss|died|alone|poverty|tears|грусть|потер/i],
+    ["surprise", /unexpected|twist|truth|revealed|found|secret|вдруг|правд/i],
+    ["family warmth", /mother|father|son|daughter|family|love|мать|отец|сын|дочь|сем/i]
+  ];
+  return rules.find(([, regex]) => regex.test(lower))?.[0] || emotionalAngleFromTitle(text);
+}
+
+function scoreFromMatches(text, patterns, base = 35, weight = 8) {
+  const lower = String(text || "").toLowerCase();
+  const hits = patterns.filter((pattern) => lower.includes(pattern.toLowerCase())).length;
+  return Math.min(100, base + hits * weight);
+}
+
+function detectStoryStructure(text = "") {
+  const lower = String(text || "").toLowerCase();
+  if (/letter|envelope|will|inherit|found|secret|письм|конверт|наслед/i.test(lower)) {
+    return "ordinary life -> hidden object/secret -> family confrontation -> reveal";
+  }
+  if (/revenge|justice|payback/i.test(lower)) {
+    return "hurtful action -> delayed consequence -> justice/revenge reveal";
+  }
+  if (/kindness|help|stranger|saved/i.test(lower)) {
+    return "hardship -> unexpected kindness -> emotional payoff";
+  }
+  if (/war|loss|return|memory/i.test(lower)) {
+    return "separation/loss -> memory clue -> late truth -> bittersweet closure";
+  }
+  return "emotional hook -> conflict -> surprise turn -> moral ending";
+}
+
+function analyzeResearchStory({ title, summary, source, category, url }) {
+  const text = `${title} ${summary} ${source} ${url}`;
+  const keywords = [...new Set([...researchKeywordsForCategory(category), ...String(title || "").toLowerCase().split(/[^a-zа-я0-9]+/i).filter((word) => word.length > 4).slice(0, 6)])].slice(0, 12);
+  const emotion = detectResearchEmotion(text, category);
+  const emotionalIntensity = scoreFromMatches(text, ["secret", "betrayal", "war", "revenge", "mother", "inheritance", "unexpected", "tears", "truth"], 42, 7);
+  const surpriseFactor = scoreFromMatches(text, ["secret", "found", "truth", "revealed", "unexpected", "twist", "will", "letter", "envelope"], 35, 8);
+  const sourceBoost = /reddit|facebook|quora|lovewhatmatters|people|rd\.com/i.test(`${source} ${url}`) ? 8 : 0;
+  const similarityScore = Math.min(100, Math.round((scoreFromMatches(text, ["family", "mother", "son", "daughter", "inheritance", "betrayal", "love", "kindness", "secret"], 38, 6) + emotionalIntensity) / 2));
+  const viralScore = Math.min(100, Math.round((emotionalIntensity * 0.38) + (surpriseFactor * 0.36) + (similarityScore * 0.18) + sourceBoost));
+  return {
+    emotion,
+    keywords,
+    emotional_intensity: emotionalIntensity,
+    story_structure: detectStoryStructure(text),
+    surprise_factor: surpriseFactor,
+    viral_probability: viralScore,
+    viral_score: viralScore,
+    similarity_score: similarityScore
+  };
+}
+
+function makeResearchSummary(title, category, source) {
+  const emotion = detectResearchEmotion(title, category);
+  return `Summary only: public ${source || "web"} result about ${normalizeResearchCategory(category)} with ${emotion} angle. Use it as a pattern signal only; create new characters, setting, plot and ending.`;
+}
+
+function normalizeResearchStory(raw, category) {
+  const title = htmlDecode(raw.title || "Untitled story").slice(0, 220);
+  const url = cleanResearchUrl(raw.url || raw.source_url || "");
+  const source = raw.source || (() => {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return "web";
+    }
+  })();
+  const summary = raw.summary || makeResearchSummary(title, category, source);
+  const analysis = analyzeResearchStory({ title, summary, source, category, url });
+  const now = new Date().toISOString();
+  return {
+    id: raw.id || crypto.randomUUID(),
+    title,
+    source,
+    url,
+    source_url: url,
+    summary,
+    emotion: analysis.emotion,
+    emotional_angle: analysis.emotion,
+    keywords: analysis.keywords,
+    similarity_score: analysis.similarity_score,
+    viral_score: analysis.viral_score,
+    viral_probability: analysis.viral_probability,
+    emotional_intensity: analysis.emotional_intensity,
+    story_structure: analysis.story_structure,
+    surprise_factor: analysis.surprise_factor,
+    category: normalizeResearchCategory(category),
+    status: raw.status || "researched",
+    created_at: raw.created_at || now,
+    updated_at: now
+  };
+}
+
 function emotionalAngleFromTitle(title = "") {
   const text = title.toLowerCase();
   if (/mother|father|son|daughter|family|мать|отец|сын|дочь|семь/i.test(text)) return "family loyalty, guilt, reconciliation";
@@ -2227,69 +2475,139 @@ async function fetchTextWithTimeout(url, timeoutMs = 12000) {
   }
 }
 
-async function runInternetStoryResearch(payload = {}) {
-  const analysis = buildAIPageAnalysis();
-  const query = String(payload.query || [
-    analysis.best_themes[0]?.name || "family life stories",
-    analysis.best_emotions[0]?.name || "emotional twist",
-    "viral true story relationship"
-  ].join(" ")).trim();
-  const limit = Math.max(3, Math.min(Number(payload.limit || 8), 12));
-  let found = [];
-  let sourceStatus = "live_search";
-  let searchError = "";
-  try {
-    const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const result = await fetchTextWithTimeout(searchUrl, 12000);
-    if (!result.ok) throw new Error(`search_status_${result.status}`);
-    const matches = [...result.text.matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi)];
-    found = matches.slice(0, limit).map((match) => {
-      const title = htmlDecode(match[2]);
-      const sourceUrl = cleanResearchUrl(match[1]);
-      let source = "web";
-      try {
-        source = new URL(sourceUrl).hostname.replace(/^www\./, "");
-      } catch {}
-      return {
-        id: crypto.randomUUID(),
-        source,
-        source_url: sourceUrl,
-        title,
-        summary: `Trend signal only: "${title}" suggests a reusable emotional angle, but the platform must create different characters, situation, structure and ending.`,
-        emotional_angle: emotionalAngleFromTitle(title),
-        query,
-        status: "researched",
-        created_at: new Date().toISOString()
-      };
-    });
-  } catch (error) {
-    sourceStatus = "fallback_seed";
-    searchError = error.message;
-    found = fallbackResearchItems(query).slice(0, limit);
+function buildResearchQuery(category, sourceProfile) {
+  const normalized = normalizeResearchCategory(category);
+  const keywords = researchKeywordsForCategory(normalized).slice(0, 4).join(" ");
+  return `${sourceProfile.query} ${normalized} emotional viral true story ${keywords}`;
+}
+
+function parseDuckDuckGoResults(html, category, sourceProfile, perSourceLimit) {
+  const blocks = String(html || "").split(/<div[^>]+class="result[ "\w-]*"/i).slice(1);
+  const parsed = [];
+  for (const block of blocks) {
+    const link = block.match(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!link) continue;
+    const snippet = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i) || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
+    const url = cleanResearchUrl(link[1]);
+    if (!/^https?:\/\//i.test(url)) continue;
+    parsed.push(normalizeResearchStory({
+      title: link[2],
+      url,
+      source: sourceProfile.source,
+      summary: snippet ? `Summary only from public search snippet: ${htmlDecode(snippet[1]).slice(0, 260)}` : ""
+    }, category));
+    if (parsed.length >= perSourceLimit) break;
   }
+  return parsed;
+}
+
+async function searchResearchSource(category, sourceProfile, perSourceLimit) {
+  const query = buildResearchQuery(category, sourceProfile);
+  const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const result = await fetchTextWithTimeout(searchUrl, 9000);
+  if (!result.ok) throw new Error(`${sourceProfile.source}: search_status_${result.status}`);
+  return parseDuckDuckGoResults(result.text, category, sourceProfile, perSourceLimit);
+}
+
+function fallbackResearchStories(category, limit) {
+  const normalized = normalizeResearchCategory(category);
+  const seeds = [
+    ["Reddit", "A woman discovered the family secret after an inheritance argument", "https://www.reddit.com/r/relationships/"],
+    ["Public story websites", "A mother-in-law conflict turned into a confession nobody expected", "https://www.lovewhatmatters.com/"],
+    ["News", "A real family reunion story with a late emotional reveal", "https://people.com/"],
+    ["Forums", "A long silence between mother and adult son ended after one letter", "https://www.mumsnet.com/"],
+    ["Quora", "What true story had the most unexpected ending?", "https://www.quora.com/"],
+    ["Public story websites", "A poor family was humiliated before a surprising act of kindness", "https://www.rd.com/list/true-stories/"]
+  ];
+  return seeds.slice(0, limit).map(([source, title, url]) => normalizeResearchStory({
+    title,
+    source,
+    url,
+    summary: makeResearchSummary(title, normalized, source),
+    status: "fallback_seed"
+  }, normalized));
+}
+
+async function runInternetStoryResearch(payload = {}) {
+  const category = normalizeResearchCategory(payload.category || payload.query || "");
+  const limit = Math.max(1, Math.min(Number(payload.limit || 20), 40));
+  const perSourceLimit = Math.max(2, Math.ceil(limit / researchSourceProfiles.length) + 1);
+  const searchErrors = [];
+  let found = [];
+  const sourceResults = await Promise.allSettled(
+    researchSourceProfiles.map((sourceProfile) => searchResearchSource(category, sourceProfile, perSourceLimit))
+  );
+  for (const result of sourceResults) {
+    if (result.status === "fulfilled") found.push(...result.value);
+    if (result.status === "rejected") searchErrors.push(result.reason?.message || "search_failed");
+  }
+  const byFoundUrl = new Map();
+  for (const story of found) {
+    if (story.url && !byFoundUrl.has(story.url)) byFoundUrl.set(story.url, story);
+  }
+  found = [...byFoundUrl.values()]
+    .sort((a, b) => (b.viral_score + b.similarity_score) - (a.viral_score + a.similarity_score))
+    .slice(0, limit);
+  let sourceStatus = "live_search";
   if (!found.length) {
     sourceStatus = "fallback_seed";
-    found = fallbackResearchItems(query).slice(0, limit);
+    found = fallbackResearchStories(category, limit);
+  } else if (searchErrors.length) {
+    sourceStatus = "partial_live_search";
   }
-  const existing = readInternetResearchItems();
-  const byUrl = new Map(existing.map((item) => [item.source_url, item]));
+
+  const existingStories = readResearchStories();
+  const byUrl = new Map(existingStories.map((item) => [item.url || item.source_url, item]));
   let savedNew = 0;
-  for (const item of found) {
-    if (!byUrl.has(item.source_url)) savedNew += 1;
-    byUrl.set(item.source_url, { ...(byUrl.get(item.source_url) || {}), ...item, updated_at: new Date().toISOString() });
+  for (const story of found) {
+    const key = story.url || story.source_url;
+    if (!key) continue;
+    if (!byUrl.has(key)) savedNew += 1;
+    byUrl.set(key, { ...(byUrl.get(key) || {}), ...story, updated_at: new Date().toISOString() });
   }
-  const items = [...byUrl.values()].sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0)).slice(0, 100);
-  await writeInternetResearchItems(items);
+  const stories = [...byUrl.values()]
+    .sort((a, b) => Number(b.viral_score || 0) - Number(a.viral_score || 0) || Number(b.similarity_score || 0) - Number(a.similarity_score || 0))
+    .slice(0, 500);
+  await writeResearchStories(stories);
+  const items = stories.map((story) => ({
+    id: story.id,
+    source: story.source,
+    source_url: story.url || story.source_url,
+    title: story.title,
+    summary: story.summary,
+    emotional_angle: story.emotion,
+    query: category,
+    status: story.status,
+    created_at: story.created_at,
+    updated_at: story.updated_at
+  }));
+  await writeInternetResearchItems(items.slice(0, 100));
   return {
     ok: true,
-    module: "Internet Story Researcher",
-    query,
+    module: "Internet Research AI v1",
+    category,
+    limit,
     source_status: sourceStatus,
-    search_error: searchError,
+    search_errors: searchErrors.slice(0, 8),
     found_count: found.length,
     saved_new: savedNew,
+    stories: found.map((story) => ({
+      title: story.title,
+      source: story.source,
+      url: story.url || story.source_url,
+      summary: story.summary,
+      emotion: story.emotion,
+      keywords: story.keywords,
+      similarity_score: story.similarity_score,
+      viral_score: story.viral_score,
+      emotional_intensity: story.emotional_intensity,
+      story_structure: story.story_structure,
+      surprise_factor: story.surprise_factor,
+      viral_probability: story.viral_probability
+    })),
     items,
-    originality_rule: "Research is used only for themes, emotions and structures. Do not copy text, characters, images or endings."
+    sources: researchSourceProfiles.map((item) => item.source),
+    originality_rule: "Research stores summaries and source links only. Use public trends as pattern signals; never copy text, characters, images or endings."
   };
 }
 
@@ -2571,6 +2889,12 @@ function renderAutopilotV1Dashboard() {
   const queue = readImageQueue().slice(0, 6);
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
+  const researchStories = readResearchStories();
+  const trendingStories = researchStories.slice(0, 8);
+  const viralCandidates = [...researchStories].sort((a, b) => Number(b.viral_score || 0) - Number(a.viral_score || 0)).slice(0, 8);
+  const similarStories = [...researchStories].sort((a, b) => Number(b.similarity_score || 0) - Number(a.similarity_score || 0)).slice(0, 8);
+  const storyEmotions = countBy(researchStories, (item) => item.emotion || "unknown").slice(0, 8);
+  const storySources = countBy(researchStories, (item) => item.source || "unknown").slice(0, 8);
   const card = (title, value, detail) => `<article><span>${escapeHtml(title)}</span><strong>${escapeHtml(String(value))}</strong><p>${escapeHtml(detail)}</p></article>`;
   const rows = (items, empty, mapper) => items.length
     ? items.map(mapper).join("")
@@ -2652,6 +2976,47 @@ function renderAutopilotV1Dashboard() {
             <tbody>${rows(plan, "No plan yet. Click Daily Plan.", (item) => `<tr><td>${escapeHtml(item.local_time_hint || item.scheduled_for)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.status)}</td><td>${item.publish_allowed ? "allowed" : "blocked until approval"}</td></tr>`)}</tbody>
           </table>
         </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Internet Research AI</h2>
+        <div class="autopilot-status-grid">
+          ${card("Research Stories", researchStories.length, "Saved summaries with source links only")}
+          ${card("Top Emotion", storyEmotions[0]?.name || "not enough data", `${storyEmotions[0]?.count || 0} stories`)}
+          ${card("Top Source", storySources[0]?.name || "not enough data", `${storySources[0]?.count || 0} stories`)}
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Trending Stories</h2>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Title</th><th>Source</th><th>Emotion</th><th>Scores</th></tr></thead>
+            <tbody>${rows(trendingStories, "Run Internet Research first.", (item) => `<tr><td><a href="${escapeHtml(item.url || item.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a></td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.emotion)}</td><td>viral ${Number(item.viral_score || 0)} / similar ${Number(item.similarity_score || 0)}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Viral Candidates</h2>
+          <ol class="insight-list">${viralCandidates.length ? viralCandidates.map((item) => `<li><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.source)} · viral ${Number(item.viral_score || 0)} · ${escapeHtml(item.emotion || "")}</span></li>`).join("") : "<li><strong>No research yet</strong></li>"}</ol>
+        </article>
+        <article class="insight-card">
+          <h2>Similar To Our Audience</h2>
+          <ol class="insight-list">${similarStories.length ? similarStories.map((item) => `<li><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.source)} · similarity ${Number(item.similarity_score || 0)} · ${escapeHtml(item.story_structure || "")}</span></li>`).join("") : "<li><strong>No research yet</strong></li>"}</ol>
+        </article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Story Emotions</h2>
+          <ol class="insight-list">${storyEmotions.length ? storyEmotions.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${item.count} stories</span></li>`).join("") : "<li><strong>No emotions yet</strong></li>"}</ol>
+        </article>
+        <article class="insight-card">
+          <h2>Sources</h2>
+          <ol class="insight-list">${storySources.length ? storySources.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${item.count} stories</span></li>`).join("") : "<li><strong>No sources yet</strong></li>"}</ol>
+        </article>
       </section>
 
       <section class="insight-card">
@@ -3013,10 +3378,17 @@ async function telegramAnalyze(chatId) {
   return sendTelegramMessage(chatId, `<b>AI Page Analyzer</b>\n\nPosts analyzed: ${analysis.posts_analyzed}\n\nBest themes:\n${escapeHtml(themes)}\n\nBest hooks:\n${escapeHtml(hooks)}\n\nProject Brain updated.`, mainTelegramKeyboard());
 }
 
-async function telegramResearch(chatId) {
-  const result = await runInternetStoryResearch({});
-  const items = result.items.slice(0, 3).map((item) => `- ${item.title} (${item.emotional_angle})`).join("\n") || "No research items";
-  return sendTelegramMessage(chatId, `<b>Internet Story Researcher</b>\n\nMode: ${escapeHtml(result.source_status)}\nFound: ${result.found_count}\nSaved new: ${result.saved_new}\n\n${escapeHtml(items)}\n\nResearch is pattern-only. No copying.`, mainTelegramKeyboard());
+async function telegramResearch(chatId, category = "") {
+  const result = await runInternetStoryResearch({ category, limit: 20 });
+  const emotions = countBy(result.stories || [], (item) => item.emotion || "unknown")
+    .slice(0, 5)
+    .map((item) => `- ${item.name}: ${item.count}`)
+    .join("\n") || "No emotions yet";
+  const topStories = (result.stories || [])
+    .slice(0, 10)
+    .map((item, index) => `${index + 1}. ${item.title}\n${item.source} · viral ${item.viral_score} · similar ${item.similarity_score}`)
+    .join("\n\n") || "No research stories";
+  return sendTelegramMessage(chatId, `<b>Internet Research AI</b>\n\nCategory: ${escapeHtml(result.category)}\nMode: ${escapeHtml(result.source_status)}\nStories found: ${result.found_count}\nSaved new: ${result.saved_new}\n\nTop emotions:\n${escapeHtml(emotions)}\n\nTop 10 stories:\n${escapeHtml(topStories)}\n\nSummaries only. Source links are stored. No copying.`, mainTelegramKeyboard());
 }
 
 async function telegramIdeas(chatId) {
@@ -3078,7 +3450,7 @@ async function legacyTelegramHelp(chatId) {
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research - run Internet Story Researcher\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/drafts - drafts and stories waiting for review\n/approve STORY_ID - approve a story locally\n/reject STORY_ID - reject a story locally\n/help - command list\n\nButtons:\nApprove - marks story as approved\nEdit - returns story to review\nReject - marks story as rejected\n\nPublishing is never automatic. Competitor and web research are pattern-only; no copying.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research - run Internet Research AI\n/research betrayal - research betrayal stories\n/research love - research love stories\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/drafts - drafts and stories waiting for review\n/approve STORY_ID - approve a story locally\n/reject STORY_ID - reject a story locally\n/help - command list\n\nButtons:\nApprove - marks story as approved\nEdit - returns story to review\nReject - marks story as rejected\n\nPublishing is never automatic. Research stores summaries and links only; no copying.`, mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
@@ -3175,7 +3547,7 @@ async function handleTelegramMessage(message) {
   if (command === "/status") return telegramStatus(chatId);
   if (command === "/load_posts") return telegramLoadPosts(chatId);
   if (command === "/analyze") return telegramAnalyze(chatId);
-  if (command === "/research") return telegramResearch(chatId);
+  if (command === "/research") return telegramResearch(chatId, args.join(" "));
   if (command === "/ideas") return telegramIdeas(chatId);
   if (command === "/plan") return telegramPlan(chatId);
   if (command === "/schedule") return telegramSchedule(chatId);
@@ -4981,6 +5353,11 @@ function parseBody(req) {
   });
 }
 
+function requestQuery(req) {
+  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  return Object.fromEntries(url.searchParams.entries());
+}
+
 async function handleApi(req, res, pathname) {
   if (pathname === "/api/telegram/status" && req.method === "GET") {
     const config = telegramConfigStatus();
@@ -5207,7 +5584,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === "/api/autopilot/v1/research" && ["GET", "POST"].includes(req.method)) {
-    return sendJson(res, 200, await runInternetStoryResearch(req.method === "POST" ? await parseBody(req) : {}));
+    return sendJson(res, 200, await runInternetStoryResearch(req.method === "POST" ? await parseBody(req) : requestQuery(req)));
   }
 
   if (pathname === "/api/autopilot/v1/competitors" && ["GET", "POST"].includes(req.method)) {
