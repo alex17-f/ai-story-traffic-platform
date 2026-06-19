@@ -16,6 +16,7 @@ const GENERATED_STORIES_FILE = path.join(ROOT, "data", "generated_stories.json")
 const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
 const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
+const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
@@ -306,6 +307,31 @@ async function writeContentPlan(items) {
   return writeAutopilotV1Collection("contentPlan", CONTENT_PLAN_FILE, "content_plan", items);
 }
 
+function readScheduledPosts() {
+  return readAutopilotV1Collection("scheduledPosts", "scheduled_posts");
+}
+
+async function writeScheduledPosts(items) {
+  storageCache.scheduledPosts = items;
+  writeJsonBackup(SCHEDULED_POSTS_FILE, items);
+  await persistScheduledPosts(items);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object"
+    ? brain.internet_research
+    : {};
+  brain.internet_research = {
+    ...currentResearch,
+    autopilot_v1: {
+      ...(currentResearch.autopilot_v1 || {}),
+      scheduled_posts: items.slice(0, 120),
+      updated_at: new Date().toISOString()
+    }
+  };
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return items;
+}
+
 function readJsonArray(filePath) {
   if (!fs.existsSync(filePath)) return [];
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -339,6 +365,7 @@ const storageCache = {
   storyIdeas: readJsonArray(STORY_IDEAS_FILE),
   imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
+  scheduledPosts: readJsonArray(SCHEDULED_POSTS_FILE),
   projectBrain: fs.existsSync(PROJECT_BRAIN_FILE)
     ? JSON.parse(fs.readFileSync(PROJECT_BRAIN_FILE, "utf8"))
     : {
@@ -387,6 +414,7 @@ async function initializeStorage() {
     await pgPool.query("select 1");
     await ensureResearchStoriesTable();
     await ensureGeneratedStoriesTable();
+    await ensureScheduledPostsTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
     storageCache.facebookPosts = (await pgPool.query("select * from facebook_posts order by total_score desc, published_at desc")).rows;
@@ -404,6 +432,7 @@ async function initializeStorage() {
       research_signals: Array.isArray(row.research_signals) ? row.research_signals : [],
       facebook_signals: Array.isArray(row.facebook_signals) ? row.facebook_signals : []
     }));
+    storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
       storageCache.projectBrain = {
@@ -497,6 +526,29 @@ async function ensureGeneratedStoriesTable() {
     create index if not exists generated_stories_category_idx on generated_stories (category);
     create index if not exists generated_stories_score_idx on generated_stories (viral_prediction_score desc);
     create index if not exists generated_stories_created_at_idx on generated_stories (created_at desc);
+  `);
+}
+
+async function ensureScheduledPostsTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists scheduled_posts (
+      id text primary key,
+      draft_id text not null,
+      image_prompt_id text,
+      scheduled_time timestamptz not null,
+      theme text,
+      emotion text,
+      status text not null default 'draft',
+      title text,
+      rhythm_step text,
+      publish_allowed boolean not null default false,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+    create index if not exists scheduled_posts_time_idx on scheduled_posts (scheduled_time asc);
+    create index if not exists scheduled_posts_status_idx on scheduled_posts (status);
+    create index if not exists scheduled_posts_draft_idx on scheduled_posts (draft_id);
   `);
 }
 
@@ -752,6 +804,58 @@ async function persistGeneratedStories(stories) {
     }
   } catch (error) {
     console.warn(`PostgreSQL generated_stories persist failed: ${error.message}`);
+  }
+}
+
+async function persistScheduledPosts(items) {
+  if (!pgPool) return;
+  try {
+    await ensureScheduledPostsTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into scheduled_posts (
+          id, draft_id, image_prompt_id, scheduled_time, theme, emotion, status,
+          title, rhythm_step, publish_allowed, created_at, updated_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        on conflict (id) do update set
+          draft_id = excluded.draft_id,
+          image_prompt_id = excluded.image_prompt_id,
+          scheduled_time = excluded.scheduled_time,
+          theme = excluded.theme,
+          emotion = excluded.emotion,
+          status = excluded.status,
+          title = excluded.title,
+          rhythm_step = excluded.rhythm_step,
+          publish_allowed = excluded.publish_allowed,
+          updated_at = excluded.updated_at`,
+        [
+          item.id || crypto.randomUUID(),
+          item.draft_id || "",
+          item.image_prompt_id || "",
+          pgColumnDate(item.scheduled_time),
+          item.theme || "",
+          item.emotion || "",
+          item.status || "draft",
+          item.title || "",
+          item.rhythm_step || "",
+          Boolean(item.publish_allowed),
+          pgColumnDate(item.created_at),
+          pgColumnDate(item.updated_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL scheduled_posts persist failed: ${error.message}`);
+  }
+}
+
+async function deleteScheduledPostById(id) {
+  if (pgPool && id) {
+    try {
+      await pgPool.query("delete from scheduled_posts where id = $1", [id]);
+    } catch (error) {
+      console.warn(`PostgreSQL scheduled_posts delete failed: ${error.message}`);
+    }
   }
 }
 
@@ -3584,6 +3688,203 @@ async function createDailyContentPlan(payload = {}) {
   };
 }
 
+const schedulerV2Rhythm = [
+  { step: "love", categories: ["love"], emotions: ["love", "hope", "family warmth"] },
+  { step: "conflict", categories: ["family conflict", "mother in law", "inheritance"], emotions: ["anger", "anxiety", "betrayal"] },
+  { step: "shock", categories: ["betrayal", "revenge"], emotions: ["surprise", "betrayal"] },
+  { step: "hope", categories: ["kindness", "love"], emotions: ["hope", "family warmth"] },
+  { step: "family", categories: ["family conflict", "inheritance", "mother in law"], emotions: ["family warmth", "sadness"] },
+  { step: "twist", categories: ["unexpected ending", "betrayal"], emotions: ["surprise"] },
+  { step: "resolution", categories: ["kindness", "love", "war"], emotions: ["hope", "sadness"] }
+];
+
+function approvedImagePromptByDraft() {
+  const map = new Map();
+  for (const item of latestImageQueueItems(200)) {
+    if ((item.status || "") !== "approved") continue;
+    const draftId = item.draft_id || item.generated_story_id || "";
+    if (draftId && !map.has(draftId)) map.set(draftId, item);
+  }
+  return map;
+}
+
+function scheduledQueueItems(limit = 50) {
+  return [...readScheduledPosts()]
+    .filter((item) => (item.status || "draft") !== "skipped")
+    .sort((a, b) => new Date(a.scheduled_time || 0) - new Date(b.scheduled_time || 0))
+    .slice(0, limit);
+}
+
+function scheduledItemByNumber(numberText) {
+  const index = Number(numberText);
+  if (!Number.isInteger(index) || index < 1) return null;
+  return scheduledQueueItems(50)[index - 1] || null;
+}
+
+function tomorrowDate() {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function schedulerTimesForDay() {
+  const brainTimes = (readProjectBrain().best_times || [])
+    .map((item) => item.time || item.name || "")
+    .filter((value) => /^\d{1,2}:\d{2}$/.test(value))
+    .slice(0, 3);
+  return brainTimes.length ? brainTimes : ["11:00", "15:00", "19:30"];
+}
+
+function scheduledDateAt(baseDate, timeText) {
+  const [hour, minute] = String(timeText || "19:30").split(":").map(Number);
+  const date = new Date(baseDate);
+  date.setHours(Number.isFinite(hour) ? hour : 19, Number.isFinite(minute) ? minute : 30, 0, 0);
+  return date;
+}
+
+function parseMoveScheduleTime(dayText = "tomorrow", timeText = "19:30") {
+  const base = new Date();
+  const cleanDay = String(dayText || "tomorrow").toLowerCase();
+  if (cleanDay === "tomorrow") base.setDate(base.getDate() + 1);
+  if (cleanDay === "today") base.setDate(base.getDate());
+  base.setHours(0, 0, 0, 0);
+  return scheduledDateAt(base, timeText).toISOString();
+}
+
+function schedulerCandidateDrafts() {
+  const imageByDraft = approvedImagePromptByDraft();
+  const activeDraftIds = new Set(scheduledQueueItems(300).map((item) => item.draft_id));
+  return latestGeneratedDraftItems(200)
+    .filter((draft) => !["rejected"].includes(draft.status || ""))
+    .filter((draft) => !activeDraftIds.has(draft.id))
+    .map((draft) => ({
+      draft,
+      image: imageByDraft.get(draft.id) || null,
+      score: Number(draft.viral_prediction_score || 0) + (imageByDraft.has(draft.id) ? 15 : 0)
+    }))
+    .sort((a, b) => b.score - a.score);
+}
+
+function draftMatchesRhythm(candidate, rhythm) {
+  const category = String(candidate.draft.category || "").toLowerCase();
+  const emotion = String(candidate.draft.emotion || "").toLowerCase();
+  return rhythm.categories.includes(category) || rhythm.emotions.some((item) => emotion.includes(item));
+}
+
+function pickScheduleCandidate(candidates, usedDraftIds, recentThemes, rhythm) {
+  const available = candidates.filter((item) => !usedDraftIds.has(item.draft.id));
+  const preferred = available.filter((item) => draftMatchesRhythm(item, rhythm));
+  const antiRepetition = (list) => list.filter((item) => {
+    const theme = item.draft.category || "story";
+    return !(recentThemes.length >= 2 && recentThemes[recentThemes.length - 1] === theme && recentThemes[recentThemes.length - 2] === theme);
+  });
+  return antiRepetition(preferred)[0] || antiRepetition(available)[0] || preferred[0] || available[0] || null;
+}
+
+async function createSchedulerV2Plan(options = {}) {
+  const days = Math.max(1, Math.min(Number(options.days || 1), 7));
+  const slotsPerDay = Math.max(1, Math.min(Number(options.slots_per_day || 3), 5));
+  const candidates = schedulerCandidateDrafts();
+  const created = [];
+  const usedDraftIds = new Set();
+  const recentThemes = [];
+  const times = schedulerTimesForDay();
+  const startDate = tomorrowDate();
+  for (let day = 0; day < days; day += 1) {
+    const baseDate = new Date(startDate);
+    baseDate.setDate(startDate.getDate() + day);
+    for (let slot = 0; slot < slotsPerDay; slot += 1) {
+      const rhythm = schedulerV2Rhythm[(day * slotsPerDay + slot) % schedulerV2Rhythm.length];
+      const candidate = pickScheduleCandidate(candidates, usedDraftIds, recentThemes, rhythm);
+      if (!candidate) continue;
+      usedDraftIds.add(candidate.draft.id);
+      recentThemes.push(candidate.draft.category || "story");
+      if (recentThemes.length > 3) recentThemes.shift();
+      const scheduledTime = scheduledDateAt(baseDate, times[slot % times.length] || "19:30").toISOString();
+      created.push({
+        id: crypto.randomUUID(),
+        draft_id: candidate.draft.id,
+        image_prompt_id: candidate.image?.id || "",
+        scheduled_time: scheduledTime,
+        theme: candidate.draft.category || "",
+        emotion: candidate.draft.emotion || "",
+        status: "draft",
+        title: candidate.draft.title || "",
+        rhythm_step: rhythm.step,
+        publish_allowed: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      });
+    }
+  }
+  const next = [...readScheduledPosts(), ...created]
+    .sort((a, b) => new Date(a.scheduled_time || 0) - new Date(b.scheduled_time || 0))
+    .slice(0, 300);
+  await writeScheduledPosts(next);
+  return {
+    ok: true,
+    module: "AI Scheduler v2",
+    created_count: created.length,
+    days,
+    plan: created,
+    queue: scheduledQueueItems(50),
+    warnings: [
+      ...(!candidates.length ? ["No generated story drafts available. Use /generate betrayal first."] : []),
+      ...(created.some((item) => !item.image_prompt_id) ? ["Some scheduled drafts do not have approved image prompts yet. Use /image 1 and /approve_image 1."] : [])
+    ],
+    safety: {
+      autopublishing: false,
+      approval_required: true,
+      publish_allowed: false
+    }
+  };
+}
+
+function scheduleItemsForTomorrow() {
+  const start = tomorrowDate();
+  const end = new Date(start);
+  end.setDate(start.getDate() + 1);
+  return scheduledQueueItems(200).filter((item) => {
+    const date = new Date(item.scheduled_time || 0);
+    return date >= start && date < end;
+  });
+}
+
+async function approveSchedulerV2() {
+  const updated = readScheduledPosts().map((item) => (item.status || "draft") === "draft"
+    ? { ...item, status: "approved", publish_allowed: false, updated_at: new Date().toISOString() }
+    : item);
+  await writeScheduledPosts(updated);
+  return {
+    ok: true,
+    module: "AI Scheduler v2",
+    approved_count: updated.filter((item) => item.status === "approved").length,
+    queue: scheduledQueueItems(50),
+    safety: { autopublishing: false, publish_allowed: false }
+  };
+}
+
+async function moveScheduledPost(numberText, dayText, timeText) {
+  const item = scheduledItemByNumber(numberText);
+  if (!item) return null;
+  const movedTime = parseMoveScheduleTime(dayText, timeText);
+  const updated = readScheduledPosts().map((scheduled) => scheduled.id === item.id
+    ? { ...scheduled, scheduled_time: movedTime, status: "draft", publish_allowed: false, updated_at: new Date().toISOString() }
+    : scheduled);
+  await writeScheduledPosts(updated);
+  return updated.find((scheduled) => scheduled.id === item.id);
+}
+
+async function unschedulePost(numberText) {
+  const item = scheduledItemByNumber(numberText);
+  if (!item) return null;
+  const next = readScheduledPosts().filter((scheduled) => scheduled.id !== item.id);
+  await deleteScheduledPostById(item.id);
+  await writeScheduledPosts(next);
+  return item;
+}
+
 function buildAutopilotV1Status() {
   const page = buildAIPageAnalysis();
   const competitor = buildCompetitorAutopilotAnalysis();
@@ -3591,6 +3892,7 @@ function buildAutopilotV1Status() {
   const ideas = readStoryIdeas();
   const imageQueue = readImageQueue();
   const plan = readContentPlan();
+  const scheduledPosts = readScheduledPosts();
   const fb = facebookConfigStatus();
   return {
     ok: true,
@@ -3610,7 +3912,8 @@ function buildAutopilotV1Status() {
       story_generator: { status: "ready", ideas: ideas.length },
       image_generator_queue: { status: "ready", queued: imageQueue.length },
       telegram_control: { status: telegramConfigStatus().configured ? "connected" : "needs_env" },
-      scheduler: { status: "ready", planned_items: plan.length }
+      scheduler: { status: "ready", planned_items: plan.length },
+      scheduler_v2: { status: "ready", scheduled_posts: scheduledPosts.length, approved: scheduledPosts.filter((item) => item.status === "approved").length }
     },
     top_signals: {
       themes: page.best_themes.slice(0, 5),
@@ -3655,6 +3958,10 @@ function renderAutopilotV1Dashboard() {
   const ideas = readStoryIdeas().slice(0, 6);
   const generatedStories = readGeneratedStories().slice(0, 6);
   const queue = readImageQueue().slice(0, 6);
+  const scheduledPosts = scheduledQueueItems(20);
+  const tomorrowSchedule = scheduleItemsForTomorrow();
+  const approvedSchedule = scheduledPosts.filter((item) => item.status === "approved").slice(0, 6);
+  const pendingSchedule = scheduledPosts.filter((item) => item.status === "draft").slice(0, 6);
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
   const researchStories = readResearchStories();
@@ -3745,6 +4052,24 @@ function renderAutopilotV1Dashboard() {
           <table class="facebook-table">
             <thead><tr><th>Draft</th><th>Style</th><th>Status</th><th>Prompt</th></tr></thead>
             <tbody>${rows(queue, "No queued image prompts yet.", (item) => `<tr><td>${escapeHtml(item.story_title)}</td><td>${escapeHtml(item.style || "story_idea_prompt")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(shortText(item.prompt, 220))}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Scheduler v2</h2>
+        <div class="button-row">
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/scheduler-v2" type="button">Build Tomorrow Plan</button>
+        </div>
+        <div class="autopilot-status-grid">
+          ${card("Tomorrow Plan", tomorrowSchedule.length, "Logical chain for the next day")}
+          ${card("Approved Schedule", approvedSchedule.length, "Approved does not publish automatically")}
+          ${card("Pending Schedule", pendingSchedule.length, "Waiting for review")}
+        </div>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Time</th><th>Draft</th><th>Theme</th><th>Status</th></tr></thead>
+            <tbody>${rows(scheduledPosts.slice(0, 8), "No scheduled drafts yet.", (item) => `<tr><td>${escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU"))}</td><td>${escapeHtml(item.title || item.draft_id)}</td><td>${escapeHtml(item.rhythm_step || item.theme || "")}</td><td>${escapeHtml(item.status || "draft")}</td></tr>`)}</tbody>
           </table>
         </div>
       </section>
@@ -4344,11 +4669,55 @@ async function telegramPlan(chatId) {
   return sendTelegramMessage(chatId, `<b>Daily Content Plan</b>\n\nCreated: ${result.created_count}\n\n${escapeHtml(plan)}\n\nEvery item is blocked until approval.`, mainTelegramKeyboard());
 }
 
-async function telegramSchedule(chatId) {
-  const plan = readContentPlan().slice(0, 8);
-  if (!plan.length) return sendTelegramMessage(chatId, "Schedule is empty. Use /plan first.", mainTelegramKeyboard());
-  const text = plan.map((item) => `- ${item.local_time_hint || item.scheduled_for}: ${item.title}\nStatus: ${item.status}; publishing: ${item.publish_allowed ? "allowed" : "blocked until approval"}`).join("\n\n");
-  return sendTelegramMessage(chatId, `<b>Approval Schedule</b>\n\n${escapeHtml(text)}\n\nNo automatic publishing is enabled.`, mainTelegramKeyboard());
+function scheduleLine(item, index) {
+  return [
+    `${index + 1}. ${item.title || item.draft_id}`,
+    `time: ${new Date(item.scheduled_time).toLocaleString("ru-RU")}`,
+    `theme: ${item.theme || "story"} / rhythm: ${item.rhythm_step || "mixed"}`,
+    `emotion: ${item.emotion || "mixed"}`,
+    `image: ${item.image_prompt_id ? "approved prompt linked" : "missing approved prompt"}`,
+    `status: ${item.status || "draft"}`
+  ].join("\n");
+}
+
+async function telegramSchedule(chatId, args = []) {
+  const mode = String(args[0] || "").toLowerCase();
+  if (mode === "week") {
+    const result = await createSchedulerV2Plan({ days: 7, slots_per_day: 3 });
+    const text = result.plan.slice(0, 10).map(scheduleLine).join("\n\n") || "No plan was created.";
+    const warnings = result.warnings.length ? `\n\nWarnings:\n${result.warnings.map((item) => `- ${item}`).join("\n")}` : "";
+    return sendTelegramLongMessage(chatId, `<b>Scheduler v2: 7-day plan</b>\n\nCreated: ${result.created_count}\n\n${escapeHtml(text)}${escapeHtml(warnings)}\n\nUse /queue to see scheduled drafts.\nUse /approve_schedule to approve schedule.\nNo automatic publishing.`, mainTelegramKeyboard());
+  }
+  let tomorrow = scheduleItemsForTomorrow();
+  if (!tomorrow.length) {
+    await createSchedulerV2Plan({ days: 1, slots_per_day: 3 });
+    tomorrow = scheduleItemsForTomorrow();
+  }
+  const text = tomorrow.map(scheduleLine).join("\n\n") || "Tomorrow plan is empty. Generate drafts and approve image prompts first.";
+  return sendTelegramLongMessage(chatId, `<b>Scheduler v2: Tomorrow Plan</b>\n\n${escapeHtml(text)}\n\nUse /schedule week for a 7-day plan.\nUse /queue, /move 1 tomorrow 19:30, /unschedule 1.\nNo automatic publishing.`, mainTelegramKeyboard());
+}
+
+async function telegramQueue(chatId) {
+  const queue = scheduledQueueItems(20);
+  if (!queue.length) return sendTelegramMessage(chatId, "Schedule queue is empty. Use /schedule or /schedule week first.", mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Scheduled Draft Queue</b>\n\n${escapeHtml(queue.map(scheduleLine).join("\n\n"))}\n\nUse /move 1 tomorrow 19:30 or /unschedule 1.`, mainTelegramKeyboard());
+}
+
+async function telegramMoveSchedule(chatId, args = []) {
+  const [numberText, dayText, timeText] = args;
+  if (!numberText || !dayText || !timeText) return sendTelegramMessage(chatId, "Usage: /move 1 tomorrow 19:30", mainTelegramKeyboard());
+  const item = await moveScheduledPost(numberText, dayText, timeText);
+  return sendTelegramMessage(chatId, item ? `Moved #${numberText}\n${escapeHtml(item.title || item.draft_id)}\nNew time: ${escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU"))}\n\nNo publishing.` : "Scheduled draft not found. Use /queue.", mainTelegramKeyboard());
+}
+
+async function telegramUnschedule(chatId, numberText) {
+  const item = await unschedulePost(numberText || "1");
+  return sendTelegramMessage(chatId, item ? `Unscheduled #${numberText || "1"}: ${escapeHtml(item.title || item.draft_id)}\n\nIt was removed from the schedule. Nothing was published.` : "Scheduled draft not found. Use /queue.", mainTelegramKeyboard());
+}
+
+async function telegramApproveSchedule(chatId) {
+  const result = await approveSchedulerV2();
+  return sendTelegramMessage(chatId, `<b>Schedule approved</b>\n\nApproved items in queue: ${result.approved_count}\n\nPublishing remains disabled. Approval only changes schedule status.`, mainTelegramKeyboard());
 }
 
 async function telegramDrafts(chatId) {
@@ -4427,7 +4796,7 @@ async function legacyTelegramHelp(chatId) {
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research betrayal - show top 5 research stories\n/generate betrayal - generate 3 original story drafts\n/generate betrayal 5 - generate 5 story drafts\n/drafts - show latest 10 generated drafts\n/draft 1 - show full text of selected draft\n/approve 1 - approve draft without publishing\n/reject 1 - reject draft\n/image 1 - create 3 image prompts for draft 1\n/images - show latest image prompt queue\n/image_prompt 1 - show full image prompt\n/approve_image 1 - approve image prompt\n/reject_image 1 - reject image prompt\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/help - command list\n\nPublishing is never automatic. Images are not generated automatically.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research betrayal - show top 5 research stories\n/generate betrayal - generate 3 original story drafts\n/drafts - show latest 10 generated drafts\n/draft 1 - show full text of selected draft\n/approve 1 - approve draft without publishing\n/reject 1 - reject draft\n/image 1 - create 3 image prompts for draft 1\n/images - show latest image prompt queue\n/image_prompt 1 - show full image prompt\n/approve_image 1 - approve image prompt\n/reject_image 1 - reject image prompt\n/schedule - show tomorrow content plan\n/schedule week - create 7-day content plan\n/queue - show scheduled drafts\n/move 1 tomorrow 19:30 - move scheduled draft\n/unschedule 1 - remove from schedule\n/approve_schedule - approve schedule without publishing\n/stats - stories and traffic stats\n/help - command list\n\nPublishing is never automatic. Images are not generated automatically.`, mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
@@ -4443,6 +4812,10 @@ function telegramCommandList() {
     { command: "image_prompt", description: "Show full image prompt" },
     { command: "approve_image", description: "Approve image prompt" },
     { command: "reject_image", description: "Reject image prompt" },
+    { command: "queue", description: "Show scheduled drafts" },
+    { command: "move", description: "Move scheduled draft" },
+    { command: "unschedule", description: "Remove from schedule" },
+    { command: "approve_schedule", description: "Approve schedule" },
     { command: "ideas", description: "Generate story ideas" },
     { command: "plan", description: "Create daily plan" },
     { command: "schedule", description: "Show approval schedule" },
@@ -4535,7 +4908,11 @@ async function handleTelegramMessage(message) {
   if (command === "/generate") return telegramGenerateStory(chatId, args);
   if (command === "/ideas") return telegramIdeas(chatId);
   if (command === "/plan") return telegramPlan(chatId);
-  if (command === "/schedule") return telegramSchedule(chatId);
+  if (command === "/schedule") return telegramSchedule(chatId, args);
+  if (command === "/queue") return telegramQueue(chatId);
+  if (command === "/move") return telegramMoveSchedule(chatId, args);
+  if (command === "/unschedule") return telegramUnschedule(chatId, args[0]);
+  if (command === "/approve_schedule") return telegramApproveSchedule(chatId);
   if (command === "/stats") return telegramStats(chatId);
   if (command === "/drafts") return telegramDrafts(chatId);
   if (command === "/draft") return telegramDraftDetails(chatId, args[0]);
@@ -6609,6 +6986,21 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/autopilot/v1/plan" && ["GET", "POST"].includes(req.method)) {
     return sendJson(res, 200, await createDailyContentPlan(req.method === "POST" ? await parseBody(req) : {}));
+  }
+
+  if (pathname === "/api/autopilot/v1/scheduler-v2" && ["GET", "POST"].includes(req.method)) {
+    const payload = req.method === "POST" ? await parseBody(req) : requestQuery(req);
+    return sendJson(res, 200, await createSchedulerV2Plan(payload));
+  }
+
+  if (pathname === "/api/autopilot/v1/scheduled-posts" && req.method === "GET") {
+    return sendJson(res, 200, {
+      ok: true,
+      module: "AI Scheduler v2",
+      tomorrow: scheduleItemsForTomorrow(),
+      queue: scheduledQueueItems(100),
+      safety: { autopublishing: false, approval_required: true, publish_allowed: false }
+    });
   }
 
   if (pathname === "/api/autopilot/v1/schedule" && ["GET", "POST"].includes(req.method)) {
