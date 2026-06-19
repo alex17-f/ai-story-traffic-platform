@@ -137,6 +137,26 @@ const researchSourceProfiles = [
   { source: "Quora", query: "site:quora.com" }
 ];
 
+const researchQueryByCategory = {
+  betrayal: "betrayal life story",
+  "mother in law": "mother in law family story",
+  inheritance: "inheritance family conflict story",
+  love: "love lost and found story",
+  war: "war true family story",
+  "poverty to wealth": "poverty to wealth life story",
+  "unexpected ending": "unexpected ending true story",
+  "family conflict": "family conflict emotional story",
+  kindness: "kindness emotional true story",
+  revenge: "revenge family story"
+};
+
+const researchProviderOrder = [
+  { id: "tavily", name: "Tavily API", env: "TAVILY_API_KEY" },
+  { id: "brave", name: "Brave Search API", env: "BRAVE_SEARCH_API_KEY" },
+  { id: "serpapi", name: "SerpAPI", env: "SERPAPI_KEY" },
+  { id: "bing", name: "Bing Search API", env: "BING_SEARCH_API_KEY" }
+];
+
 function readStories() {
   return storageCache.stories;
 }
@@ -212,9 +232,13 @@ function readResearchStories() {
 }
 
 async function writeResearchStories(stories) {
-  storageCache.researchStories = stories;
-  writeJsonBackup(RESEARCH_STORIES_FILE, stories);
-  await persistResearchStories(stories);
+  const safeStories = stories.map((story) => {
+    const { snippet, raw_content, content, full_text, ...safeStory } = story || {};
+    return safeStory;
+  });
+  storageCache.researchStories = safeStories;
+  writeJsonBackup(RESEARCH_STORIES_FILE, safeStories);
+  await persistResearchStories(safeStories);
   const brain = readProjectBrain();
   const currentResearch = brain.internet_research && typeof brain.internet_research === "object"
     ? brain.internet_research
@@ -223,13 +247,13 @@ async function writeResearchStories(stories) {
     ...currentResearch,
     autopilot_v1: {
       ...(currentResearch.autopilot_v1 || {}),
-      research_stories: stories.slice(0, 100),
+      research_stories: safeStories.slice(0, 100),
       updated_at: new Date().toISOString()
     }
   };
   brain.updated_at = new Date().toISOString();
   await writeProjectBrain(brain);
-  return stories;
+  return safeStories;
 }
 
 function readStoryIdeas() {
@@ -401,9 +425,13 @@ async function ensureResearchStoriesTable() {
       emotional_intensity integer not null default 0,
       story_structure text,
       surprise_factor integer not null default 0,
+      source_status text,
+      provider text,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     );
+    alter table research_stories add column if not exists source_status text;
+    alter table research_stories add column if not exists provider text;
     create index if not exists research_stories_viral_score_idx on research_stories (viral_score desc);
     create index if not exists research_stories_similarity_score_idx on research_stories (similarity_score desc);
     create index if not exists research_stories_category_idx on research_stories (category);
@@ -567,8 +595,8 @@ async function persistResearchStories(stories) {
       await pgPool.query(
         `insert into research_stories (
           id, title, url, source, summary, emotion, keywords, viral_score, similarity_score,
-          category, emotional_intensity, story_structure, surprise_factor, created_at, updated_at
-        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          category, emotional_intensity, story_structure, surprise_factor, source_status, provider, created_at, updated_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
         on conflict (url) do update set
           title = excluded.title,
           source = excluded.source,
@@ -581,6 +609,8 @@ async function persistResearchStories(stories) {
           emotional_intensity = excluded.emotional_intensity,
           story_structure = excluded.story_structure,
           surprise_factor = excluded.surprise_factor,
+          source_status = excluded.source_status,
+          provider = excluded.provider,
           updated_at = excluded.updated_at`,
         [
           story.id || crypto.randomUUID(),
@@ -596,6 +626,8 @@ async function persistResearchStories(stories) {
           Number(story.emotional_intensity || 0),
           story.story_structure || "",
           Number(story.surprise_factor || 0),
+          story.source_status || "",
+          story.provider || "",
           pgColumnDate(story.created_at),
           pgColumnDate(story.updated_at)
         ]
@@ -2377,6 +2409,10 @@ function makeResearchSummary(title, category, source) {
   return `Summary only: public ${source || "web"} result about ${normalizeResearchCategory(category)} with ${emotion} angle. Use it as a pattern signal only; create new characters, setting, plot and ending.`;
 }
 
+function cleanResearchSnippet(value = "") {
+  return htmlDecode(String(value || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).slice(0, 320);
+}
+
 function normalizeResearchStory(raw, category) {
   const title = htmlDecode(raw.title || "Untitled story").slice(0, 220);
   const url = cleanResearchUrl(raw.url || raw.source_url || "");
@@ -2387,7 +2423,10 @@ function normalizeResearchStory(raw, category) {
       return "web";
     }
   })();
-  const summary = raw.summary || makeResearchSummary(title, category, source);
+  const snippet = cleanResearchSnippet(raw.snippet || raw.summary || "");
+  const summary = raw.summary || (snippet
+    ? `Summary only from public search snippet: ${snippet}`
+    : makeResearchSummary(title, category, source));
   const analysis = analyzeResearchStory({ title, summary, source, category, url });
   const now = new Date().toISOString();
   return {
@@ -2396,6 +2435,7 @@ function normalizeResearchStory(raw, category) {
     source,
     url,
     source_url: url,
+    snippet,
     summary,
     emotion: analysis.emotion,
     emotional_angle: analysis.emotion,
@@ -2408,6 +2448,8 @@ function normalizeResearchStory(raw, category) {
     surprise_factor: analysis.surprise_factor,
     category: normalizeResearchCategory(category),
     status: raw.status || "researched",
+    source_status: raw.source_status || "live_search",
+    provider: raw.provider || "",
     created_at: raw.created_at || now,
     updated_at: now
   };
@@ -2461,52 +2503,193 @@ function fallbackResearchItems(query) {
   ];
 }
 
-async function fetchTextWithTimeout(url, timeoutMs = 12000) {
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      headers: { "user-agent": "AI Story Traffic Platform research bot" },
+      ...options,
+      headers: {
+        "user-agent": "AI Story Traffic Platform research bot",
+        accept: "application/json",
+        ...(options.headers || {})
+      },
       signal: controller.signal
     });
-    return { ok: response.ok, status: response.status, text: await response.text() };
+    const text = await response.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text.slice(0, 500) };
+    }
+    return { ok: response.ok, status: response.status, data };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      data: {
+        error: error.name === "AbortError" ? "request_timeout" : safeMetaError(error)
+      }
+    };
   } finally {
     clearTimeout(timer);
   }
 }
 
+function researchProviderDiagnostics() {
+  return researchProviderOrder.map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    env: provider.env,
+    configured: Boolean(process.env[provider.env])
+  }));
+}
+
+function selectedResearchProvider() {
+  return researchProviderOrder.find((provider) => Boolean(process.env[provider.env])) || null;
+}
+
+function baseResearchQuery(category) {
+  const normalized = normalizeResearchCategory(category);
+  return researchQueryByCategory[normalized] || `${normalized} emotional life story`;
+}
+
 function buildResearchQuery(category, sourceProfile) {
   const normalized = normalizeResearchCategory(category);
-  const keywords = researchKeywordsForCategory(normalized).slice(0, 4).join(" ");
-  return `${sourceProfile.query} ${normalized} emotional viral true story ${keywords}`;
+  const base = baseResearchQuery(normalized);
+  const keywords = researchKeywordsForCategory(normalized).slice(0, 3).join(" ");
+  return `${base} ${sourceProfile.query} ${keywords}`.slice(0, 390);
 }
 
-function parseDuckDuckGoResults(html, category, sourceProfile, perSourceLimit) {
-  const blocks = String(html || "").split(/<div[^>]+class="result[ "\w-]*"/i).slice(1);
-  const parsed = [];
-  for (const block of blocks) {
-    const link = block.match(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
-    if (!link) continue;
-    const snippet = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i) || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/i);
-    const url = cleanResearchUrl(link[1]);
-    if (!/^https?:\/\//i.test(url)) continue;
-    parsed.push(normalizeResearchStory({
-      title: link[2],
-      url,
-      source: sourceProfile.source,
-      summary: snippet ? `Summary only from public search snippet: ${htmlDecode(snippet[1]).slice(0, 260)}` : ""
-    }, category));
-    if (parsed.length >= perSourceLimit) break;
+function sourceFromUrl(url = "") {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "web";
   }
-  return parsed;
 }
 
-async function searchResearchSource(category, sourceProfile, perSourceLimit) {
+function providerErrorMessage(data = {}) {
+  const value = data.error || data.error_message || data.message || data.detail || data.raw || "";
+  if (typeof value === "string") return value.slice(0, 220);
+  try {
+    return JSON.stringify(value).slice(0, 220);
+  } catch {
+    return "provider_error";
+  }
+}
+
+function normalizeLiveSearchResult(raw, category, provider, sourceProfile) {
+  const url = cleanResearchUrl(raw.url || raw.link || "");
+  if (!/^https?:\/\//i.test(url)) return null;
+  const snippet = cleanResearchSnippet(raw.snippet || raw.description || raw.content || raw.summary || "");
+  return normalizeResearchStory({
+    title: raw.title || raw.name || sourceFromUrl(url),
+    url,
+    source: sourceProfile?.source || sourceFromUrl(url),
+    snippet,
+    summary: snippet ? `Summary only from public search snippet: ${snippet}` : "",
+    source_status: "live_search",
+    provider: provider.name
+  }, category);
+}
+
+async function searchWithTavily(provider, query, category, sourceProfile, limit) {
+  const result = await fetchJsonWithTimeout("https://api.tavily.com/search", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${process.env[provider.env]}`
+    },
+    body: JSON.stringify({
+      query,
+      search_depth: "basic",
+      include_answer: false,
+      include_raw_content: false,
+      max_results: Math.min(limit, 10)
+    })
+  }, 14000);
+  if (!result.ok) throw new Error(`${provider.id}_status_${result.status}: ${providerErrorMessage(result.data)}`);
+  return (result.data.results || [])
+    .map((item) => normalizeLiveSearchResult({
+      title: item.title,
+      url: item.url,
+      snippet: item.content
+    }, category, provider, sourceProfile))
+    .filter(Boolean);
+}
+
+async function searchWithBrave(provider, query, category, sourceProfile, limit) {
+  const params = new URLSearchParams({
+    q: query,
+    count: String(Math.min(limit, 20)),
+    country: "US",
+    search_lang: "en",
+    extra_snippets: "true"
+  });
+  const result = await fetchJsonWithTimeout(`https://api.search.brave.com/res/v1/web/search?${params.toString()}`, {
+    headers: {
+      "X-Subscription-Token": process.env[provider.env]
+    }
+  }, 14000);
+  if (!result.ok) throw new Error(`${provider.id}_status_${result.status}: ${providerErrorMessage(result.data)}`);
+  return (result.data.web?.results || [])
+    .map((item) => normalizeLiveSearchResult({
+      title: item.title,
+      url: item.url,
+      snippet: [item.description, ...(item.extra_snippets || [])].filter(Boolean).join(" ")
+    }, category, provider, sourceProfile))
+    .filter(Boolean);
+}
+
+async function searchWithSerpApi(provider, query, category, sourceProfile, limit) {
+  const params = new URLSearchParams({
+    engine: "google",
+    q: query,
+    api_key: process.env[provider.env],
+    num: String(Math.min(limit, 20))
+  });
+  const result = await fetchJsonWithTimeout(`https://serpapi.com/search.json?${params.toString()}`, {}, 16000);
+  if (!result.ok || result.data.error) throw new Error(`${provider.id}_status_${result.status}: ${providerErrorMessage(result.data)}`);
+  return (result.data.organic_results || [])
+    .map((item) => normalizeLiveSearchResult({
+      title: item.title,
+      url: item.link,
+      snippet: item.snippet
+    }, category, provider, sourceProfile))
+    .filter(Boolean);
+}
+
+async function searchWithBing(provider, query, category, sourceProfile, limit) {
+  const params = new URLSearchParams({
+    q: query,
+    count: String(Math.min(limit, 20)),
+    mkt: "en-US",
+    responseFilter: "Webpages"
+  });
+  const result = await fetchJsonWithTimeout(`https://api.bing.microsoft.com/v7.0/search?${params.toString()}`, {
+    headers: {
+      "Ocp-Apim-Subscription-Key": process.env[provider.env]
+    }
+  }, 14000);
+  if (!result.ok) throw new Error(`${provider.id}_status_${result.status}: ${providerErrorMessage(result.data)}`);
+  return (result.data.webPages?.value || [])
+    .map((item) => normalizeLiveSearchResult({
+      title: item.name,
+      url: item.url,
+      snippet: item.snippet
+    }, category, provider, sourceProfile))
+    .filter(Boolean);
+}
+
+async function searchLiveResearchSource(provider, category, sourceProfile, perSourceLimit) {
   const query = buildResearchQuery(category, sourceProfile);
-  const searchUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  const result = await fetchTextWithTimeout(searchUrl, 9000);
-  if (!result.ok) throw new Error(`${sourceProfile.source}: search_status_${result.status}`);
-  return parseDuckDuckGoResults(result.text, category, sourceProfile, perSourceLimit);
+  if (provider.id === "tavily") return searchWithTavily(provider, query, category, sourceProfile, perSourceLimit);
+  if (provider.id === "brave") return searchWithBrave(provider, query, category, sourceProfile, perSourceLimit);
+  if (provider.id === "serpapi") return searchWithSerpApi(provider, query, category, sourceProfile, perSourceLimit);
+  if (provider.id === "bing") return searchWithBing(provider, query, category, sourceProfile, perSourceLimit);
+  throw new Error("research_provider_not_supported");
 }
 
 function fallbackResearchStories(category, limit) {
@@ -2524,7 +2707,9 @@ function fallbackResearchStories(category, limit) {
     source,
     url,
     summary: makeResearchSummary(title, normalized, source),
-    status: "fallback_seed"
+    status: "fallback_seed",
+    source_status: "fallback_seed",
+    provider: "fallback_seed"
   }, normalized));
 }
 
@@ -2533,13 +2718,19 @@ async function runInternetStoryResearch(payload = {}) {
   const limit = Math.max(1, Math.min(Number(payload.limit || 20), 40));
   const perSourceLimit = Math.max(2, Math.ceil(limit / researchSourceProfiles.length) + 1);
   const searchErrors = [];
+  const provider = selectedResearchProvider();
+  const providerDiagnostics = researchProviderDiagnostics();
+  const providerUsed = provider?.name || "none";
+  const liveSearchAttempted = Boolean(provider);
   let found = [];
-  const sourceResults = await Promise.allSettled(
-    researchSourceProfiles.map((sourceProfile) => searchResearchSource(category, sourceProfile, perSourceLimit))
-  );
-  for (const result of sourceResults) {
-    if (result.status === "fulfilled") found.push(...result.value);
-    if (result.status === "rejected") searchErrors.push(result.reason?.message || "search_failed");
+  if (provider) {
+    const sourceResults = await Promise.allSettled(
+      researchSourceProfiles.map((sourceProfile) => searchLiveResearchSource(provider, category, sourceProfile, perSourceLimit))
+    );
+    for (const result of sourceResults) {
+      if (result.status === "fulfilled") found.push(...result.value);
+      if (result.status === "rejected") searchErrors.push(result.reason?.message || "search_failed");
+    }
   }
   const byFoundUrl = new Map();
   for (const story of found) {
@@ -2548,21 +2739,20 @@ async function runInternetStoryResearch(payload = {}) {
   found = [...byFoundUrl.values()]
     .sort((a, b) => (b.viral_score + b.similarity_score) - (a.viral_score + a.similarity_score))
     .slice(0, limit);
-  let sourceStatus = "live_search";
+  let sourceStatus = found.length ? "live_search" : "fallback_seed";
   if (!found.length) {
-    sourceStatus = "fallback_seed";
     found = fallbackResearchStories(category, limit);
-  } else if (searchErrors.length) {
-    sourceStatus = "partial_live_search";
   }
 
   const existingStories = readResearchStories();
   const byUrl = new Map(existingStories.map((item) => [item.url || item.source_url, item]));
   let savedNew = 0;
+  let skippedDuplicates = 0;
   for (const story of found) {
     const key = story.url || story.source_url;
     if (!key) continue;
     if (!byUrl.has(key)) savedNew += 1;
+    else skippedDuplicates += 1;
     byUrl.set(key, { ...(byUrl.get(key) || {}), ...story, updated_at: new Date().toISOString() });
   }
   const stories = [...byUrl.values()]
@@ -2582,19 +2772,54 @@ async function runInternetStoryResearch(payload = {}) {
     updated_at: story.updated_at
   }));
   await writeInternetResearchItems(items.slice(0, 100));
-  return {
-    ok: true,
-    module: "Internet Research AI v1",
+  const runDiagnostics = {
+    provider_used: providerUsed,
+    source_status: sourceStatus,
+    live_search_attempted: liveSearchAttempted,
+    configured_providers: providerDiagnostics.filter((item) => item.configured).map((item) => item.name),
+    provider_config: providerDiagnostics,
+    results_count: found.length,
+    found_count: found.length,
+    saved_new: savedNew,
+    skipped_duplicates: skippedDuplicates,
+    search_errors: searchErrors.slice(0, 8),
     category,
     limit,
+    updated_at: new Date().toISOString()
+  };
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object"
+    ? brain.internet_research
+    : {};
+  brain.internet_research = {
+    ...currentResearch,
+    autopilot_v1: {
+      ...(currentResearch.autopilot_v1 || {}),
+      latest_run: runDiagnostics,
+      updated_at: new Date().toISOString()
+    }
+  };
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return {
+    ok: true,
+    module: "Internet Research AI v2",
+    category,
+    limit,
+    provider_used: providerUsed,
+    provider_config: providerDiagnostics,
+    live_search_attempted: liveSearchAttempted,
     source_status: sourceStatus,
     search_errors: searchErrors.slice(0, 8),
     found_count: found.length,
+    results_count: found.length,
     saved_new: savedNew,
+    skipped_duplicates: skippedDuplicates,
     stories: found.map((story) => ({
       title: story.title,
       source: story.source,
       url: story.url || story.source_url,
+      snippet: story.snippet || shortText(story.summary || "", 220),
       summary: story.summary,
       emotion: story.emotion,
       keywords: story.keywords,
@@ -2603,7 +2828,9 @@ async function runInternetStoryResearch(payload = {}) {
       emotional_intensity: story.emotional_intensity,
       story_structure: story.story_structure,
       surprise_factor: story.surprise_factor,
-      viral_probability: story.viral_probability
+      viral_probability: story.viral_probability,
+      source_status: story.source_status || sourceStatus,
+      provider: story.provider || providerUsed
     })),
     items,
     sources: researchSourceProfiles.map((item) => item.source),
@@ -2895,6 +3122,7 @@ function renderAutopilotV1Dashboard() {
   const similarStories = [...researchStories].sort((a, b) => Number(b.similarity_score || 0) - Number(a.similarity_score || 0)).slice(0, 8);
   const storyEmotions = countBy(researchStories, (item) => item.emotion || "unknown").slice(0, 8);
   const storySources = countBy(researchStories, (item) => item.source || "unknown").slice(0, 8);
+  const latestResearchRun = autopilotV1BrainState().latest_run || {};
   const card = (title, value, detail) => `<article><span>${escapeHtml(title)}</span><strong>${escapeHtml(String(value))}</strong><p>${escapeHtml(detail)}</p></article>`;
   const rows = (items, empty, mapper) => items.length
     ? items.map(mapper).join("")
@@ -2982,6 +3210,9 @@ function renderAutopilotV1Dashboard() {
         <h2>Internet Research AI</h2>
         <div class="autopilot-status-grid">
           ${card("Research Stories", researchStories.length, "Saved summaries with source links only")}
+          ${card("Search Mode", latestResearchRun.source_status || "not run", "live_search only when a search API key is configured")}
+          ${card("Provider", latestResearchRun.provider_used || "none", (latestResearchRun.configured_providers || []).length ? `Configured: ${(latestResearchRun.configured_providers || []).join(", ")}` : "Add Tavily, Brave, SerpAPI or Bing key")}
+          ${card("Last Results", latestResearchRun.results_count || 0, `Saved new ${latestResearchRun.saved_new || 0}, skipped duplicates ${latestResearchRun.skipped_duplicates || 0}`)}
           ${card("Top Emotion", storyEmotions[0]?.name || "not enough data", `${storyEmotions[0]?.count || 0} stories`)}
           ${card("Top Source", storySources[0]?.name || "not enough data", `${storySources[0]?.count || 0} stories`)}
         </div>
@@ -2992,7 +3223,7 @@ function renderAutopilotV1Dashboard() {
         <div class="facebook-table-wrap">
           <table class="facebook-table">
             <thead><tr><th>Title</th><th>Source</th><th>Emotion</th><th>Scores</th></tr></thead>
-            <tbody>${rows(trendingStories, "Run Internet Research first.", (item) => `<tr><td><a href="${escapeHtml(item.url || item.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a></td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.emotion)}</td><td>viral ${Number(item.viral_score || 0)} / similar ${Number(item.similarity_score || 0)}</td></tr>`)}</tbody>
+            <tbody>${rows(trendingStories, "Run Internet Research first.", (item) => `<tr><td><a href="${escapeHtml(item.url || item.source_url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a></td><td>${escapeHtml(item.source)}</td><td>${escapeHtml(item.emotion)}</td><td>viral ${Number(item.viral_score || 0)} / similar ${Number(item.similarity_score || 0)} / ${escapeHtml(item.source_status || "unknown")}</td></tr>`)}</tbody>
           </table>
         </div>
       </section>
@@ -3388,7 +3619,7 @@ async function telegramResearch(chatId, category = "") {
     .slice(0, 10)
     .map((item, index) => `${index + 1}. ${item.title}\n${item.source} · viral ${item.viral_score} · similar ${item.similarity_score}`)
     .join("\n\n") || "No research stories";
-  return sendTelegramMessage(chatId, `<b>Internet Research AI</b>\n\nCategory: ${escapeHtml(result.category)}\nMode: ${escapeHtml(result.source_status)}\nStories found: ${result.found_count}\nSaved new: ${result.saved_new}\n\nTop emotions:\n${escapeHtml(emotions)}\n\nTop 10 stories:\n${escapeHtml(topStories)}\n\nSummaries only. Source links are stored. No copying.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Internet Research AI v2</b>\n\nCategory: ${escapeHtml(result.category)}\nProvider: ${escapeHtml(result.provider_used)}\nMode: ${escapeHtml(result.source_status)}\nResults: ${result.results_count}\nSaved new: ${result.saved_new}\nSkipped duplicates: ${result.skipped_duplicates}\n\nTop emotions:\n${escapeHtml(emotions)}\n\nTop 10 stories:\n${escapeHtml(topStories)}\n\nSummaries only. Source links are stored. No copying.`, mainTelegramKeyboard());
 }
 
 async function telegramIdeas(chatId) {
@@ -3450,7 +3681,7 @@ async function legacyTelegramHelp(chatId) {
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research - run Internet Research AI\n/research betrayal - research betrayal stories\n/research love - research love stories\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/drafts - drafts and stories waiting for review\n/approve STORY_ID - approve a story locally\n/reject STORY_ID - reject a story locally\n/help - command list\n\nButtons:\nApprove - marks story as approved\nEdit - returns story to review\nReject - marks story as rejected\n\nPublishing is never automatic. Research stores summaries and links only; no copying.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research - run Internet Research AI v2\n/research betrayal - research betrayal stories\n/research love - research love stories\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/drafts - drafts and stories waiting for review\n/approve STORY_ID - approve a story locally\n/reject STORY_ID - reject a story locally\n/help - command list\n\nButtons:\nApprove - marks story as approved\nEdit - returns story to review\nReject - marks story as rejected\n\nPublishing is never automatic. Research stores summaries and links only; no copying.`, mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
