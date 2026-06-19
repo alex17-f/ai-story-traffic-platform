@@ -3305,6 +3305,40 @@ async function generateOriginalStoryV2(payload = {}) {
   };
 }
 
+async function generateOriginalStoriesV2(payload = {}) {
+  const count = Math.max(1, Math.min(Number(payload.count || 3), 8));
+  const generated = [];
+  for (let index = 0; index < count; index += 1) {
+    const result = await generateOriginalStoryV2({
+      ...payload,
+      count: 1
+    });
+    generated.push(result.story);
+  }
+  return {
+    ok: true,
+    module: "Story Generator v2",
+    count: generated.length,
+    stories: generated,
+    story: generated[0] || null,
+    preview: generated.map((story, index) => ({
+      index: index + 1,
+      title: story.title,
+      emotion: story.emotion,
+      viral_prediction_score: story.viral_prediction_score,
+      hook: story.hook,
+      status: story.status
+    })),
+    generated_stories_count: readGeneratedStories().length,
+    safety: {
+      copied_research_text: false,
+      source_links_only_for_inspiration: true,
+      approval_required: true,
+      publish_allowed: false
+    }
+  };
+}
+
 function imagePromptForIdea(idea) {
   return [
     "Photorealistic everyday family photo for a life story.",
@@ -3865,6 +3899,34 @@ async function sendTelegramMessage(chatId, text, replyMarkup) {
   });
 }
 
+async function sendTelegramLongMessage(chatId, text, replyMarkup, limit = 3400) {
+  const source = String(text || "");
+  if (source.length <= limit) return sendTelegramMessage(chatId, source, replyMarkup);
+  const chunks = [];
+  let current = "";
+  for (const part of source.split(/\n\n/)) {
+    const next = current ? `${current}\n\n${part}` : part;
+    if (next.length <= limit) {
+      current = next;
+      continue;
+    }
+    if (current) chunks.push(current);
+    if (part.length <= limit) {
+      current = part;
+      continue;
+    }
+    for (let index = 0; index < part.length; index += limit) {
+      chunks.push(part.slice(index, index + limit));
+    }
+    current = "";
+  }
+  if (current) chunks.push(current);
+  for (let index = 0; index < chunks.length; index += 1) {
+    await sendTelegramMessage(chatId, chunks[index], index === chunks.length - 1 ? replyMarkup : undefined);
+  }
+  return { ok: true, chunks: chunks.length };
+}
+
 async function sendTelegramPhoto(chatId, photo, caption, replyMarkup) {
   if (!photo || photo.startsWith("/")) {
     return sendTelegramMessage(chatId, `${caption}\n\nИзображение: ${photo || "нет"}`, replyMarkup);
@@ -3987,10 +4049,10 @@ async function telegramResearch(chatId, category = "") {
     .map((item) => `- ${item.name}: ${item.count}`)
     .join("\n") || "No emotions yet";
   const topStories = (result.stories || [])
-    .slice(0, 10)
-    .map((item, index) => `${index + 1}. ${item.title}\n${item.source} · viral ${item.viral_score} · similar ${item.similarity_score}`)
+    .slice(0, 5)
+    .map((item, index) => `${index + 1}. ${item.title}\nSource: ${item.source}\nviral_score: ${item.viral_score}\nsimilarity_score: ${item.similarity_score}`)
     .join("\n\n") || "No research stories";
-  return sendTelegramMessage(chatId, `<b>Internet Research AI v2</b>\n\nCategory: ${escapeHtml(result.category)}\nProvider: ${escapeHtml(result.provider_used)}\nMode: ${escapeHtml(result.source_status)}\nResults: ${result.results_count}\nSaved new: ${result.saved_new}\nSkipped duplicates: ${result.skipped_duplicates}\n\nTop emotions:\n${escapeHtml(emotions)}\n\nTop 10 stories:\n${escapeHtml(topStories)}\n\nSummaries only. Source links are stored. No copying.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Internet Research AI v2</b>\n\nCategory: ${escapeHtml(result.category)}\nProvider: ${escapeHtml(result.provider_used)}\nMode: ${escapeHtml(result.source_status)}\nResults: ${result.results_count}\nSaved new: ${result.saved_new}\nSkipped duplicates: ${result.skipped_duplicates}\n\nTop emotions:\n${escapeHtml(emotions)}\n\nTop 5 research stories:\n${escapeHtml(topStories)}\n\nSummaries only. Source links are stored. No copying.`, mainTelegramKeyboard());
 }
 
 async function telegramIdeas(chatId) {
@@ -3999,29 +4061,71 @@ async function telegramIdeas(chatId) {
   return sendTelegramMessage(chatId, `<b>Story Generator</b>\n\nGenerated: ${result.generated_count}\n\n${escapeHtml(ideas)}\n\nStatus: needs approval. Nothing was published.`, mainTelegramKeyboard());
 }
 
-async function telegramGenerateStory(chatId, category = "") {
-  const result = await generateOriginalStoryV2({ category: category || "betrayal", length: "medium" });
-  const story = result.story;
+function parseTelegramCategoryAndCount(args = [], defaultCategory = "betrayal", defaultCount = 3) {
+  const parts = Array.isArray(args) ? args : String(args || "").split(/\s+/).filter(Boolean);
+  const last = parts[parts.length - 1];
+  const count = /^\d+$/.test(last || "") ? Math.max(1, Math.min(Number(last), 8)) : defaultCount;
+  const categoryParts = /^\d+$/.test(last || "") ? parts.slice(0, -1) : parts;
+  return {
+    category: categoryParts.join(" ").trim() || defaultCategory,
+    count
+  };
+}
+
+function latestGeneratedDrafts(limit = 10) {
+  return [...readGeneratedStories()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function generatedDraftByNumber(numberText) {
+  const index = Number(numberText);
+  if (!Number.isInteger(index) || index < 1) return null;
+  return latestGeneratedDrafts(10)[index - 1] || null;
+}
+
+async function updateGeneratedDraftStatusByNumber(numberText, status) {
+  const draft = generatedDraftByNumber(numberText);
+  if (!draft) return null;
+  const generated = readGeneratedStories();
+  const updated = generated.map((item) => item.id === draft.id
+    ? {
+        ...item,
+        status,
+        approval_required: true,
+        publish_allowed: false,
+        updated_at: new Date().toISOString()
+      }
+    : item);
+  await writeGeneratedStories(updated);
+  return updated.find((item) => item.id === draft.id);
+}
+
+async function telegramGenerateStory(chatId, args = []) {
+  const { category, count } = parseTelegramCategoryAndCount(args, "betrayal", 3);
+  const result = await generateOriginalStoriesV2({ category, length: "medium", count });
+  const previews = result.stories.map((story, index) => [
+    `${index + 1}. ${story.title}`,
+    `emotion: ${story.emotion}`,
+    `viral_prediction_score: ${story.viral_prediction_score}/100`,
+    `hook: ${story.hook}`
+  ].join("\n")).join("\n\n");
   const text = [
     "<b>Story Generator v2</b>",
     "",
-    `Category: ${escapeHtml(story.category)}`,
-    `Emotion: ${escapeHtml(story.emotion)}`,
-    `Score: ${story.viral_prediction_score}/100`,
-    `Status: ${escapeHtml(story.status)}`,
+    `Generated drafts: ${result.count}`,
+    `Category: ${escapeHtml(normalizeResearchCategory(category))}`,
+    "Status: needs_approval",
     "",
-    `<b>${escapeHtml(story.title)}</b>`,
+    escapeHtml(previews),
     "",
-    escapeHtml(shortText(story.hook, 500)),
+    "Use /drafts to see the queue.",
+    "Use /draft 1 to read the full text.",
+    "Use /approve 1 or /reject 1 to review.",
     "",
-    escapeHtml(shortText(story.full_story, 1200)),
-    "",
-    `<b>Why it should work</b>`,
-    escapeHtml(shortText(story.why_it_should_work, 700)),
-    "",
-    "Approval required. Nothing was published."
+    "Nothing was published."
   ].join("\n");
-  return sendTelegramMessage(chatId, text, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
 }
 
 async function telegramPlan(chatId) {
@@ -4040,28 +4144,66 @@ async function telegramSchedule(chatId) {
 }
 
 async function telegramDrafts(chatId) {
-  const stories = readStories()
-    .filter((story) => ["draft", "review", "approved"].includes(normalizeStoryStatus(story.status)))
-    .slice(0, 8);
-  if (!stories.length) return sendTelegramMessage(chatId, "Черновиков и историй на проверке сейчас нет.", mainTelegramKeyboard());
-  const text = stories.map((story, index) => `${index + 1}. <b>${escapeHtml(story.title)}</b>\nID: <code>${escapeHtml(story.id)}</code>\nСтатус: ${storyTelegramStatus(story)}\nТема: ${escapeHtml(story.category)}`).join("\n\n");
-  return sendTelegramMessage(chatId, `📝 <b>Drafts / Review</b>\n\n${text}`, {
-    inline_keyboard: stories.map((story) => [
-      { text: `✅ ${shortText(story.title, 24)}`, callback_data: `approve:${story.id}` },
-      { text: "✏ Edit", callback_data: `rewrite:${story.id}` },
-      { text: "❌ Reject", callback_data: `reject:${story.id}` }
-    ]).concat([[{ text: "⬅ Меню", callback_data: "menu:start" }]])
-  });
+  const drafts = latestGeneratedDrafts(10);
+  if (!drafts.length) return sendTelegramMessage(chatId, "No generated story drafts yet. Use /generate betrayal first.", mainTelegramKeyboard());
+  const text = drafts.map((draft, index) => [
+    `${index + 1}. <b>${escapeHtml(draft.title)}</b>`,
+    `category: ${escapeHtml(draft.category || "")}`,
+    `emotion: ${escapeHtml(draft.emotion || "")}`,
+    `score: ${Number(draft.viral_prediction_score || 0)}/100`,
+    `status: ${escapeHtml(draft.status || "needs_approval")}`
+  ].join("\n")).join("\n\n");
+  return sendTelegramMessage(chatId, `<b>Latest Generated Drafts</b>\n\n${text}\n\nUse /draft 1 for full text.\nUse /approve 1 or /reject 1 to review.\nNothing is published automatically.`, mainTelegramKeyboard());
+}
+
+async function telegramDraftDetails(chatId, numberText) {
+  const draft = generatedDraftByNumber(numberText);
+  if (!draft) return sendTelegramMessage(chatId, "Draft not found. Use /drafts to see numbers 1-10.", mainTelegramKeyboard());
+  const header = [
+    `<b>Draft ${escapeHtml(numberText)}</b>`,
+    "",
+    `<b>${escapeHtml(draft.title)}</b>`,
+    `category: ${escapeHtml(draft.category || "")}`,
+    `emotion: ${escapeHtml(draft.emotion || "")}`,
+    `score: ${Number(draft.viral_prediction_score || 0)}/100`,
+    `status: ${escapeHtml(draft.status || "needs_approval")}`,
+    "",
+    `<b>Hook</b>`,
+    escapeHtml(draft.hook || ""),
+    "",
+    `<b>Full story</b>`,
+    escapeHtml(draft.full_story || ""),
+    "",
+    `<b>Moral</b>`,
+    escapeHtml(draft.moral || ""),
+    "",
+    `<b>Image prompt</b>`,
+    escapeHtml(draft.image_prompt || ""),
+    "",
+    `<b>Why it should work</b>`,
+    escapeHtml(draft.why_it_should_work || ""),
+    "",
+    "Approval required. Use /approve 1 or /reject 1. Nothing is published automatically."
+  ].join("\n");
+  return sendTelegramLongMessage(chatId, header, mainTelegramKeyboard());
 }
 
 async function telegramApproveCommand(chatId, id) {
   if (!id) return telegramDrafts(chatId);
+  if (/^\d+$/.test(String(id))) {
+    const draft = await updateGeneratedDraftStatusByNumber(id, "approved");
+    return sendTelegramMessage(chatId, draft ? `Approved draft ${id}: ${escapeHtml(draft.title)}\nStatus: ${escapeHtml(draft.status)}\n\nNot published. Manual publishing/approval flow is still required.` : "Draft not found. Use /drafts to see numbers 1-10.", mainTelegramKeyboard());
+  }
   const result = setStoryStatusFromTelegram(id, "approve");
   return sendTelegramMessage(chatId, result ? `✅ Approved: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(result.status)}\n\nNothing was published automatically.` : "История не найдена.", mainTelegramKeyboard());
 }
 
 async function telegramRejectCommand(chatId, id) {
   if (!id) return telegramDrafts(chatId);
+  if (/^\d+$/.test(String(id))) {
+    const draft = await updateGeneratedDraftStatusByNumber(id, "rejected");
+    return sendTelegramMessage(chatId, draft ? `Rejected draft ${id}: ${escapeHtml(draft.title)}\nStatus: ${escapeHtml(draft.status)}\n\nNothing was deleted or published.` : "Draft not found. Use /drafts to see numbers 1-10.", mainTelegramKeyboard());
+  }
   const result = setStoryStatusFromTelegram(id, "reject");
   return sendTelegramMessage(chatId, result ? `❌ Rejected: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(result.status)}\n\nNothing was deleted or published.` : "История не найдена.", mainTelegramKeyboard());
 }
@@ -4077,7 +4219,7 @@ async function legacyTelegramHelp(chatId) {
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research - run Internet Research AI v2\n/research betrayal - research betrayal stories\n/generate betrayal - generate original story draft\n/generate love - generate love story draft\n/generate inheritance - generate inheritance story draft\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/drafts - drafts and stories waiting for review\n/approve STORY_ID - approve a story locally\n/reject STORY_ID - reject a story locally\n/help - command list\n\nButtons:\nApprove - marks story as approved\nEdit - returns story to review\nReject - marks story as rejected\n\nPublishing is never automatic. Research stores summaries and links only; no copying.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research betrayal - show top 5 research stories\n/generate betrayal - generate 3 original story drafts\n/generate betrayal 5 - generate 5 story drafts\n/generate love - generate love drafts\n/generate inheritance - generate inheritance drafts\n/drafts - show latest 10 generated drafts\n/draft 1 - show full text of selected draft\n/approve 1 - approve draft without publishing\n/reject 1 - reject draft\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/help - command list\n\nPublishing is never automatic. Research stores summaries and links only; no copying.`, mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
@@ -4087,6 +4229,7 @@ function telegramCommandList() {
     { command: "analyze", description: "Analyze stored posts" },
     { command: "research", description: "Research story trends" },
     { command: "generate", description: "Generate original story draft" },
+    { command: "draft", description: "Show full generated draft" },
     { command: "ideas", description: "Generate story ideas" },
     { command: "plan", description: "Create daily plan" },
     { command: "schedule", description: "Show approval schedule" },
@@ -4176,12 +4319,13 @@ async function handleTelegramMessage(message) {
   if (command === "/load_posts") return telegramLoadPosts(chatId);
   if (command === "/analyze") return telegramAnalyze(chatId);
   if (command === "/research") return telegramResearch(chatId, args.join(" "));
-  if (command === "/generate") return telegramGenerateStory(chatId, args.join(" "));
+  if (command === "/generate") return telegramGenerateStory(chatId, args);
   if (command === "/ideas") return telegramIdeas(chatId);
   if (command === "/plan") return telegramPlan(chatId);
   if (command === "/schedule") return telegramSchedule(chatId);
   if (command === "/stats") return telegramStats(chatId);
   if (command === "/drafts") return telegramDrafts(chatId);
+  if (command === "/draft") return telegramDraftDetails(chatId, args[0]);
   if (command === "/approve") return telegramApproveCommand(chatId, args[0]);
   if (command === "/reject") return telegramRejectCommand(chatId, args[0]);
   if (command === "/stories") return telegramStories(chatId);
@@ -6225,7 +6369,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === "/api/autopilot/v1/generate-story" && req.method === "POST") {
-    return sendJson(res, 200, await generateOriginalStoryV2(await parseBody(req)));
+    return sendJson(res, 200, await generateOriginalStoriesV2(await parseBody(req)));
   }
 
   if (pathname === "/api/autopilot/v1/image-queue" && ["GET", "POST"].includes(req.method)) {
