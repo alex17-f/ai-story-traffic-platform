@@ -19,6 +19,7 @@ const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
 const FACEBOOK_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
 const FACEBOOK_GRAPH_VERSION = "v20.0";
+const TELEGRAM_WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL || "https://ai-story-traffic-platform.vercel.app/api/telegram/webhook";
 const facebookReadPermissions = [
   "pages_show_list",
   "pages_read_engagement",
@@ -2752,10 +2753,13 @@ function renderAutopilotDashboard() {
 }
 
 function telegramConfigStatus() {
+  const configured = Boolean(process.env.BOT_TOKEN && process.env.CHAT_ID);
   return {
-    configured: Boolean(process.env.BOT_TOKEN && process.env.CHAT_ID),
+    ok: configured,
+    configured,
     has_bot_token: Boolean(process.env.BOT_TOKEN),
-    has_chat_id: Boolean(process.env.CHAT_ID)
+    has_chat_id: Boolean(process.env.CHAT_ID),
+    webhook_url: TELEGRAM_WEBHOOK_URL
   };
 }
 
@@ -2767,6 +2771,93 @@ async function telegramApi(method, payload = {}) {
     body: JSON.stringify(payload)
   });
   return response.json();
+}
+
+function safeTelegramApiResult(result) {
+  if (!result) return { ok: false, error_code: "bot_token_missing", description: "BOT_TOKEN is missing." };
+  return {
+    ok: Boolean(result.ok),
+    error_code: result.error_code || null,
+    description: result.description || "",
+    result: result.result || null
+  };
+}
+
+async function telegramBotInfo() {
+  const result = safeTelegramApiResult(await telegramApi("getMe"));
+  return {
+    ok: result.ok,
+    username: result.result?.username || "",
+    first_name: result.result?.first_name || "",
+    id_present: Boolean(result.result?.id),
+    error_code: result.error_code,
+    description: result.description
+  };
+}
+
+async function telegramWebhookInfo() {
+  const config = telegramConfigStatus();
+  const bot = await telegramBotInfo();
+  const info = safeTelegramApiResult(await telegramApi("getWebhookInfo"));
+  return {
+    ok: config.configured && bot.ok && info.ok,
+    configured: config.configured,
+    has_bot_token: config.has_bot_token,
+    has_chat_id: config.has_chat_id,
+    target_webhook_url: TELEGRAM_WEBHOOK_URL,
+    bot_username: bot.username,
+    bot: {
+      ok: bot.ok,
+      username: bot.username,
+      first_name: bot.first_name,
+      id_present: bot.id_present,
+      error_code: bot.error_code,
+      description: bot.description
+    },
+    webhook: {
+      ok: info.ok,
+      url: info.result?.url || "",
+      pending_update_count: Number(info.result?.pending_update_count || 0),
+      last_error_message: info.result?.last_error_message || "",
+      last_error_date: info.result?.last_error_date || null,
+      max_connections: info.result?.max_connections || null,
+      allowed_updates: info.result?.allowed_updates || []
+    },
+    error_code: info.error_code,
+    description: info.description
+  };
+}
+
+async function setTelegramWebhook() {
+  if (!telegramConfigStatus().configured) {
+    return {
+      ok: false,
+      configured: false,
+      code: "telegram_env_missing",
+      message: "BOT_TOKEN or CHAT_ID is missing in environment variables.",
+      webhook_url: TELEGRAM_WEBHOOK_URL
+    };
+  }
+  const commands = await registerTelegramCommands();
+  const result = safeTelegramApiResult(await telegramApi("setWebhook", {
+    url: TELEGRAM_WEBHOOK_URL,
+    allowed_updates: ["message", "callback_query"],
+    drop_pending_updates: false
+  }));
+  const info = await telegramWebhookInfo();
+  return {
+    ok: result.ok,
+    configured: true,
+    webhook_url: TELEGRAM_WEBHOOK_URL,
+    message: result.description || (result.ok ? "Telegram webhook set." : "Telegram webhook was not set."),
+    set_webhook: {
+      ok: result.ok,
+      error_code: result.error_code,
+      description: result.description
+    },
+    set_commands: safeTelegramApiResult(commands),
+    webhook_info: info
+  };
 }
 
 function mainTelegramKeyboard() {
@@ -3053,31 +3144,51 @@ async function handleTelegramCallback(callback) {
   }
 }
 
+function telegramCommandParts(text = "") {
+  const parts = String(text || "").trim().split(/\s+/).filter(Boolean);
+  const raw = (parts[0] || "").toLowerCase();
+  return {
+    command: raw.replace(/@[\w_]+$/, ""),
+    args: parts.slice(1)
+  };
+}
+
+async function handleTelegramUpdate(update = {}) {
+  if (update.message) await handleTelegramMessage(update.message);
+  if (update.callback_query) await handleTelegramCallback(update.callback_query);
+  return {
+    ok: true,
+    update_id: update.update_id || null,
+    handled: Boolean(update.message || update.callback_query)
+  };
+}
+
 async function handleTelegramMessage(message) {
   const chatId = message.chat.id;
   const text = (message.text || "").trim();
+  const { command, args } = telegramCommandParts(text);
   if (process.env.CHAT_ID && String(chatId) !== String(process.env.CHAT_ID)) {
     return sendTelegramMessage(chatId, "Этот бот привязан к другому CHAT_ID.");
   }
-  if (text === "/start") return telegramStart(chatId);
-  if (text === "/help") return telegramHelp(chatId);
-  if (text === "/status") return telegramStatus(chatId);
-  if (text === "/load_posts") return telegramLoadPosts(chatId);
-  if (text === "/analyze") return telegramAnalyze(chatId);
-  if (text === "/research") return telegramResearch(chatId);
-  if (text === "/ideas") return telegramIdeas(chatId);
-  if (text === "/plan") return telegramPlan(chatId);
-  if (text === "/schedule") return telegramSchedule(chatId);
-  if (text === "/stats") return telegramStats(chatId);
-  if (text === "/drafts") return telegramDrafts(chatId);
-  if (text === "/approve" || text.startsWith("/approve ")) return telegramApproveCommand(chatId, text.split(/\s+/)[1]);
-  if (text === "/reject" || text.startsWith("/reject ")) return telegramRejectCommand(chatId, text.split(/\s+/)[1]);
-  if (text === "/stories") return telegramStories(chatId);
-  if (text === "/images") return telegramImages(chatId);
-  if (text === "/audience") return telegramAudience(chatId);
-  if (text === "/competitors") return telegramCompetitors(chatId);
-  if (text === "/autopilot") return telegramAutopilot(chatId);
-  if (text === "/settings") return telegramSettings(chatId);
+  if (command === "/start") return telegramStart(chatId);
+  if (command === "/help") return telegramHelp(chatId);
+  if (command === "/status") return telegramStatus(chatId);
+  if (command === "/load_posts") return telegramLoadPosts(chatId);
+  if (command === "/analyze") return telegramAnalyze(chatId);
+  if (command === "/research") return telegramResearch(chatId);
+  if (command === "/ideas") return telegramIdeas(chatId);
+  if (command === "/plan") return telegramPlan(chatId);
+  if (command === "/schedule") return telegramSchedule(chatId);
+  if (command === "/stats") return telegramStats(chatId);
+  if (command === "/drafts") return telegramDrafts(chatId);
+  if (command === "/approve") return telegramApproveCommand(chatId, args[0]);
+  if (command === "/reject") return telegramRejectCommand(chatId, args[0]);
+  if (command === "/stories") return telegramStories(chatId);
+  if (command === "/images") return telegramImages(chatId);
+  if (command === "/audience") return telegramAudience(chatId);
+  if (command === "/competitors") return telegramCompetitors(chatId);
+  if (command === "/autopilot") return telegramAutopilot(chatId);
+  if (command === "/settings") return telegramSettings(chatId);
   return telegramStart(chatId);
 }
 
@@ -3092,8 +3203,7 @@ async function pollTelegram() {
     const result = await telegramApi("getUpdates", { offset: telegramOffset, timeout: 20, allowed_updates: ["message", "callback_query"] });
     for (const update of result?.result || []) {
       telegramOffset = update.update_id + 1;
-      if (update.message) await handleTelegramMessage(update.message);
-      if (update.callback_query) await handleTelegramCallback(update.callback_query);
+      await handleTelegramUpdate(update);
     }
   } catch (error) {
     console.warn(`Telegram polling failed: ${error.message}`);
@@ -4873,7 +4983,41 @@ function parseBody(req) {
 
 async function handleApi(req, res, pathname) {
   if (pathname === "/api/telegram/status" && req.method === "GET") {
-    return sendJson(res, 200, telegramConfigStatus());
+    const config = telegramConfigStatus();
+    let bot = { ok: false, username: "" };
+    if (config.has_bot_token) bot = await telegramBotInfo();
+    return sendJson(res, 200, {
+      ...config,
+      ok: config.configured && bot.ok,
+      bot_username: bot.username || "",
+      bot_ok: bot.ok,
+      message: config.configured
+        ? (bot.ok ? "Telegram env is configured and bot token is valid." : "Telegram env exists, but bot token check failed.")
+        : "Telegram is not configured. BOT_TOKEN and CHAT_ID are required."
+    });
+  }
+
+  if (pathname === "/api/telegram/webhook" && req.method === "POST") {
+    try {
+      const update = await parseBody(req);
+      const result = await handleTelegramUpdate(update);
+      return sendJson(res, 200, result);
+    } catch (error) {
+      console.warn(`Telegram webhook failed: ${error.message}`);
+      return sendJson(res, 200, {
+        ok: false,
+        code: "telegram_webhook_failed",
+        message: error.message
+      });
+    }
+  }
+
+  if (pathname === "/api/telegram/set-webhook" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await setTelegramWebhook());
+  }
+
+  if (pathname === "/api/telegram/webhook-info" && req.method === "GET") {
+    return sendJson(res, 200, await telegramWebhookInfo());
   }
 
   if (pathname === "/api/stories" && req.method === "GET") {
