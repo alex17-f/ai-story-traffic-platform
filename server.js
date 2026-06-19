@@ -3228,6 +3228,153 @@ function imagePromptForGeneratedStory(story, profile) {
   ].join(" ");
 }
 
+function latestGeneratedDraftItems(limit = 10) {
+  return [...readGeneratedStories()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function generatedDraftByRef(ref) {
+  const value = String(ref || "").trim();
+  if (!value) return null;
+  if (/^\d+$/.test(value)) return latestGeneratedDraftItems(10)[Number(value) - 1] || null;
+  return readGeneratedStories().find((story) => story.id === value) || null;
+}
+
+function extractImageSceneSignals(story = {}) {
+  const text = `${story.title || ""} ${story.hook || ""} ${story.full_story || ""} ${story.image_prompt || ""}`.toLowerCase();
+  const setting = /kitchen|tea|kettle|table/.test(text)
+    ? "modest apartment kitchen"
+    : /hospital|corridor/.test(text)
+      ? "hospital corridor"
+      : /station|train|platform/.test(text)
+        ? "train station platform"
+        : /house|home|apartment|room/.test(text)
+          ? "ordinary family apartment"
+          : "real everyday home interior";
+  const timeOfDay = /midnight|night/.test(text)
+    ? "late evening"
+    : /morning/.test(text)
+      ? "early morning"
+      : /rain|evening/.test(text)
+        ? "rainy evening"
+        : "soft evening light";
+  const emotion = story.emotion || detectResearchEmotion(text, story.category || "");
+  const characters = /mother-in-law|daughter-in-law/.test(text)
+    ? "older mother-in-law and younger daughter-in-law, ordinary realistic faces"
+    : /husband|wife/.test(text)
+      ? "middle-aged husband and wife sitting apart with visible tension"
+      : /son|daughter/.test(text)
+        ? "older woman and adult child in a tense family moment"
+        : "two or three ordinary adults aged 45-70 in a family conflict";
+  const visualConflict = /receipt|phone|card|letter|envelope|will|key|photo/.test(text)
+    ? "a small discovered object on the table becomes the emotional focus"
+    : "silent family confrontation, people avoiding eye contact";
+  const mainScene = `${characters} in ${setting}, ${visualConflict}`;
+  return {
+    main_scene: mainScene,
+    characters,
+    emotion,
+    setting,
+    time_of_day: timeOfDay,
+    visual_conflict: visualConflict
+  };
+}
+
+function imagePromptVariant(story, signals, style) {
+  const styleText = {
+    realistic_cinematic: "realistic cinematic documentary photo, natural color grade, 35mm lens, believable skin texture",
+    dramatic_facebook_cover: "dramatic Facebook story cover, strong emotional hook, clear readable composition, high attention thumbnail",
+    emotional_close_up: "emotional close-up, expressive eyes, restrained tears, shallow depth of field, intimate domestic realism"
+  }[style] || style;
+  return [
+    styleText,
+    `Story title: ${story.title}.`,
+    `Main scene: ${signals.main_scene}.`,
+    `Characters: ${signals.characters}.`,
+    `Emotion: ${signals.emotion}.`,
+    `Setting: ${signals.setting}.`,
+    `Time of day: ${signals.time_of_day}.`,
+    `Visual conflict: ${signals.visual_conflict}.`,
+    "Photorealistic, ordinary people aged 40-70, modest clothes, real home details, natural imperfect faces.",
+    "No text, no subtitles, no logo, no watermark, no cartoon, no glossy plastic AI faces, no extra fingers."
+  ].join(" ");
+}
+
+async function createImagePromptsForGeneratedDraft(ref = "1") {
+  const draft = generatedDraftByRef(ref);
+  if (!draft) {
+    return {
+      ok: false,
+      code: "draft_not_found",
+      message: "Generated draft not found. Use /drafts to see draft numbers."
+    };
+  }
+  const signals = extractImageSceneSignals(draft);
+  const styles = ["realistic_cinematic", "dramatic_facebook_cover", "emotional_close_up"];
+  const now = new Date().toISOString();
+  const created = styles.map((style) => ({
+    id: crypto.randomUUID(),
+    draft_id: draft.id,
+    generated_story_id: draft.id,
+    story_title: draft.title,
+    prompt: imagePromptVariant(draft, signals, style),
+    style,
+    status: "needs_approval",
+    created_at: now,
+    updated_at: now,
+    approval_required: true,
+    publish_allowed: false,
+    generated_image_url: "",
+    visual_analysis: signals
+  }));
+  const next = [...created, ...readImageQueue()].slice(0, 200);
+  await writeImageQueue(next);
+  return {
+    ok: true,
+    module: "Image Generator v2",
+    draft_id: draft.id,
+    draft_title: draft.title,
+    created_count: created.length,
+    prompts: created,
+    queue: next,
+    safety: {
+      prompt_only: true,
+      image_generation_enabled: false,
+      approval_required: true,
+      publish_allowed: false
+    }
+  };
+}
+
+function latestImageQueueItems(limit = 10) {
+  return [...readImageQueue()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function imageQueueItemByNumber(numberText) {
+  const index = Number(numberText);
+  if (!Number.isInteger(index) || index < 1) return null;
+  return latestImageQueueItems(10)[index - 1] || null;
+}
+
+async function updateImageQueueStatusByNumber(numberText, status) {
+  const prompt = imageQueueItemByNumber(numberText);
+  if (!prompt) return null;
+  const updated = readImageQueue().map((item) => item.id === prompt.id
+    ? {
+        ...item,
+        status,
+        approval_required: true,
+        publish_allowed: false,
+        updated_at: new Date().toISOString()
+      }
+    : item);
+  await writeImageQueue(updated);
+  return updated.find((item) => item.id === prompt.id);
+}
+
 function viralPredictionScore(researchSignals, facebookSignals, length) {
   const researchBase = researchSignals.length
     ? Math.round(researchSignals.reduce((sum, item) => sum + ((Number(item.viral_score || 0) + Number(item.similarity_score || 0)) / 2), 0) / researchSignals.length)
@@ -3553,6 +3700,7 @@ function renderAutopilotV1Dashboard() {
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/competitors" type="button">Competitor Analyzer</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/generate-story" type="button">Generate Story v2</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/ideas" type="button">Generate Ideas</button>
+          <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/image-prompts" type="button">Image Prompts v2</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/image-queue" type="button">Image Queue</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/plan" type="button">Daily Plan</button>
         </div>
@@ -3595,8 +3743,8 @@ function renderAutopilotV1Dashboard() {
         <h2>Image Generator Queue</h2>
         <div class="facebook-table-wrap">
           <table class="facebook-table">
-            <thead><tr><th>Story</th><th>Status</th><th>Prompt</th><th>Image URL</th></tr></thead>
-            <tbody>${rows(queue, "No queued image prompts yet.", (item) => `<tr><td>${escapeHtml(item.story_title)}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(shortText(item.prompt, 180))}</td><td>${escapeHtml(item.generated_image_url || "placeholder")}</td></tr>`)}</tbody>
+            <thead><tr><th>Draft</th><th>Style</th><th>Status</th><th>Prompt</th></tr></thead>
+            <tbody>${rows(queue, "No queued image prompts yet.", (item) => `<tr><td>${escapeHtml(item.story_title)}</td><td>${escapeHtml(item.style || "story_idea_prompt")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(shortText(item.prompt, 220))}</td></tr>`)}</tbody>
           </table>
         </div>
       </section>
@@ -3988,6 +4136,66 @@ async function telegramImageDetails(chatId, id) {
   });
 }
 
+async function telegramImageQueueV2(chatId) {
+  const items = latestImageQueueItems(10);
+  if (!items.length) return sendTelegramMessage(chatId, "No image prompts yet. Use /image 1 after generating drafts.", mainTelegramKeyboard());
+  const text = items.map((item, index) => [
+    `${index + 1}. <b>${escapeHtml(shortText(item.story_title || "Untitled draft", 90))}</b>`,
+    `style: ${escapeHtml(item.style || "story_idea_prompt")}`,
+    `status: ${escapeHtml(item.status || "needs_approval")}`,
+    `draft_id: ${escapeHtml(shortText(item.draft_id || item.story_idea_id || "", 32))}`
+  ].join("\n")).join("\n\n");
+  return sendTelegramMessage(chatId, `<b>Latest Image Prompt Queue</b>\n\n${text}\n\nUse /image_prompt 1 to see full prompt.\nUse /approve_image 1 or /reject_image 1 to review.\nNo images are generated automatically.`, mainTelegramKeyboard());
+}
+
+async function telegramImagePromptDetailsV2(chatId, numberText = "1") {
+  const item = imageQueueItemByNumber(numberText);
+  if (!item) return sendTelegramMessage(chatId, "Image prompt not found. Use /images to see numbers 1-10.", mainTelegramKeyboard());
+  const visual = item.visual_analysis || {};
+  const text = [
+    `<b>Image Prompt ${escapeHtml(numberText)}</b>`,
+    "",
+    `<b>${escapeHtml(item.story_title || "Untitled draft")}</b>`,
+    `style: ${escapeHtml(item.style || "story_idea_prompt")}`,
+    `status: ${escapeHtml(item.status || "needs_approval")}`,
+    "",
+    `<b>Visual analysis</b>`,
+    `scene: ${escapeHtml(visual.main_scene || "")}`,
+    `characters: ${escapeHtml(visual.characters || "")}`,
+    `emotion: ${escapeHtml(visual.emotion || "")}`,
+    `setting: ${escapeHtml(visual.setting || "")}`,
+    `time: ${escapeHtml(visual.time_of_day || "")}`,
+    `conflict: ${escapeHtml(visual.visual_conflict || "")}`,
+    "",
+    `<b>Prompt</b>`,
+    escapeHtml(item.prompt || ""),
+    "",
+    "Prompt only. No image generated. No publishing."
+  ].join("\n");
+  return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
+}
+
+async function telegramCreateImagePrompts(chatId, draftNumber = "1") {
+  const result = await createImagePromptsForGeneratedDraft(draftNumber || "1");
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Draft not found."), mainTelegramKeyboard());
+  const text = result.prompts.map((item, index) => [
+    `${index + 1}. ${item.style}`,
+    `status: ${item.status}`,
+    `prompt: ${shortText(item.prompt, 420)}`
+  ].join("\n")).join("\n\n");
+  return sendTelegramLongMessage(chatId, `<b>Image Generator v2</b>\n\nDraft: ${escapeHtml(result.draft_title)}\nCreated prompts: ${result.created_count}\n\n${escapeHtml(text)}\n\nUse /images to see queue.\nUse /image_prompt 1 for full prompt.\nNo images are generated automatically.`, mainTelegramKeyboard());
+}
+
+async function telegramApproveImageCommand(chatId, numberText = "1") {
+  const item = await updateImageQueueStatusByNumber(numberText, "approved");
+  return sendTelegramMessage(chatId, item ? `Approved image prompt ${numberText}: ${escapeHtml(item.style || "")}\nStatus: ${escapeHtml(item.status)}\n\nNo image was generated or published.` : "Image prompt not found. Use /images to see numbers 1-10.", mainTelegramKeyboard());
+}
+
+async function telegramRejectImageCommand(chatId, numberText = "1") {
+  const item = await updateImageQueueStatusByNumber(numberText, "rejected");
+  return sendTelegramMessage(chatId, item ? `Rejected image prompt ${numberText}: ${escapeHtml(item.style || "")}\nStatus: ${escapeHtml(item.status)}\n\nNothing was generated or published.` : "Image prompt not found. Use /images to see numbers 1-10.", mainTelegramKeyboard());
+}
+
 async function telegramAudience(chatId) {
   const insights = buildAudienceInsights();
   const topics = insights.best_topics.slice(0, 3).map((item, index) => `${index + 1}. ${item.name}`).join("\n") || "Недостаточно данных";
@@ -4219,7 +4427,7 @@ async function legacyTelegramHelp(chatId) {
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research betrayal - show top 5 research stories\n/generate betrayal - generate 3 original story drafts\n/generate betrayal 5 - generate 5 story drafts\n/generate love - generate love drafts\n/generate inheritance - generate inheritance drafts\n/drafts - show latest 10 generated drafts\n/draft 1 - show full text of selected draft\n/approve 1 - approve draft without publishing\n/reject 1 - reject draft\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/help - command list\n\nPublishing is never automatic. Research stores summaries and links only; no copying.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research betrayal - show top 5 research stories\n/generate betrayal - generate 3 original story drafts\n/generate betrayal 5 - generate 5 story drafts\n/drafts - show latest 10 generated drafts\n/draft 1 - show full text of selected draft\n/approve 1 - approve draft without publishing\n/reject 1 - reject draft\n/image 1 - create 3 image prompts for draft 1\n/images - show latest image prompt queue\n/image_prompt 1 - show full image prompt\n/approve_image 1 - approve image prompt\n/reject_image 1 - reject image prompt\n/ideas - generate original story ideas\n/plan - create daily approval content plan\n/schedule - show approval schedule\n/stats - stories and traffic stats\n/help - command list\n\nPublishing is never automatic. Images are not generated automatically.`, mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
@@ -4230,6 +4438,11 @@ function telegramCommandList() {
     { command: "research", description: "Research story trends" },
     { command: "generate", description: "Generate original story draft" },
     { command: "draft", description: "Show full generated draft" },
+    { command: "image", description: "Create prompts for draft" },
+    { command: "images", description: "Show image prompt queue" },
+    { command: "image_prompt", description: "Show full image prompt" },
+    { command: "approve_image", description: "Approve image prompt" },
+    { command: "reject_image", description: "Reject image prompt" },
     { command: "ideas", description: "Generate story ideas" },
     { command: "plan", description: "Create daily plan" },
     { command: "schedule", description: "Show approval schedule" },
@@ -4273,7 +4486,7 @@ async function handleTelegramCallback(callback) {
   await telegramApi("answerCallbackQuery", { callback_query_id: callback.id });
   if (data === "menu:start") return telegramStart(chatId);
   if (data === "menu:stories") return telegramStories(chatId);
-  if (data === "menu:images") return telegramImages(chatId);
+  if (data === "menu:images") return telegramImageQueueV2(chatId);
   if (data === "menu:audience" || data === "menu:analytics") return telegramAudience(chatId);
   if (data === "menu:competitors") return telegramCompetitors(chatId);
   if (data === "menu:autopilot") return telegramAutopilot(chatId);
@@ -4329,7 +4542,11 @@ async function handleTelegramMessage(message) {
   if (command === "/approve") return telegramApproveCommand(chatId, args[0]);
   if (command === "/reject") return telegramRejectCommand(chatId, args[0]);
   if (command === "/stories") return telegramStories(chatId);
-  if (command === "/images") return telegramImages(chatId);
+  if (command === "/image") return telegramCreateImagePrompts(chatId, args[0] || "1");
+  if (command === "/images") return telegramImageQueueV2(chatId);
+  if (command === "/image_prompt") return telegramImagePromptDetailsV2(chatId, args[0] || "1");
+  if (command === "/approve_image") return telegramApproveImageCommand(chatId, args[0] || "1");
+  if (command === "/reject_image") return telegramRejectImageCommand(chatId, args[0] || "1");
   if (command === "/audience") return telegramAudience(chatId);
   if (command === "/competitors") return telegramCompetitors(chatId);
   if (command === "/autopilot") return telegramAutopilot(chatId);
@@ -6372,7 +6589,21 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, await generateOriginalStoriesV2(await parseBody(req)));
   }
 
-  if (pathname === "/api/autopilot/v1/image-queue" && ["GET", "POST"].includes(req.method)) {
+  if (pathname === "/api/autopilot/v1/image-prompts" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await createImagePromptsForGeneratedDraft(payload.draft_id || payload.draft || payload.index || "1"));
+  }
+
+  if (pathname === "/api/autopilot/v1/image-queue" && req.method === "GET") {
+    return sendJson(res, 200, {
+      ok: true,
+      module: "Image Generator Queue",
+      queue: readImageQueue(),
+      safety: { prompt_only: true, image_generation_enabled: false, publish_allowed: false }
+    });
+  }
+
+  if (pathname === "/api/autopilot/v1/image-queue" && req.method === "POST") {
     return sendJson(res, 200, await enqueueImagePromptsForIdeas());
   }
 
