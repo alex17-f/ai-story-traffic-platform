@@ -4549,13 +4549,20 @@ async function setTelegramWebhook() {
 
 function mainTelegramKeyboard() {
   return {
-    inline_keyboard: [
-      [{ text: "📖 Истории", callback_data: "menu:stories" }, { text: "🖼 Изображения", callback_data: "menu:images" }],
-      [{ text: "📊 Аналитика", callback_data: "menu:analytics" }, { text: "🧠 AI Autopilot", callback_data: "menu:autopilot" }],
-      [{ text: "👥 Конкуренты", callback_data: "menu:competitors" }, { text: "👨‍👩‍👧 Аудитория", callback_data: "menu:audience" }],
-      [{ text: "⚙ Настройки", callback_data: "menu:settings" }]
-    ]
+    keyboard: [
+      [{ text: "🧠 Статус" }, { text: "🔍 Поиск идей" }],
+      [{ text: "✍️ Создать истории" }, { text: "📚 Черновики" }],
+      [{ text: "🎨 Картинки" }, { text: "📅 План" }],
+      [{ text: "📦 Пакеты" }, { text: "✅ Готово к публикации" }],
+      [{ text: "❓ Помощь" }]
+    ],
+    resize_keyboard: true,
+    is_persistent: true
   };
+}
+
+function telegramSafetyFooter() {
+  return "Безопасность: автопубликация отключена, publish_allowed=false, approval_required=true.";
 }
 
 function storyTelegramStatus(story) {
@@ -4627,7 +4634,97 @@ async function sendTelegramPhoto(chatId, photo, caption, replyMarkup) {
 }
 
 async function telegramStart(chatId) {
-  return sendTelegramMessage(chatId, "🤖 <b>AI Story Traffic Platform</b>\n\nЛичный центр управления ИИ-помощниками.", mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, [
+    "🤖 <b>AI Story Traffic Platform</b>",
+    "",
+    "Личный центр управления историями, идеями, картинками, планом и пакетами публикаций.",
+    "",
+    "Выберите кнопку ниже или напишите команду:",
+    "• /поиск измена — найти идеи",
+    "• /создать измена 3 — создать 3 черновика",
+    "• /пакеты — посмотреть пакеты на проверку",
+    "",
+    telegramSafetyFooter()
+  ].join("\n"), mainTelegramKeyboard());
+}
+
+async function telegramButtonGuide(chatId, text = "") {
+  const button = String(text || "").trim();
+  const guides = {
+    "🔍 Поиск идей": [
+      "🔍 <b>Поиск идей</b>",
+      "",
+      "Я найду похожие эмоциональные темы и сохраню только краткие выводы и ссылки на источники.",
+      "",
+      "Попробуйте:",
+      "/поиск измена",
+      "/поиск любовь",
+      "/поиск наследство",
+      "",
+      "Английский вариант тоже работает: /research betrayal",
+      telegramSafetyFooter()
+    ],
+    "✍️ Создать истории": [
+      "✍️ <b>Создать истории</b>",
+      "",
+      "Я создам оригинальные черновики на основе Project Brain, Facebook-аналитики и research signals.",
+      "",
+      "Попробуйте:",
+      "/создать измена 3",
+      "/создать любовь 5",
+      "/создать наследство 3",
+      "",
+      "После генерации:",
+      "/черновики",
+      "/черновик 1",
+      "/одобрить 1",
+      "",
+      telegramSafetyFooter()
+    ],
+    "🎨 Картинки": [
+      "🎨 <b>Картинки</b>",
+      "",
+      "Сейчас система создаёт промпты, а не сами изображения.",
+      "",
+      "Попробуйте:",
+      "/картинка 1 — создать 3 промпта для черновика #1",
+      "/картинки — очередь промптов",
+      "/image_prompt 1 — полный промпт",
+      "/одобрить_картинку 1 — одобрить промпт",
+      "",
+      telegramSafetyFooter()
+    ],
+    "📅 План": [
+      "📅 <b>План публикаций</b>",
+      "",
+      "Планировщик собирает черновик, одобренный промпт картинки и время публикации.",
+      "",
+      "Попробуйте:",
+      "/план — план на завтра",
+      "/план неделя — план на 7 дней",
+      "/очередь — запланированные черновики",
+      "/approve_schedule — одобрить расписание без публикации",
+      "",
+      telegramSafetyFooter()
+    ],
+    "📦 Пакеты": [
+      "📦 <b>Пакеты публикаций</b>",
+      "",
+      "Пакет объединяет историю, одобренный промпт картинки и слот расписания.",
+      "",
+      "Попробуйте:",
+      "/создать_пакет 1",
+      "/пакеты",
+      "/пакет 1",
+      "/одобрить_пакет 1",
+      "/отклонить_пакет 1",
+      "",
+      telegramSafetyFooter()
+    ]
+  };
+  const guide = guides[button];
+  if (!guide) return null;
+  return sendTelegramMessage(chatId, guide.join("\n"), mainTelegramKeyboard());
 }
 
 async function telegramStories(chatId) {
@@ -4676,62 +4773,62 @@ async function telegramImageDetails(chatId, id) {
 
 async function telegramImageQueueV2(chatId) {
   const items = latestImageQueueItems(10);
-  if (!items.length) return sendTelegramMessage(chatId, "No image prompts yet. Use /image 1 after generating drafts.", mainTelegramKeyboard());
+  if (!items.length) return sendTelegramMessage(chatId, "Промптов для картинок пока нет. Сначала создайте черновики: /создать измена 3, потом /картинка 1.", mainTelegramKeyboard());
   const text = items.map((item, index) => [
     `${index + 1}. <b>${escapeHtml(shortText(item.story_title || "Untitled draft", 90))}</b>`,
-    `style: ${escapeHtml(item.style || "story_idea_prompt")}`,
-    `status: ${escapeHtml(item.status || "needs_approval")}`,
-    `draft_id: ${escapeHtml(shortText(item.draft_id || item.story_idea_id || "", 32))}`
+    `стиль: ${escapeHtml(item.style || "story_idea_prompt")}`,
+    `статус: ${escapeHtml(item.status || "needs_approval")}`,
+    `черновик: ${escapeHtml(shortText(item.draft_id || item.story_idea_id || "", 32))}`
   ].join("\n")).join("\n\n");
-  return sendTelegramMessage(chatId, `<b>Latest Image Prompt Queue</b>\n\n${text}\n\nUse /image_prompt 1 to see full prompt.\nUse /approve_image 1 or /reject_image 1 to review.\nNo images are generated automatically.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Очередь промптов для картинок</b>\n\n${text}\n\n/image_prompt 1 — полный промпт\n/одобрить_картинку 1 — одобрить\n/reject_image 1 — отклонить\n\nКартинки автоматически не генерируются.`, mainTelegramKeyboard());
 }
 
 async function telegramImagePromptDetailsV2(chatId, numberText = "1") {
   const item = imageQueueItemByNumber(numberText);
-  if (!item) return sendTelegramMessage(chatId, "Image prompt not found. Use /images to see numbers 1-10.", mainTelegramKeyboard());
+  if (!item) return sendTelegramMessage(chatId, "Промпт не найден. Используйте /картинки, чтобы увидеть номера 1-10.", mainTelegramKeyboard());
   const visual = item.visual_analysis || {};
   const text = [
-    `<b>Image Prompt ${escapeHtml(numberText)}</b>`,
+    `<b>Промпт картинки ${escapeHtml(numberText)}</b>`,
     "",
     `<b>${escapeHtml(item.story_title || "Untitled draft")}</b>`,
-    `style: ${escapeHtml(item.style || "story_idea_prompt")}`,
-    `status: ${escapeHtml(item.status || "needs_approval")}`,
+    `стиль: ${escapeHtml(item.style || "story_idea_prompt")}`,
+    `статус: ${escapeHtml(item.status || "needs_approval")}`,
     "",
-    `<b>Visual analysis</b>`,
-    `scene: ${escapeHtml(visual.main_scene || "")}`,
-    `characters: ${escapeHtml(visual.characters || "")}`,
-    `emotion: ${escapeHtml(visual.emotion || "")}`,
-    `setting: ${escapeHtml(visual.setting || "")}`,
-    `time: ${escapeHtml(visual.time_of_day || "")}`,
-    `conflict: ${escapeHtml(visual.visual_conflict || "")}`,
+    `<b>Визуальный анализ</b>`,
+    `сцена: ${escapeHtml(visual.main_scene || "")}`,
+    `персонажи: ${escapeHtml(visual.characters || "")}`,
+    `эмоция: ${escapeHtml(visual.emotion || "")}`,
+    `место: ${escapeHtml(visual.setting || "")}`,
+    `время: ${escapeHtml(visual.time_of_day || "")}`,
+    `конфликт: ${escapeHtml(visual.visual_conflict || "")}`,
     "",
     `<b>Prompt</b>`,
     escapeHtml(item.prompt || ""),
     "",
-    "Prompt only. No image generated. No publishing."
+    "Это только промпт. Изображение не создаётся автоматически. Публикации нет."
   ].join("\n");
   return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
 }
 
 async function telegramCreateImagePrompts(chatId, draftNumber = "1") {
   const result = await createImagePromptsForGeneratedDraft(draftNumber || "1");
-  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Draft not found."), mainTelegramKeyboard());
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Черновик не найден. Используйте /черновики."), mainTelegramKeyboard());
   const text = result.prompts.map((item, index) => [
     `${index + 1}. ${item.style}`,
-    `status: ${item.status}`,
-    `prompt: ${shortText(item.prompt, 420)}`
+    `статус: ${item.status}`,
+    `промпт: ${shortText(item.prompt, 420)}`
   ].join("\n")).join("\n\n");
-  return sendTelegramLongMessage(chatId, `<b>Image Generator v2</b>\n\nDraft: ${escapeHtml(result.draft_title)}\nCreated prompts: ${result.created_count}\n\n${escapeHtml(text)}\n\nUse /images to see queue.\nUse /image_prompt 1 for full prompt.\nNo images are generated automatically.`, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Image Generator v2</b>\n\nЧерновик: ${escapeHtml(result.draft_title)}\nСоздано промптов: ${result.created_count}\n\n${escapeHtml(text)}\n\n/картинки — очередь\n/image_prompt 1 — полный промпт\n/одобрить_картинку 1 — одобрить промпт\n\nИзображения автоматически не создаются.`, mainTelegramKeyboard());
 }
 
 async function telegramApproveImageCommand(chatId, numberText = "1") {
   const item = await updateImageQueueStatusByNumber(numberText, "approved");
-  return sendTelegramMessage(chatId, item ? `Approved image prompt ${numberText}: ${escapeHtml(item.style || "")}\nStatus: ${escapeHtml(item.status)}\n\nNo image was generated or published.` : "Image prompt not found. Use /images to see numbers 1-10.", mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, item ? `Промпт картинки ${numberText} одобрен.\nСтиль: ${escapeHtml(item.style || "")}\nСтатус: ${escapeHtml(item.status)}\n\nИзображение не создано и ничего не опубликовано.` : "Промпт не найден. Используйте /картинки.", mainTelegramKeyboard());
 }
 
 async function telegramRejectImageCommand(chatId, numberText = "1") {
   const item = await updateImageQueueStatusByNumber(numberText, "rejected");
-  return sendTelegramMessage(chatId, item ? `Rejected image prompt ${numberText}: ${escapeHtml(item.style || "")}\nStatus: ${escapeHtml(item.status)}\n\nNothing was generated or published.` : "Image prompt not found. Use /images to see numbers 1-10.", mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, item ? `Промпт картинки ${numberText} отклонён.\nСтиль: ${escapeHtml(item.style || "")}\nСтатус: ${escapeHtml(item.status)}\n\nНичего не создано и не опубликовано.` : "Промпт не найден. Используйте /картинки.", mainTelegramKeyboard());
 }
 
 async function telegramAudience(chatId) {
@@ -4763,7 +4860,7 @@ async function telegramStatus(chatId) {
   const tg = telegramConfigStatus();
   const realData = buildRealDataLayer();
   const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
-  return sendTelegramMessage(chatId, `✅ <b>System Status</b>\n\nTelegram: ${tg.configured ? "connected" : "not connected"}\nFacebook: ${fb.configured ? "connected" : "not connected"}\nDatabase: ${pgPool ? "PostgreSQL" : "JSON backup mode"}\nProject Brain: ${brain.updated_at ? "active" : "needs refresh"}\n\n${escapeHtml(realData.notice)}`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `🧠 <b>Статус системы</b>\n\nTelegram: ${tg.configured ? "подключён" : "не подключён"}\nFacebook: ${fb.configured ? "подключён" : "не подключён"}\nБаза данных: ${pgPool ? "PostgreSQL" : "JSON backup mode"}\nProject Brain: ${brain.updated_at ? "активен" : "нужно обновить"}\n\n${escapeHtml(realData.notice)}\n\nСледующие действия:\n/поиск измена — найти идеи\n/создать измена 3 — создать черновики\n/пакеты — проверить пакеты\n\n${telegramSafetyFooter()}`, mainTelegramKeyboard());
 }
 
 async function telegramStats(chatId) {
@@ -4793,12 +4890,12 @@ async function telegramResearch(chatId, category = "") {
   const emotions = countBy(result.stories || [], (item) => item.emotion || "unknown")
     .slice(0, 5)
     .map((item) => `- ${item.name}: ${item.count}`)
-    .join("\n") || "No emotions yet";
+    .join("\n") || "Эмоций пока нет";
   const topStories = (result.stories || [])
     .slice(0, 5)
-    .map((item, index) => `${index + 1}. ${item.title}\nSource: ${item.source}\nviral_score: ${item.viral_score}\nsimilarity_score: ${item.similarity_score}`)
-    .join("\n\n") || "No research stories";
-  return sendTelegramMessage(chatId, `<b>Internet Research AI v2</b>\n\nCategory: ${escapeHtml(result.category)}\nProvider: ${escapeHtml(result.provider_used)}\nMode: ${escapeHtml(result.source_status)}\nResults: ${result.results_count}\nSaved new: ${result.saved_new}\nSkipped duplicates: ${result.skipped_duplicates}\n\nTop emotions:\n${escapeHtml(emotions)}\n\nTop 5 research stories:\n${escapeHtml(topStories)}\n\nSummaries only. Source links are stored. No copying.`, mainTelegramKeyboard());
+    .map((item, index) => `${index + 1}. ${item.title}\nИсточник: ${item.source}\nviral_score: ${item.viral_score}\nsimilarity_score: ${item.similarity_score}`)
+    .join("\n\n") || "Историй для анализа пока нет";
+  return sendTelegramMessage(chatId, `<b>Internet Research AI v2</b>\n\nКатегория: ${escapeHtml(result.category)}\nПровайдер: ${escapeHtml(result.provider_used)}\nРежим: ${escapeHtml(result.source_status)}\nНайдено: ${result.results_count}\nСохранено новых: ${result.saved_new}\nДубликатов пропущено: ${result.skipped_duplicates}\n\nЛучшие эмоции:\n${escapeHtml(emotions)}\n\nТоп-5 идей:\n${escapeHtml(topStories)}\n\nСохраняются только краткие summaries и ссылки. Тексты не копируются.`, mainTelegramKeyboard());
 }
 
 async function telegramIdeas(chatId) {
@@ -4852,24 +4949,24 @@ async function telegramGenerateStory(chatId, args = []) {
   const result = await generateOriginalStoriesV2({ category, length: "medium", count });
   const previews = result.stories.map((story, index) => [
     `${index + 1}. ${story.title}`,
-    `emotion: ${story.emotion}`,
+    `эмоция: ${story.emotion}`,
     `viral_prediction_score: ${story.viral_prediction_score}/100`,
-    `hook: ${story.hook}`
+    `крючок: ${story.hook}`
   ].join("\n")).join("\n\n");
   const text = [
     "<b>Story Generator v2</b>",
     "",
-    `Generated drafts: ${result.count}`,
-    `Category: ${escapeHtml(normalizeResearchCategory(category))}`,
-    "Status: needs_approval",
+    `Создано черновиков: ${result.count}`,
+    `Категория: ${escapeHtml(normalizeResearchCategory(category))}`,
+    "Статус: needs_approval",
     "",
     escapeHtml(previews),
     "",
-    "Use /drafts to see the queue.",
-    "Use /draft 1 to read the full text.",
-    "Use /approve 1 or /reject 1 to review.",
+    "/черновики — очередь черновиков",
+    "/черновик 1 — прочитать полностью",
+    "/approve 1 или /reject 1 — проверить черновик",
     "",
-    "Nothing was published."
+    "Ничего не опубликовано."
   ].join("\n");
   return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
 }
@@ -4885,35 +4982,35 @@ async function telegramPlan(chatId) {
 function scheduleLine(item, index) {
   return [
     `${index + 1}. ${item.title || item.draft_id}`,
-    `time: ${new Date(item.scheduled_time).toLocaleString("ru-RU")}`,
-    `theme: ${item.theme || "story"} / rhythm: ${item.rhythm_step || "mixed"}`,
-    `emotion: ${item.emotion || "mixed"}`,
-    `image: ${item.image_prompt_id ? "approved prompt linked" : "missing approved prompt"}`,
-    `status: ${item.status || "draft"}`
+    `время: ${new Date(item.scheduled_time).toLocaleString("ru-RU")}`,
+    `тема: ${item.theme || "story"} / ритм: ${item.rhythm_step || "mixed"}`,
+    `эмоция: ${item.emotion || "mixed"}`,
+    `картинка: ${item.image_prompt_id ? "одобренный промпт прикреплён" : "нет одобренного промпта"}`,
+    `статус: ${item.status || "draft"}`
   ].join("\n");
 }
 
 async function telegramSchedule(chatId, args = []) {
   const mode = String(args[0] || "").toLowerCase();
-  if (mode === "week") {
+  if (mode === "week" || mode === "неделя") {
     const result = await createSchedulerV2Plan({ days: 7, slots_per_day: 3 });
-    const text = result.plan.slice(0, 10).map(scheduleLine).join("\n\n") || "No plan was created.";
-    const warnings = result.warnings.length ? `\n\nWarnings:\n${result.warnings.map((item) => `- ${item}`).join("\n")}` : "";
-    return sendTelegramLongMessage(chatId, `<b>Scheduler v2: 7-day plan</b>\n\nCreated: ${result.created_count}\n\n${escapeHtml(text)}${escapeHtml(warnings)}\n\nUse /queue to see scheduled drafts.\nUse /approve_schedule to approve schedule.\nNo automatic publishing.`, mainTelegramKeyboard());
+    const text = result.plan.slice(0, 10).map(scheduleLine).join("\n\n") || "План не создан.";
+    const warnings = result.warnings.length ? `\n\nПредупреждения:\n${result.warnings.map((item) => `- ${item}`).join("\n")}` : "";
+    return sendTelegramLongMessage(chatId, `<b>Scheduler v2: план на 7 дней</b>\n\nСоздано слотов: ${result.created_count}\n\n${escapeHtml(text)}${escapeHtml(warnings)}\n\n/очередь — посмотреть запланированные черновики\n/approve_schedule — одобрить расписание без публикации\n\nАвтопубликация отключена.`, mainTelegramKeyboard());
   }
   let tomorrow = scheduleItemsForTomorrow();
   if (!tomorrow.length) {
     await createSchedulerV2Plan({ days: 1, slots_per_day: 3 });
     tomorrow = scheduleItemsForTomorrow();
   }
-  const text = tomorrow.map(scheduleLine).join("\n\n") || "Tomorrow plan is empty. Generate drafts and approve image prompts first.";
-  return sendTelegramLongMessage(chatId, `<b>Scheduler v2: Tomorrow Plan</b>\n\n${escapeHtml(text)}\n\nUse /schedule week for a 7-day plan.\nUse /queue, /move 1 tomorrow 19:30, /unschedule 1.\nNo automatic publishing.`, mainTelegramKeyboard());
+  const text = tomorrow.map(scheduleLine).join("\n\n") || "План на завтра пуст. Сначала создайте черновики и одобрите промпты картинок.";
+  return sendTelegramLongMessage(chatId, `<b>Scheduler v2: план на завтра</b>\n\n${escapeHtml(text)}\n\n/план неделя — план на 7 дней\n/очередь — очередь\n/move 1 tomorrow 19:30 — перенести слот\n/unschedule 1 — убрать из расписания\n\nАвтопубликация отключена.`, mainTelegramKeyboard());
 }
 
 async function telegramQueue(chatId) {
   const queue = scheduledQueueItems(20);
-  if (!queue.length) return sendTelegramMessage(chatId, "Schedule queue is empty. Use /schedule or /schedule week first.", mainTelegramKeyboard());
-  return sendTelegramLongMessage(chatId, `<b>Scheduled Draft Queue</b>\n\n${escapeHtml(queue.map(scheduleLine).join("\n\n"))}\n\nUse /move 1 tomorrow 19:30 or /unschedule 1.`, mainTelegramKeyboard());
+  if (!queue.length) return sendTelegramMessage(chatId, "Очередь расписания пустая. Сначала используйте /план или /план неделя.", mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Очередь запланированных черновиков</b>\n\n${escapeHtml(queue.map(scheduleLine).join("\n\n"))}\n\n/move 1 tomorrow 19:30 — перенести\n/unschedule 1 — убрать из расписания`, mainTelegramKeyboard());
 }
 
 async function telegramMoveSchedule(chatId, args = []) {
@@ -4930,129 +5027,129 @@ async function telegramUnschedule(chatId, numberText) {
 
 async function telegramApproveSchedule(chatId) {
   const result = await approveSchedulerV2();
-  return sendTelegramMessage(chatId, `<b>Schedule approved</b>\n\nApproved items in queue: ${result.approved_count}\n\nPublishing remains disabled. Approval only changes schedule status.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Расписание одобрено</b>\n\nОдобрено слотов: ${result.approved_count}\n\nПубликация остаётся отключённой. Одобрение меняет только статус расписания.`, mainTelegramKeyboard());
 }
 
 function packageLine(pkg, index) {
   const details = publishingPackageDetails(pkg);
   const scheduleText = details?.schedule?.scheduled_time
     ? new Date(details.schedule.scheduled_time).toLocaleString("ru-RU")
-    : "missing schedule";
+    : "нет расписания";
   return [
     `${index + 1}. ${details?.draft?.title || pkg.draft_id}`,
-    `status: ${pkg.status || "review"}`,
-    `image: ${pkg.image_prompt_id ? "attached" : "missing"}`,
-    `schedule: ${scheduleText}`
+    `статус: ${pkg.status || "review"}`,
+    `картинка: ${pkg.image_prompt_id ? "прикреплена" : "нет"}`,
+    `расписание: ${scheduleText}`
   ].join("\n");
 }
 
 async function telegramPackages(chatId) {
   const packages = latestPublishingPackages(10);
-  if (!packages.length) return sendTelegramMessage(chatId, "No publishing packages yet. Use /create_package 1.", mainTelegramKeyboard());
-  return sendTelegramLongMessage(chatId, `<b>Latest Publishing Packages</b>\n\n${escapeHtml(packages.map(packageLine).join("\n\n"))}\n\nUse /package 1 for details.\nUse /approve_package 1 or /reject_package 1.`, mainTelegramKeyboard());
+  if (!packages.length) return sendTelegramMessage(chatId, "Пакетов публикаций пока нет. Используйте /создать_пакет 1.", mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Пакеты публикаций</b>\n\n${escapeHtml(packages.map(packageLine).join("\n\n"))}\n\n/пакет 1 — детали\n/одобрить_пакет 1 — одобрить без публикации\n/отклонить_пакет 1 — отклонить`, mainTelegramKeyboard());
 }
 
 async function telegramPackageDetails(chatId, numberText = "1") {
   const pkg = publishingPackageByNumber(numberText);
   const details = publishingPackageDetails(pkg);
-  if (!details?.draft) return sendTelegramMessage(chatId, "Package not found. Use /packages to see numbers 1-10.", mainTelegramKeyboard());
+  if (!details?.draft) return sendTelegramMessage(chatId, "Пакет не найден. Используйте /пакеты, чтобы увидеть номера 1-10.", mainTelegramKeyboard());
   const scheduleText = details.schedule?.scheduled_time
     ? new Date(details.schedule.scheduled_time).toLocaleString("ru-RU")
-    : "missing schedule";
+    : "нет расписания";
   const text = [
-    `<b>Publishing Package ${escapeHtml(numberText)}</b>`,
+    `<b>Пакет публикации ${escapeHtml(numberText)}</b>`,
     "",
     `<b>${escapeHtml(details.draft.title || "")}</b>`,
-    `status: ${escapeHtml(pkg.status || "review")}`,
-    `theme: ${escapeHtml(details.draft.category || details.schedule?.theme || "")}`,
-    `emotion: ${escapeHtml(details.draft.emotion || details.schedule?.emotion || "")}`,
-    `scheduled: ${escapeHtml(scheduleText)}`,
+    `статус: ${escapeHtml(pkg.status || "review")}`,
+    `тема: ${escapeHtml(details.draft.category || details.schedule?.theme || "")}`,
+    `эмоция: ${escapeHtml(details.draft.emotion || details.schedule?.emotion || "")}`,
+    `время: ${escapeHtml(scheduleText)}`,
     "",
-    `<b>Hook</b>`,
+    `<b>Крючок</b>`,
     escapeHtml(details.draft.hook || ""),
     "",
-    `<b>Full story preview</b>`,
+    `<b>Превью истории</b>`,
     escapeHtml(shortText(details.draft.full_story || "", 1400)),
     "",
-    `<b>Image prompt preview</b>`,
-    escapeHtml(shortText(details.image_prompt?.prompt || "No approved image prompt attached.", 900)),
+    `<b>Превью промпта картинки</b>`,
+    escapeHtml(shortText(details.image_prompt?.prompt || "Одобренный промпт картинки не прикреплён.", 900)),
     "",
     "publish_allowed: false",
     "approval_required: true",
-    "No automatic Facebook publishing."
+    "Автоматической публикации в Facebook нет."
   ].join("\n");
   return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
 }
 
 async function telegramCreatePackage(chatId, draftNumber = "1") {
   const result = await createPublishingPackageFromDraft(draftNumber || "1");
-  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Could not create package."), mainTelegramKeyboard());
-  const warnings = result.warnings.length ? `\n\nWarnings:\n${result.warnings.map((item) => `- ${item}`).join("\n")}` : "";
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Не удалось создать пакет."), mainTelegramKeyboard());
+  const warnings = result.warnings.length ? `\n\nПредупреждения:\n${result.warnings.map((item) => `- ${item}`).join("\n")}` : "";
   const details = result.details;
-  return sendTelegramMessage(chatId, `<b>Publishing package created</b>\n\nTitle: ${escapeHtml(details?.draft?.title || result.package.draft_id)}\nStatus: ${escapeHtml(result.package.status)}\nImage: ${result.package.image_prompt_id ? "attached" : "missing"}\nSchedule: ${result.package.schedule_id ? "attached" : "missing"}${escapeHtml(warnings)}\n\nUse /packages or /package 1.\nNo publishing was triggered.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Пакет публикации создан</b>\n\nЗаголовок: ${escapeHtml(details?.draft?.title || result.package.draft_id)}\nСтатус: ${escapeHtml(result.package.status)}\nКартинка: ${result.package.image_prompt_id ? "прикреплена" : "нет"}\nРасписание: ${result.package.schedule_id ? "прикреплено" : "нет"}${escapeHtml(warnings)}\n\n/пакеты — список\n/пакет 1 — детали\n\nПубликация не запускалась.`, mainTelegramKeyboard());
 }
 
 async function telegramApprovePackage(chatId, numberText = "1") {
   const pkg = await updatePublishingPackageStatus(numberText, "approved");
-  if (!pkg) return sendTelegramMessage(chatId, "Package not found. Use /packages.", mainTelegramKeyboard());
+  if (!pkg) return sendTelegramMessage(chatId, "Пакет не найден. Используйте /пакеты.", mainTelegramKeyboard());
   const details = publishingPackageDetails(pkg);
-  return sendTelegramMessage(chatId, `Package ${numberText} approved.\nTitle: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nStatus: ${escapeHtml(pkg.status)}\n\nNo publishing was triggered.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `Пакет ${numberText} одобрен.\nЗаголовок: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nСтатус: ${escapeHtml(pkg.status)}\n\nПубликация не запускалась.`, mainTelegramKeyboard());
 }
 
 async function telegramRejectPackage(chatId, numberText = "1") {
   const pkg = await updatePublishingPackageStatus(numberText, "rejected");
-  if (!pkg) return sendTelegramMessage(chatId, "Package not found. Use /packages.", mainTelegramKeyboard());
+  if (!pkg) return sendTelegramMessage(chatId, "Пакет не найден. Используйте /пакеты.", mainTelegramKeyboard());
   const details = publishingPackageDetails(pkg);
-  return sendTelegramMessage(chatId, `Package ${numberText} rejected.\nTitle: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nStatus: ${escapeHtml(pkg.status)}\n\nNothing was published.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `Пакет ${numberText} отклонён.\nЗаголовок: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nСтатус: ${escapeHtml(pkg.status)}\n\nНичего не опубликовано.`, mainTelegramKeyboard());
 }
 
 async function telegramReadyPackages(chatId) {
   const packages = readyPublishingPackages().slice(0, 10);
-  if (!packages.length) return sendTelegramMessage(chatId, "No approved publishing packages yet. Use /approve_package 1.", mainTelegramKeyboard());
-  return sendTelegramLongMessage(chatId, `<b>Ready Packages</b>\n\n${escapeHtml(packages.map(packageLine).join("\n\n"))}\n\nReady means approved only. Publishing remains manual/disabled.`, mainTelegramKeyboard());
+  if (!packages.length) return sendTelegramMessage(chatId, "Одобренных пакетов пока нет. Используйте /одобрить_пакет 1.", mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Готово к публикации</b>\n\n${escapeHtml(packages.map(packageLine).join("\n\n"))}\n\nВажно: «готово» означает только одобрено. Публикация остаётся ручной и отключённой.`, mainTelegramKeyboard());
 }
 
 async function telegramDrafts(chatId) {
   const drafts = latestGeneratedDrafts(10);
-  if (!drafts.length) return sendTelegramMessage(chatId, "No generated story drafts yet. Use /generate betrayal first.", mainTelegramKeyboard());
+  if (!drafts.length) return sendTelegramMessage(chatId, "Черновиков пока нет. Сначала используйте /создать измена 3.", mainTelegramKeyboard());
   const text = drafts.map((draft, index) => [
     `${index + 1}. <b>${escapeHtml(draft.title)}</b>`,
-    `category: ${escapeHtml(draft.category || "")}`,
-    `emotion: ${escapeHtml(draft.emotion || "")}`,
-    `score: ${Number(draft.viral_prediction_score || 0)}/100`,
-    `status: ${escapeHtml(draft.status || "needs_approval")}`
+    `категория: ${escapeHtml(draft.category || "")}`,
+    `эмоция: ${escapeHtml(draft.emotion || "")}`,
+    `оценка: ${Number(draft.viral_prediction_score || 0)}/100`,
+    `статус: ${escapeHtml(draft.status || "needs_approval")}`
   ].join("\n")).join("\n\n");
-  return sendTelegramMessage(chatId, `<b>Latest Generated Drafts</b>\n\n${text}\n\nUse /draft 1 for full text.\nUse /approve 1 or /reject 1 to review.\nNothing is published automatically.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Черновики историй</b>\n\n${text}\n\n/черновик 1 — полный текст\n/approve 1 — одобрить черновик\n/reject 1 — отклонить черновик\n\nАвтопубликации нет.`, mainTelegramKeyboard());
 }
 
 async function telegramDraftDetails(chatId, numberText) {
   const draft = generatedDraftByNumber(numberText);
-  if (!draft) return sendTelegramMessage(chatId, "Draft not found. Use /drafts to see numbers 1-10.", mainTelegramKeyboard());
+  if (!draft) return sendTelegramMessage(chatId, "Черновик не найден. Используйте /черновики, чтобы увидеть номера 1-10.", mainTelegramKeyboard());
   const header = [
-    `<b>Draft ${escapeHtml(numberText)}</b>`,
+    `<b>Черновик ${escapeHtml(numberText)}</b>`,
     "",
     `<b>${escapeHtml(draft.title)}</b>`,
-    `category: ${escapeHtml(draft.category || "")}`,
-    `emotion: ${escapeHtml(draft.emotion || "")}`,
-    `score: ${Number(draft.viral_prediction_score || 0)}/100`,
-    `status: ${escapeHtml(draft.status || "needs_approval")}`,
+    `категория: ${escapeHtml(draft.category || "")}`,
+    `эмоция: ${escapeHtml(draft.emotion || "")}`,
+    `оценка: ${Number(draft.viral_prediction_score || 0)}/100`,
+    `статус: ${escapeHtml(draft.status || "needs_approval")}`,
     "",
-    `<b>Hook</b>`,
+    `<b>Крючок</b>`,
     escapeHtml(draft.hook || ""),
     "",
-    `<b>Full story</b>`,
+    `<b>Полная история</b>`,
     escapeHtml(draft.full_story || ""),
     "",
-    `<b>Moral</b>`,
+    `<b>Мораль</b>`,
     escapeHtml(draft.moral || ""),
     "",
     `<b>Image prompt</b>`,
     escapeHtml(draft.image_prompt || ""),
     "",
-    `<b>Why it should work</b>`,
+    `<b>Почему может сработать</b>`,
     escapeHtml(draft.why_it_should_work || ""),
     "",
-    "Approval required. Use /approve 1 or /reject 1. Nothing is published automatically."
+    "Нужно одобрение. Используйте /approve 1 или /reject 1. Автопубликации нет."
   ].join("\n");
   return sendTelegramLongMessage(chatId, header, mainTelegramKeyboard());
 }
@@ -5088,40 +5185,39 @@ async function legacyTelegramHelp(chatId) {
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/research betrayal - show top 5 research stories\n/generate betrayal - generate 3 original story drafts\n/drafts - show latest 10 generated drafts\n/draft 1 - show full text of selected draft\n/image 1 - create 3 image prompts for draft 1\n/approve_image 1 - approve image prompt\n/schedule - show tomorrow content plan\n/schedule week - create 7-day content plan\n/queue - show scheduled drafts\n/create_package 1 - create review package from draft\n/packages - show latest publishing packages\n/package 1 - show package details\n/approve_package 1 - approve package without publishing\n/reject_package 1 - reject package\n/ready - show approved packages\n/move 1 tomorrow 19:30 - move scheduled draft\n/unschedule 1 - remove from schedule\n/approve_schedule - approve schedule without publishing\n/stats - stories and traffic stats\n/help - command list\n\nPublishing is never automatic. No Facebook publishing is enabled.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform — команды</b>\n\n<b>Русский интерфейс</b>\n/старт — главное меню\n/статус — статус системы\n/поиск измена — найти идеи и тренды\n/создать измена 3 — создать 3 черновика\n/черновики — последние черновики\n/черновик 1 — полный текст черновика\n/картинка 1 — создать 3 промпта картинки\n/картинки — очередь промптов\n/одобрить_картинку 1 — одобрить промпт\n/план — план на завтра\n/план неделя — план на 7 дней\n/очередь — очередь расписания\n/создать_пакет 1 — собрать пакет на проверку\n/пакеты — последние пакеты\n/пакет 1 — детали пакета\n/одобрить_пакет 1 — одобрить пакет без публикации\n/отклонить_пакет 1 — отклонить пакет\n/готово — одобренные пакеты\n/помощь — эта справка\n\n<b>English commands still work</b>\n/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /help\n\nКнопки снизу показывают подсказки для ежедневной работы.\n\n${telegramSafetyFooter()}\nПубликации в Facebook нет.`, mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
   return [
-    { command: "status", description: "System status" },
-    { command: "load_posts", description: "Load Facebook Page posts" },
-    { command: "analyze", description: "Analyze stored posts" },
-    { command: "research", description: "Research story trends" },
-    { command: "generate", description: "Generate original story draft" },
-    { command: "draft", description: "Show full generated draft" },
-    { command: "image", description: "Create prompts for draft" },
-    { command: "images", description: "Show image prompt queue" },
-    { command: "image_prompt", description: "Show full image prompt" },
-    { command: "approve_image", description: "Approve image prompt" },
-    { command: "reject_image", description: "Reject image prompt" },
-    { command: "queue", description: "Show scheduled drafts" },
-    { command: "packages", description: "Show publishing packages" },
-    { command: "package", description: "Show package details" },
-    { command: "create_package", description: "Create review package" },
-    { command: "approve_package", description: "Approve package" },
-    { command: "reject_package", description: "Reject package" },
-    { command: "ready", description: "Approved packages" },
-    { command: "move", description: "Move scheduled draft" },
-    { command: "unschedule", description: "Remove from schedule" },
-    { command: "approve_schedule", description: "Approve schedule" },
-    { command: "ideas", description: "Generate story ideas" },
-    { command: "plan", description: "Create daily plan" },
-    { command: "schedule", description: "Show approval schedule" },
-    { command: "stats", description: "Traffic stats" },
-    { command: "drafts", description: "Drafts and review queue" },
-    { command: "approve", description: "Approve by story id" },
-    { command: "reject", description: "Reject by story id" },
-    { command: "help", description: "Command list" }
+    { command: "start", description: "Главное меню" },
+    { command: "status", description: "Статус системы" },
+    { command: "load_posts", description: "Загрузить посты Facebook" },
+    { command: "analyze", description: "Анализ постов" },
+    { command: "research", description: "Поиск идей" },
+    { command: "generate", description: "Создать черновики" },
+    { command: "drafts", description: "Черновики" },
+    { command: "draft", description: "Открыть черновик" },
+    { command: "image", description: "Создать промпты картинки" },
+    { command: "images", description: "Очередь промптов" },
+    { command: "image_prompt", description: "Полный промпт" },
+    { command: "approve_image", description: "Одобрить промпт" },
+    { command: "reject_image", description: "Отклонить промпт" },
+    { command: "schedule", description: "План публикаций" },
+    { command: "queue", description: "Очередь расписания" },
+    { command: "packages", description: "Пакеты публикаций" },
+    { command: "package", description: "Детали пакета" },
+    { command: "create_package", description: "Создать пакет" },
+    { command: "approve_package", description: "Одобрить пакет" },
+    { command: "reject_package", description: "Отклонить пакет" },
+    { command: "ready", description: "Готово к публикации" },
+    { command: "move", description: "Перенести слот" },
+    { command: "unschedule", description: "Убрать из расписания" },
+    { command: "approve_schedule", description: "Одобрить расписание" },
+    { command: "stats", description: "Статистика" },
+    { command: "approve", description: "Одобрить черновик" },
+    { command: "reject", description: "Отклонить черновик" },
+    { command: "help", description: "Помощь" }
   ];
 }
 
@@ -5197,37 +5293,45 @@ async function handleTelegramMessage(message) {
   if (process.env.CHAT_ID && String(chatId) !== String(process.env.CHAT_ID)) {
     return sendTelegramMessage(chatId, "Этот бот привязан к другому CHAT_ID.");
   }
+  if (text === "🧠 Статус") return telegramStatus(chatId);
+  if (text === "📚 Черновики") return telegramDrafts(chatId);
+  if (text === "✅ Готово к публикации") return telegramReadyPackages(chatId);
+  if (text === "❓ Помощь") return telegramHelp(chatId);
+  if (["🔍 Поиск идей", "✍️ Создать истории", "🎨 Картинки", "📅 План", "📦 Пакеты"].includes(text)) {
+    return telegramButtonGuide(chatId, text);
+  }
   if (command === "/start") return telegramStart(chatId);
-  if (command === "/help") return telegramHelp(chatId);
-  if (command === "/status") return telegramStatus(chatId);
+  if (command === "/старт") return telegramStart(chatId);
+  if (command === "/help" || command === "/помощь") return telegramHelp(chatId);
+  if (command === "/status" || command === "/статус") return telegramStatus(chatId);
   if (command === "/load_posts") return telegramLoadPosts(chatId);
   if (command === "/analyze") return telegramAnalyze(chatId);
-  if (command === "/research") return telegramResearch(chatId, args.join(" "));
-  if (command === "/generate") return telegramGenerateStory(chatId, args);
+  if (command === "/research" || command === "/поиск") return telegramResearch(chatId, args.join(" "));
+  if (command === "/generate" || command === "/создать") return telegramGenerateStory(chatId, args);
   if (command === "/ideas") return telegramIdeas(chatId);
   if (command === "/plan") return telegramPlan(chatId);
-  if (command === "/schedule") return telegramSchedule(chatId, args);
-  if (command === "/queue") return telegramQueue(chatId);
+  if (command === "/schedule" || command === "/план") return telegramSchedule(chatId, args);
+  if (command === "/queue" || command === "/очередь") return telegramQueue(chatId);
   if (command === "/move") return telegramMoveSchedule(chatId, args);
   if (command === "/unschedule") return telegramUnschedule(chatId, args[0]);
   if (command === "/approve_schedule") return telegramApproveSchedule(chatId);
-  if (command === "/packages") return telegramPackages(chatId);
-  if (command === "/package") return telegramPackageDetails(chatId, args[0] || "1");
-  if (command === "/create_package") return telegramCreatePackage(chatId, args[0] || "1");
-  if (command === "/approve_package") return telegramApprovePackage(chatId, args[0] || "1");
-  if (command === "/reject_package") return telegramRejectPackage(chatId, args[0] || "1");
-  if (command === "/ready") return telegramReadyPackages(chatId);
+  if (command === "/packages" || command === "/пакеты") return telegramPackages(chatId);
+  if (command === "/package" || command === "/пакет") return telegramPackageDetails(chatId, args[0] || "1");
+  if (command === "/create_package" || command === "/создать_пакет") return telegramCreatePackage(chatId, args[0] || "1");
+  if (command === "/approve_package" || command === "/одобрить_пакет") return telegramApprovePackage(chatId, args[0] || "1");
+  if (command === "/reject_package" || command === "/отклонить_пакет") return telegramRejectPackage(chatId, args[0] || "1");
+  if (command === "/ready" || command === "/готово") return telegramReadyPackages(chatId);
   if (command === "/stats") return telegramStats(chatId);
-  if (command === "/drafts") return telegramDrafts(chatId);
-  if (command === "/draft") return telegramDraftDetails(chatId, args[0]);
-  if (command === "/approve") return telegramApproveCommand(chatId, args[0]);
-  if (command === "/reject") return telegramRejectCommand(chatId, args[0]);
+  if (command === "/drafts" || command === "/черновики") return telegramDrafts(chatId);
+  if (command === "/draft" || command === "/черновик") return telegramDraftDetails(chatId, args[0]);
+  if (command === "/approve" || command === "/одобрить") return telegramApproveCommand(chatId, args[0]);
+  if (command === "/reject" || command === "/отклонить") return telegramRejectCommand(chatId, args[0]);
   if (command === "/stories") return telegramStories(chatId);
-  if (command === "/image") return telegramCreateImagePrompts(chatId, args[0] || "1");
-  if (command === "/images") return telegramImageQueueV2(chatId);
+  if (command === "/image" || command === "/картинка") return telegramCreateImagePrompts(chatId, args[0] || "1");
+  if (command === "/images" || command === "/картинки") return telegramImageQueueV2(chatId);
   if (command === "/image_prompt") return telegramImagePromptDetailsV2(chatId, args[0] || "1");
-  if (command === "/approve_image") return telegramApproveImageCommand(chatId, args[0] || "1");
-  if (command === "/reject_image") return telegramRejectImageCommand(chatId, args[0] || "1");
+  if (command === "/approve_image" || command === "/одобрить_картинку") return telegramApproveImageCommand(chatId, args[0] || "1");
+  if (command === "/reject_image" || command === "/отклонить_картинку") return telegramRejectImageCommand(chatId, args[0] || "1");
   if (command === "/audience") return telegramAudience(chatId);
   if (command === "/competitors") return telegramCompetitors(chatId);
   if (command === "/autopilot") return telegramAutopilot(chatId);
