@@ -17,6 +17,7 @@ const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
 const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
 const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
+const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
@@ -332,6 +333,31 @@ async function writeScheduledPosts(items) {
   return items;
 }
 
+function readPublishingPackages() {
+  return readAutopilotV1Collection("publishingPackages", "publishing_packages");
+}
+
+async function writePublishingPackages(items) {
+  storageCache.publishingPackages = items;
+  writeJsonBackup(PUBLISHING_PACKAGES_FILE, items);
+  await persistPublishingPackages(items);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object"
+    ? brain.internet_research
+    : {};
+  brain.internet_research = {
+    ...currentResearch,
+    autopilot_v1: {
+      ...(currentResearch.autopilot_v1 || {}),
+      publishing_packages: items.slice(0, 120),
+      updated_at: new Date().toISOString()
+    }
+  };
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return items;
+}
+
 function readJsonArray(filePath) {
   if (!fs.existsSync(filePath)) return [];
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -366,6 +392,7 @@ const storageCache = {
   imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
   scheduledPosts: readJsonArray(SCHEDULED_POSTS_FILE),
+  publishingPackages: readJsonArray(PUBLISHING_PACKAGES_FILE),
   projectBrain: fs.existsSync(PROJECT_BRAIN_FILE)
     ? JSON.parse(fs.readFileSync(PROJECT_BRAIN_FILE, "utf8"))
     : {
@@ -415,6 +442,7 @@ async function initializeStorage() {
     await ensureResearchStoriesTable();
     await ensureGeneratedStoriesTable();
     await ensureScheduledPostsTable();
+    await ensurePublishingPackagesTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
     storageCache.facebookPosts = (await pgPool.query("select * from facebook_posts order by total_score desc, published_at desc")).rows;
@@ -433,6 +461,7 @@ async function initializeStorage() {
       facebook_signals: Array.isArray(row.facebook_signals) ? row.facebook_signals : []
     }));
     storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
+    storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
       storageCache.projectBrain = {
@@ -549,6 +578,26 @@ async function ensureScheduledPostsTable() {
     create index if not exists scheduled_posts_time_idx on scheduled_posts (scheduled_time asc);
     create index if not exists scheduled_posts_status_idx on scheduled_posts (status);
     create index if not exists scheduled_posts_draft_idx on scheduled_posts (draft_id);
+  `);
+}
+
+async function ensurePublishingPackagesTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists publishing_packages (
+      id text primary key,
+      draft_id text not null,
+      image_prompt_id text,
+      schedule_id text,
+      status text not null default 'review',
+      publish_allowed boolean not null default false,
+      approval_required boolean not null default true,
+      created_at timestamptz not null default now(),
+      approved_at timestamptz
+    );
+    create index if not exists publishing_packages_status_idx on publishing_packages (status);
+    create index if not exists publishing_packages_created_at_idx on publishing_packages (created_at desc);
+    create index if not exists publishing_packages_draft_idx on publishing_packages (draft_id);
   `);
 }
 
@@ -856,6 +905,42 @@ async function deleteScheduledPostById(id) {
     } catch (error) {
       console.warn(`PostgreSQL scheduled_posts delete failed: ${error.message}`);
     }
+  }
+}
+
+async function persistPublishingPackages(items) {
+  if (!pgPool) return;
+  try {
+    await ensurePublishingPackagesTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into publishing_packages (
+          id, draft_id, image_prompt_id, schedule_id, status, publish_allowed,
+          approval_required, created_at, approved_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        on conflict (id) do update set
+          draft_id = excluded.draft_id,
+          image_prompt_id = excluded.image_prompt_id,
+          schedule_id = excluded.schedule_id,
+          status = excluded.status,
+          publish_allowed = excluded.publish_allowed,
+          approval_required = excluded.approval_required,
+          approved_at = excluded.approved_at`,
+        [
+          item.id || crypto.randomUUID(),
+          item.draft_id || "",
+          item.image_prompt_id || "",
+          item.schedule_id || "",
+          item.status || "review",
+          Boolean(item.publish_allowed),
+          item.approval_required !== false,
+          pgColumnDate(item.created_at),
+          item.approved_at || null
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL publishing_packages persist failed: ${error.message}`);
   }
 }
 
@@ -3885,6 +3970,111 @@ async function unschedulePost(numberText) {
   return item;
 }
 
+function latestPublishingPackages(limit = 20) {
+  return [...readPublishingPackages()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function publishingPackageByNumber(numberText) {
+  const index = Number(numberText);
+  if (!Number.isInteger(index) || index < 1) return null;
+  return latestPublishingPackages(20)[index - 1] || null;
+}
+
+function approvedImageForDraft(draftId) {
+  return latestImageQueueItems(200).find((item) =>
+    (item.draft_id || item.generated_story_id || "") === draftId && item.status === "approved"
+  ) || null;
+}
+
+function scheduleForDraft(draftId) {
+  return scheduledQueueItems(200).find((item) => item.draft_id === draftId) || null;
+}
+
+function publishingPackageDetails(pkg) {
+  if (!pkg) return null;
+  const draft = readGeneratedStories().find((item) => item.id === pkg.draft_id) || null;
+  const imagePrompt = readImageQueue().find((item) => item.id === pkg.image_prompt_id) || null;
+  const schedule = readScheduledPosts().find((item) => item.id === pkg.schedule_id) || null;
+  return {
+    package: pkg,
+    draft,
+    image_prompt: imagePrompt,
+    schedule,
+    safety: {
+      publish_allowed: false,
+      approval_required: true,
+      facebook_publishing: false
+    }
+  };
+}
+
+async function createPublishingPackageFromDraft(ref = "1") {
+  const draft = generatedDraftByRef(ref);
+  if (!draft) {
+    return {
+      ok: false,
+      code: "draft_not_found",
+      message: "Generated draft not found. Use /drafts to see draft numbers."
+    };
+  }
+  const imagePrompt = approvedImageForDraft(draft.id);
+  const schedule = scheduleForDraft(draft.id);
+  const now = new Date().toISOString();
+  const pkg = {
+    id: crypto.randomUUID(),
+    draft_id: draft.id,
+    image_prompt_id: imagePrompt?.id || "",
+    schedule_id: schedule?.id || "",
+    status: "review",
+    publish_allowed: false,
+    approval_required: true,
+    created_at: now,
+    approved_at: null
+  };
+  const next = [pkg, ...readPublishingPackages()].slice(0, 300);
+  await writePublishingPackages(next);
+  return {
+    ok: true,
+    module: "Approval Pipeline v2",
+    package: pkg,
+    details: publishingPackageDetails(pkg),
+    warnings: [
+      ...(!imagePrompt ? ["No approved image prompt attached yet. Use /image 1 and /approve_image 1."] : []),
+      ...(!schedule ? ["No scheduled slot attached yet. Use /schedule or /schedule week."] : [])
+    ],
+    safety: {
+      publish_allowed: false,
+      approval_required: true,
+      facebook_publishing: false
+    }
+  };
+}
+
+async function updatePublishingPackageStatus(numberText, status) {
+  const allowed = new Set(["review", "approved", "rejected"]);
+  if (!allowed.has(status)) return null;
+  const pkg = publishingPackageByNumber(numberText);
+  if (!pkg) return null;
+  const now = new Date().toISOString();
+  const updated = readPublishingPackages().map((item) => item.id === pkg.id
+    ? {
+        ...item,
+        status,
+        publish_allowed: false,
+        approval_required: true,
+        approved_at: status === "approved" ? now : item.approved_at || null
+      }
+    : item);
+  await writePublishingPackages(updated);
+  return updated.find((item) => item.id === pkg.id);
+}
+
+function readyPublishingPackages() {
+  return latestPublishingPackages(50).filter((item) => item.status === "approved");
+}
+
 function buildAutopilotV1Status() {
   const page = buildAIPageAnalysis();
   const competitor = buildCompetitorAutopilotAnalysis();
@@ -3962,6 +4152,10 @@ function renderAutopilotV1Dashboard() {
   const tomorrowSchedule = scheduleItemsForTomorrow();
   const approvedSchedule = scheduledPosts.filter((item) => item.status === "approved").slice(0, 6);
   const pendingSchedule = scheduledPosts.filter((item) => item.status === "draft").slice(0, 6);
+  const packages = latestPublishingPackages(12);
+  const readyPackages = packages.filter((item) => item.status === "approved");
+  const rejectedPackages = packages.filter((item) => item.status === "rejected");
+  const reviewPackages = packages.filter((item) => item.status === "review");
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
   const researchStories = readResearchStories();
@@ -4070,6 +4264,25 @@ function renderAutopilotV1Dashboard() {
           <table class="facebook-table">
             <thead><tr><th>Time</th><th>Draft</th><th>Theme</th><th>Status</th></tr></thead>
             <tbody>${rows(scheduledPosts.slice(0, 8), "No scheduled drafts yet.", (item) => `<tr><td>${escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU"))}</td><td>${escapeHtml(item.title || item.draft_id)}</td><td>${escapeHtml(item.rhythm_step || item.theme || "")}</td><td>${escapeHtml(item.status || "draft")}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Approval Pipeline v2</h2>
+        <div class="autopilot-status-grid">
+          ${card("Latest Packages", packages.length, "Story + image prompt + schedule")}
+          ${card("Ready To Publish", readyPackages.length, "Approved, but publishing is still manual")}
+          ${card("In Review", reviewPackages.length, "Waiting for approval")}
+          ${card("Rejected", rejectedPackages.length, "Rejected packages")}
+        </div>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Status</th><th>Draft</th><th>Image</th><th>Schedule</th></tr></thead>
+            <tbody>${rows(packages.slice(0, 8), "No publishing packages yet.", (item) => {
+              const detail = publishingPackageDetails(item);
+              return `<tr><td>${escapeHtml(item.status || "review")}</td><td>${escapeHtml(detail?.draft?.title || item.draft_id)}</td><td>${item.image_prompt_id ? "attached" : "missing"}</td><td>${detail?.schedule?.scheduled_time ? escapeHtml(new Date(detail.schedule.scheduled_time).toLocaleString("ru-RU")) : "missing"}</td></tr>`;
+            })}</tbody>
           </table>
         </div>
       </section>
@@ -4720,6 +4933,85 @@ async function telegramApproveSchedule(chatId) {
   return sendTelegramMessage(chatId, `<b>Schedule approved</b>\n\nApproved items in queue: ${result.approved_count}\n\nPublishing remains disabled. Approval only changes schedule status.`, mainTelegramKeyboard());
 }
 
+function packageLine(pkg, index) {
+  const details = publishingPackageDetails(pkg);
+  const scheduleText = details?.schedule?.scheduled_time
+    ? new Date(details.schedule.scheduled_time).toLocaleString("ru-RU")
+    : "missing schedule";
+  return [
+    `${index + 1}. ${details?.draft?.title || pkg.draft_id}`,
+    `status: ${pkg.status || "review"}`,
+    `image: ${pkg.image_prompt_id ? "attached" : "missing"}`,
+    `schedule: ${scheduleText}`
+  ].join("\n");
+}
+
+async function telegramPackages(chatId) {
+  const packages = latestPublishingPackages(10);
+  if (!packages.length) return sendTelegramMessage(chatId, "No publishing packages yet. Use /create_package 1.", mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Latest Publishing Packages</b>\n\n${escapeHtml(packages.map(packageLine).join("\n\n"))}\n\nUse /package 1 for details.\nUse /approve_package 1 or /reject_package 1.`, mainTelegramKeyboard());
+}
+
+async function telegramPackageDetails(chatId, numberText = "1") {
+  const pkg = publishingPackageByNumber(numberText);
+  const details = publishingPackageDetails(pkg);
+  if (!details?.draft) return sendTelegramMessage(chatId, "Package not found. Use /packages to see numbers 1-10.", mainTelegramKeyboard());
+  const scheduleText = details.schedule?.scheduled_time
+    ? new Date(details.schedule.scheduled_time).toLocaleString("ru-RU")
+    : "missing schedule";
+  const text = [
+    `<b>Publishing Package ${escapeHtml(numberText)}</b>`,
+    "",
+    `<b>${escapeHtml(details.draft.title || "")}</b>`,
+    `status: ${escapeHtml(pkg.status || "review")}`,
+    `theme: ${escapeHtml(details.draft.category || details.schedule?.theme || "")}`,
+    `emotion: ${escapeHtml(details.draft.emotion || details.schedule?.emotion || "")}`,
+    `scheduled: ${escapeHtml(scheduleText)}`,
+    "",
+    `<b>Hook</b>`,
+    escapeHtml(details.draft.hook || ""),
+    "",
+    `<b>Full story preview</b>`,
+    escapeHtml(shortText(details.draft.full_story || "", 1400)),
+    "",
+    `<b>Image prompt preview</b>`,
+    escapeHtml(shortText(details.image_prompt?.prompt || "No approved image prompt attached.", 900)),
+    "",
+    "publish_allowed: false",
+    "approval_required: true",
+    "No automatic Facebook publishing."
+  ].join("\n");
+  return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
+}
+
+async function telegramCreatePackage(chatId, draftNumber = "1") {
+  const result = await createPublishingPackageFromDraft(draftNumber || "1");
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Could not create package."), mainTelegramKeyboard());
+  const warnings = result.warnings.length ? `\n\nWarnings:\n${result.warnings.map((item) => `- ${item}`).join("\n")}` : "";
+  const details = result.details;
+  return sendTelegramMessage(chatId, `<b>Publishing package created</b>\n\nTitle: ${escapeHtml(details?.draft?.title || result.package.draft_id)}\nStatus: ${escapeHtml(result.package.status)}\nImage: ${result.package.image_prompt_id ? "attached" : "missing"}\nSchedule: ${result.package.schedule_id ? "attached" : "missing"}${escapeHtml(warnings)}\n\nUse /packages or /package 1.\nNo publishing was triggered.`, mainTelegramKeyboard());
+}
+
+async function telegramApprovePackage(chatId, numberText = "1") {
+  const pkg = await updatePublishingPackageStatus(numberText, "approved");
+  if (!pkg) return sendTelegramMessage(chatId, "Package not found. Use /packages.", mainTelegramKeyboard());
+  const details = publishingPackageDetails(pkg);
+  return sendTelegramMessage(chatId, `Package ${numberText} approved.\nTitle: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nStatus: ${escapeHtml(pkg.status)}\n\nNo publishing was triggered.`, mainTelegramKeyboard());
+}
+
+async function telegramRejectPackage(chatId, numberText = "1") {
+  const pkg = await updatePublishingPackageStatus(numberText, "rejected");
+  if (!pkg) return sendTelegramMessage(chatId, "Package not found. Use /packages.", mainTelegramKeyboard());
+  const details = publishingPackageDetails(pkg);
+  return sendTelegramMessage(chatId, `Package ${numberText} rejected.\nTitle: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nStatus: ${escapeHtml(pkg.status)}\n\nNothing was published.`, mainTelegramKeyboard());
+}
+
+async function telegramReadyPackages(chatId) {
+  const packages = readyPublishingPackages().slice(0, 10);
+  if (!packages.length) return sendTelegramMessage(chatId, "No approved publishing packages yet. Use /approve_package 1.", mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Ready Packages</b>\n\n${escapeHtml(packages.map(packageLine).join("\n\n"))}\n\nReady means approved only. Publishing remains manual/disabled.`, mainTelegramKeyboard());
+}
+
 async function telegramDrafts(chatId) {
   const drafts = latestGeneratedDrafts(10);
   if (!drafts.length) return sendTelegramMessage(chatId, "No generated story drafts yet. Use /generate betrayal first.", mainTelegramKeyboard());
@@ -4796,7 +5088,7 @@ async function legacyTelegramHelp(chatId) {
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/load_posts - load Facebook Page posts\n/analyze - run AI Page Analyzer\n/research betrayal - show top 5 research stories\n/generate betrayal - generate 3 original story drafts\n/drafts - show latest 10 generated drafts\n/draft 1 - show full text of selected draft\n/approve 1 - approve draft without publishing\n/reject 1 - reject draft\n/image 1 - create 3 image prompts for draft 1\n/images - show latest image prompt queue\n/image_prompt 1 - show full image prompt\n/approve_image 1 - approve image prompt\n/reject_image 1 - reject image prompt\n/schedule - show tomorrow content plan\n/schedule week - create 7-day content plan\n/queue - show scheduled drafts\n/move 1 tomorrow 19:30 - move scheduled draft\n/unschedule 1 - remove from schedule\n/approve_schedule - approve schedule without publishing\n/stats - stories and traffic stats\n/help - command list\n\nPublishing is never automatic. Images are not generated automatically.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status - system connection status\n/research betrayal - show top 5 research stories\n/generate betrayal - generate 3 original story drafts\n/drafts - show latest 10 generated drafts\n/draft 1 - show full text of selected draft\n/image 1 - create 3 image prompts for draft 1\n/approve_image 1 - approve image prompt\n/schedule - show tomorrow content plan\n/schedule week - create 7-day content plan\n/queue - show scheduled drafts\n/create_package 1 - create review package from draft\n/packages - show latest publishing packages\n/package 1 - show package details\n/approve_package 1 - approve package without publishing\n/reject_package 1 - reject package\n/ready - show approved packages\n/move 1 tomorrow 19:30 - move scheduled draft\n/unschedule 1 - remove from schedule\n/approve_schedule - approve schedule without publishing\n/stats - stories and traffic stats\n/help - command list\n\nPublishing is never automatic. No Facebook publishing is enabled.`, mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
@@ -4813,6 +5105,12 @@ function telegramCommandList() {
     { command: "approve_image", description: "Approve image prompt" },
     { command: "reject_image", description: "Reject image prompt" },
     { command: "queue", description: "Show scheduled drafts" },
+    { command: "packages", description: "Show publishing packages" },
+    { command: "package", description: "Show package details" },
+    { command: "create_package", description: "Create review package" },
+    { command: "approve_package", description: "Approve package" },
+    { command: "reject_package", description: "Reject package" },
+    { command: "ready", description: "Approved packages" },
     { command: "move", description: "Move scheduled draft" },
     { command: "unschedule", description: "Remove from schedule" },
     { command: "approve_schedule", description: "Approve schedule" },
@@ -4913,6 +5211,12 @@ async function handleTelegramMessage(message) {
   if (command === "/move") return telegramMoveSchedule(chatId, args);
   if (command === "/unschedule") return telegramUnschedule(chatId, args[0]);
   if (command === "/approve_schedule") return telegramApproveSchedule(chatId);
+  if (command === "/packages") return telegramPackages(chatId);
+  if (command === "/package") return telegramPackageDetails(chatId, args[0] || "1");
+  if (command === "/create_package") return telegramCreatePackage(chatId, args[0] || "1");
+  if (command === "/approve_package") return telegramApprovePackage(chatId, args[0] || "1");
+  if (command === "/reject_package") return telegramRejectPackage(chatId, args[0] || "1");
+  if (command === "/ready") return telegramReadyPackages(chatId);
   if (command === "/stats") return telegramStats(chatId);
   if (command === "/drafts") return telegramDrafts(chatId);
   if (command === "/draft") return telegramDraftDetails(chatId, args[0]);
@@ -7000,6 +7304,33 @@ async function handleApi(req, res, pathname) {
       tomorrow: scheduleItemsForTomorrow(),
       queue: scheduledQueueItems(100),
       safety: { autopublishing: false, approval_required: true, publish_allowed: false }
+    });
+  }
+
+  if (pathname === "/api/autopilot/v1/packages" && req.method === "GET") {
+    return sendJson(res, 200, {
+      ok: true,
+      module: "Approval Pipeline v2",
+      packages: latestPublishingPackages(100),
+      ready: readyPublishingPackages(),
+      safety: { publish_allowed: false, approval_required: true, facebook_publishing: false }
+    });
+  }
+
+  if (pathname === "/api/autopilot/v1/packages" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await createPublishingPackageFromDraft(payload.draft || payload.draft_id || payload.index || "1"));
+  }
+
+  if (pathname === "/api/autopilot/v1/package-status" && req.method === "POST") {
+    const payload = await parseBody(req);
+    const updated = await updatePublishingPackageStatus(payload.package || payload.index || "1", payload.status || "review");
+    return sendJson(res, 200, {
+      ok: Boolean(updated),
+      module: "Approval Pipeline v2",
+      package: updated,
+      details: publishingPackageDetails(updated),
+      safety: { publish_allowed: false, approval_required: true, facebook_publishing: false }
     });
   }
 
