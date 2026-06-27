@@ -19,6 +19,7 @@ const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
 const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
 const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
+const STYLE_BRAIN_PROFILES_FILE = path.join(ROOT, "data", "style_brain_profiles.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
@@ -372,6 +373,17 @@ async function writePublishingPackages(items) {
   return items;
 }
 
+function readStyleBrainProfiles() {
+  return storageCache.styleBrainProfiles || [];
+}
+
+async function writeStyleBrainProfiles(items) {
+  storageCache.styleBrainProfiles = items;
+  writeJsonBackup(STYLE_BRAIN_PROFILES_FILE, items);
+  await persistStyleBrainProfiles(items);
+  return items;
+}
+
 function readJsonArray(filePath) {
   if (!fs.existsSync(filePath)) return [];
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -408,6 +420,7 @@ const storageCache = {
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
   scheduledPosts: readJsonArray(SCHEDULED_POSTS_FILE),
   publishingPackages: readJsonArray(PUBLISHING_PACKAGES_FILE),
+  styleBrainProfiles: readJsonArray(STYLE_BRAIN_PROFILES_FILE),
   projectBrain: fs.existsSync(PROJECT_BRAIN_FILE)
     ? JSON.parse(fs.readFileSync(PROJECT_BRAIN_FILE, "utf8"))
     : {
@@ -459,6 +472,7 @@ async function initializeStorage() {
     await ensureGeneratedStoriesTable();
     await ensureScheduledPostsTable();
     await ensurePublishingPackagesTable();
+    await ensureStyleBrainProfilesTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
     storageCache.facebookPosts = (await pgPool.query("select * from facebook_posts order by total_score desc, published_at desc")).rows;
@@ -479,6 +493,7 @@ async function initializeStorage() {
     }));
     storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
+    storageCache.styleBrainProfiles = (await pgPool.query("select * from style_brain_profiles order by created_at desc limit 1200")).rows.map(normalizeStyleBrainProfileRow);
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
       storageCache.projectBrain = {
@@ -652,6 +667,36 @@ async function ensurePublishingPackagesTable() {
     create index if not exists publishing_packages_status_idx on publishing_packages (status);
     create index if not exists publishing_packages_created_at_idx on publishing_packages (created_at desc);
     create index if not exists publishing_packages_draft_idx on publishing_packages (draft_id);
+  `);
+}
+
+async function ensureStyleBrainProfilesTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists style_brain_profiles (
+      id text primary key,
+      source_type text not null,
+      source_reference text not null unique,
+      hook_strength integer not null default 0,
+      opening_style text,
+      dialogue_density integer not null default 0,
+      sentence_rhythm text,
+      paragraph_rhythm text,
+      emotional_intensity integer not null default 0,
+      emotion_curve jsonb not null default '[]'::jsonb,
+      conflict_speed integer not null default 0,
+      twist_strength integer not null default 0,
+      ending_strength integer not null default 0,
+      human_realism_score integer not null default 0,
+      boring_risk integer not null default 0,
+      facebook_readability_score integer not null default 0,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists style_brain_profiles_source_type_idx on style_brain_profiles (source_type);
+    create index if not exists style_brain_profiles_hook_strength_idx on style_brain_profiles (hook_strength desc);
+    create index if not exists style_brain_profiles_human_realism_idx on style_brain_profiles (human_realism_score desc);
+    create index if not exists style_brain_profiles_boring_risk_idx on style_brain_profiles (boring_risk asc);
+    create index if not exists style_brain_profiles_readability_idx on style_brain_profiles (facebook_readability_score desc);
   `);
 }
 
@@ -1072,6 +1117,65 @@ async function persistPublishingPackages(items) {
   }
 }
 
+function normalizeStyleBrainProfileRow(row = {}) {
+  return {
+    ...row,
+    emotion_curve: Array.isArray(row.emotion_curve) ? row.emotion_curve : []
+  };
+}
+
+async function persistStyleBrainProfiles(items) {
+  if (!pgPool) return;
+  try {
+    await ensureStyleBrainProfilesTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into style_brain_profiles (
+          id, source_type, source_reference, hook_strength, opening_style, dialogue_density,
+          sentence_rhythm, paragraph_rhythm, emotional_intensity, emotion_curve, conflict_speed,
+          twist_strength, ending_strength, human_realism_score, boring_risk, facebook_readability_score, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        on conflict (source_reference) do update set
+          source_type = excluded.source_type,
+          hook_strength = excluded.hook_strength,
+          opening_style = excluded.opening_style,
+          dialogue_density = excluded.dialogue_density,
+          sentence_rhythm = excluded.sentence_rhythm,
+          paragraph_rhythm = excluded.paragraph_rhythm,
+          emotional_intensity = excluded.emotional_intensity,
+          emotion_curve = excluded.emotion_curve,
+          conflict_speed = excluded.conflict_speed,
+          twist_strength = excluded.twist_strength,
+          ending_strength = excluded.ending_strength,
+          human_realism_score = excluded.human_realism_score,
+          boring_risk = excluded.boring_risk,
+          facebook_readability_score = excluded.facebook_readability_score`,
+        [
+          item.id || crypto.randomUUID(),
+          item.source_type || "manual",
+          item.source_reference || "",
+          Number(item.hook_strength || 0),
+          item.opening_style || "",
+          Number(item.dialogue_density || 0),
+          item.sentence_rhythm || "",
+          item.paragraph_rhythm || "",
+          Number(item.emotional_intensity || 0),
+          JSON.stringify(Array.isArray(item.emotion_curve) ? item.emotion_curve : []),
+          Number(item.conflict_speed || 0),
+          Number(item.twist_strength || 0),
+          Number(item.ending_strength || 0),
+          Number(item.human_realism_score || 0),
+          Number(item.boring_risk || 0),
+          Number(item.facebook_readability_score || 0),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL style_brain_profiles persist failed: ${error.message}`);
+  }
+}
+
 function escapeHtml(value = "") {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -1236,6 +1340,7 @@ function renderHeader() {
       <a href="/audience-insights">Audience Insights</a>
       <a href="/telegram-center">Telegram Center</a>
       <a href="/project-brain">Project Brain</a>
+      <a href="/style-brain">Style Brain</a>
       <a href="/ai-autopilot">AI Autopilot</a>
       <a href="/ai-autopilot-v1">Autopilot v1</a>
       <a href="/production-status">Production Status</a>
@@ -2979,6 +3084,370 @@ function storyDnaFromGeneratedStory(story = {}) {
   };
 }
 
+function clampStyleScore(value) {
+  return Math.max(0, Math.min(100, Math.round(Number(value || 0))));
+}
+
+function styleBrainParagraphs(text = "") {
+  return String(text || "").split(/\n{2,}|\r?\n/).map((item) => item.trim()).filter(Boolean);
+}
+
+function styleBrainAverageSentenceWords(sentences = []) {
+  if (!sentences.length) return 0;
+  return sentences.reduce((sum, sentence) => sum + sentence.split(/\s+/).filter(Boolean).length, 0) / sentences.length;
+}
+
+function styleBrainSentenceRhythm(avgWords = 0) {
+  if (avgWords <= 9) return "short punchy rhythm";
+  if (avgWords <= 16) return "mixed human rhythm";
+  if (avgWords <= 23) return "steady readable rhythm";
+  return "long dense rhythm";
+}
+
+function styleBrainParagraphRhythm(paragraphs = []) {
+  const averageChars = paragraphs.length
+    ? paragraphs.reduce((sum, paragraph) => sum + paragraph.length, 0) / paragraphs.length
+    : 0;
+  if (paragraphs.length >= 6 && averageChars <= 260) return "short mobile paragraphs";
+  if (paragraphs.length >= 3 && averageChars <= 420) return "balanced story paragraphs";
+  if (averageChars > 520) return "dense paragraphs";
+  return "single-block or underdeveloped rhythm";
+}
+
+function styleBrainConflictSpeed(text = "") {
+  const lower = String(text || "").toLowerCase();
+  const index = lower.search(/secret|truth|betray|inherit|argument|fight|silent|found|letter|phone|money|mother|son|daughter|ĐżŃ€Đ°Đ˛Đ´|Ń‚Đ°ĐąĐ˝|Đ¸Đ·ĐĽĐµĐ˝|Đ˝Đ°ŃĐ»ĐµĐ´|ŃŃĐľŃ€/i);
+  if (index < 0) return 25;
+  const ratio = index / Math.max(1, lower.length);
+  if (ratio <= 0.08) return 92;
+  if (ratio <= 0.18) return 78;
+  if (ratio <= 0.32) return 58;
+  return 38;
+}
+
+function styleBrainHookStrength(text = "") {
+  const hook = storyHook(text);
+  const length = hook.length;
+  const concreteObject = /letter|envelope|photo|key|ring|receipt|phone|will|transfer|ĐżĐ¸ŃŃŚĐĽ|ĐşĐľĐ˝Đ˛ĐµŃ€Ń‚|Ń„ĐľŃ‚Đľ|ĐşĐ»ŃŽŃ‡|Ń‚ĐµĐ»ĐµŃ„ĐľĐ˝|Đ·Đ°Đ˛ĐµŃ‰/i.test(hook);
+  const hiddenTruth = /secret|truth|found|silent|suddenly|never|ĐżŃ€Đ°Đ˛Đ´|Ń‚Đ°ĐąĐ˝|Đ˝Đ°ŃĐ»|ĐĽĐľĐ»Ń‡|Đ˛Đ´Ń€ŃĐł/i.test(hook);
+  const family = /mother|father|son|daughter|husband|wife|family|ĐĽĐ°Ń‚ŃŚ|ĐľŃ‚ĐµŃ†|ŃŃ‹Đ˝|Đ´ĐľŃ‡ŃŚ|ĐĽŃĐ¶|Đ¶ĐµĐ˝|ŃĐµĐĽŃŚ/i.test(hook);
+  const question = /\?/.test(hook);
+  const goodLength = length >= 70 && length <= 240;
+  return clampStyleScore(22 + (concreteObject ? 22 : 0) + (hiddenTruth ? 24 : 0) + (family ? 16 : 0) + (question ? 8 : 0) + (goodLength ? 10 : 0));
+}
+
+function styleBrainTwistStrength(text = "") {
+  return scoreFromMatches(text, ["secret", "truth", "found", "letter", "envelope", "turned out", "actually", "will", "confession", "неожиданно", "правда", "тайна"], 28, 8);
+}
+
+function styleBrainEndingStrength(text = "") {
+  const paragraphs = styleBrainParagraphs(text);
+  const ending = paragraphs[paragraphs.length - 1] || String(text || "").slice(-420);
+  return clampStyleScore(
+    scoreFromMatches(ending, ["forgive", "hope", "understood", "truth", "stayed", "returned", "простил", "надежда", "поняла", "вернулся"], 34, 8)
+    - (/moral|lesson|вывод|урок/i.test(ending) ? 6 : 0)
+  );
+}
+
+function styleBrainHumanRealismScore(text = "") {
+  const lower = String(text || "").toLowerCase();
+  const everydayHits = (lower.match(/kitchen|table|tea|kettle|apartment|bus|coat|receipt|phone|window|rain|hospital|кухн|стол|чай|чайник|квартир|автобус|пальто|чек|телефон|окно|дожд|больниц/gi) || []).length;
+  const dialogue = storyDnaDialogueDensity(text);
+  const specificObjects = (lower.match(/letter|envelope|photo|key|ring|receipt|phone|will|письм|конверт|фото|ключ|кольц|чек|телефон|завещ/gi) || []).length;
+  const genericPenalty = (lower.match(/destiny|heart|soul|moral|lesson|судьба|сердце|душа|урок|вывод/gi) || []).length * 4;
+  return clampStyleScore(32 + Math.min(28, everydayHits * 4) + Math.min(20, specificObjects * 5) + Math.min(20, dialogue * 0.35) - genericPenalty);
+}
+
+function styleBrainBoringRisk(text = "", profile = {}) {
+  const sentences = storyDnaSentences(text);
+  const avgWords = styleBrainAverageSentenceWords(sentences);
+  const paragraphs = styleBrainParagraphs(text);
+  const firstConflict = profile.conflict_speed || styleBrainConflictSpeed(text);
+  const lowDialoguePenalty = (profile.dialogue_density || 0) < 16 ? 18 : 0;
+  const densePenalty = avgWords > 22 ? 18 : avgWords > 17 ? 8 : 0;
+  const blockPenalty = paragraphs.length <= 2 ? 20 : 0;
+  const weakHookPenalty = (profile.hook_strength || 0) < 55 ? 18 : 0;
+  const slowConflictPenalty = firstConflict < 50 ? 14 : 0;
+  return clampStyleScore(12 + lowDialoguePenalty + densePenalty + blockPenalty + weakHookPenalty + slowConflictPenalty);
+}
+
+function styleBrainFacebookReadability(text = "") {
+  const sentences = storyDnaSentences(text);
+  const paragraphs = styleBrainParagraphs(text);
+  const avgWords = styleBrainAverageSentenceWords(sentences);
+  const firstParagraph = paragraphs[0] || storyHook(text);
+  return clampStyleScore(
+    42
+    + (paragraphs.length >= 5 ? 18 : paragraphs.length >= 3 ? 10 : 0)
+    + (avgWords >= 7 && avgWords <= 17 ? 16 : avgWords < 23 ? 7 : -8)
+    + (firstParagraph.length >= 70 && firstParagraph.length <= 260 ? 14 : 0)
+    + (storyDnaDialogueDensity(text) >= 20 ? 10 : 0)
+  );
+}
+
+function styleBrainProfileFromText({ source_type, source_reference, text, score_hint = 0, created_at } = {}) {
+  const clean = String(text || "").replace(/\r\n/g, "\n").trim();
+  if (!source_reference || !clean) return null;
+  const sentences = storyDnaSentences(clean);
+  const paragraphs = styleBrainParagraphs(clean);
+  const emotion = detectResearchEmotion(clean, "");
+  const dialogueDensity = storyDnaDialogueDensity(clean);
+  const hookStrength = styleBrainHookStrength(clean);
+  const conflictSpeed = styleBrainConflictSpeed(clean);
+  const twistStrength = styleBrainTwistStrength(clean);
+  const endingStrength = styleBrainEndingStrength(clean);
+  const humanRealism = styleBrainHumanRealismScore(clean);
+  const partialProfile = { hook_strength: hookStrength, dialogue_density: dialogueDensity, conflict_speed: conflictSpeed };
+  const boringRisk = styleBrainBoringRisk(clean, partialProfile);
+  const readability = styleBrainFacebookReadability(clean);
+  const scoreBoost = Math.min(8, Math.round(Number(score_hint || 0) / 20));
+  return {
+    id: `style_${crypto.createHash("sha1").update(String(source_reference)).digest("hex").slice(0, 24)}`,
+    source_type,
+    source_reference,
+    hook_strength: clampStyleScore(hookStrength + scoreBoost),
+    opening_style: storyDnaOpeningStyle(clean),
+    dialogue_density: dialogueDensity,
+    sentence_rhythm: styleBrainSentenceRhythm(styleBrainAverageSentenceWords(sentences)),
+    paragraph_rhythm: styleBrainParagraphRhythm(paragraphs),
+    emotional_intensity: scoreFromMatches(clean, ["secret", "betrayal", "truth", "tears", "silent", "shame", "hope", "family", "тайна", "слез", "молч", "надежда"], 34, 7),
+    emotion_curve: storyDnaEmotionCurve(clean, emotion),
+    conflict_speed: conflictSpeed,
+    twist_strength: twistStrength,
+    ending_strength: endingStrength,
+    human_realism_score: humanRealism,
+    boring_risk: boringRisk,
+    facebook_readability_score: readability,
+    created_at: created_at || new Date().toISOString()
+  };
+}
+
+function styleBrainProfileFromFacebookPost(post = {}) {
+  const postId = post.facebook_post_id || post.id;
+  if (!postId || !post.message) return null;
+  return styleBrainProfileFromText({
+    source_type: "facebook",
+    source_reference: `facebook:${postId}`,
+    text: post.message,
+    score_hint: post.total_score || 0,
+    created_at: post.published_at || post.created_at
+  });
+}
+
+function styleBrainProfileFromGeneratedStory(story = {}) {
+  const storyId = story.id;
+  const text = [story.title, story.hook, story.full_story, story.moral].filter(Boolean).join("\n\n");
+  if (!storyId || !text.trim()) return null;
+  return styleBrainProfileFromText({
+    source_type: "generated",
+    source_reference: `generated:${storyId}`,
+    text,
+    score_hint: story.viral_prediction_score || 0,
+    created_at: story.created_at
+  });
+}
+
+function styleBrainProfileFromResearchStory(story = {}) {
+  const sourceReference = story.url || story.source_url || story.id || story.title;
+  const text = [story.title, story.summary, story.emotion, story.category, ...(Array.isArray(story.keywords) ? story.keywords : [])].filter(Boolean).join("\n\n");
+  if (!sourceReference || !text.trim()) return null;
+  return styleBrainProfileFromText({
+    source_type: "research",
+    source_reference: `research:${sourceReference}`,
+    text,
+    score_hint: (Number(story.viral_score || 0) + Number(story.similarity_score || 0)) / 2,
+    created_at: story.created_at
+  });
+}
+
+function styleBrainProfileFromApprovedPackage(pkg = {}) {
+  if (!pkg?.id || pkg.status !== "approved") return null;
+  const draft = readGeneratedStories().find((story) => story.id === pkg.draft_id) || {};
+  const text = [draft.title, draft.hook, draft.full_story, draft.moral].filter(Boolean).join("\n\n");
+  if (!text.trim()) return null;
+  return styleBrainProfileFromText({
+    source_type: "approved_package",
+    source_reference: `package:${pkg.id}`,
+    text,
+    score_hint: Number(draft.viral_prediction_score || 70),
+    created_at: pkg.approved_at || pkg.created_at
+  });
+}
+
+function mergeStyleBrainProfiles(existing = [], incoming = []) {
+  const byReference = new Map();
+  for (const item of existing) {
+    if (item?.source_reference) byReference.set(item.source_reference, item);
+  }
+  for (const item of incoming) {
+    if (!item?.source_reference) continue;
+    byReference.set(item.source_reference, {
+      ...(byReference.get(item.source_reference) || {}),
+      ...item,
+      created_at: byReference.get(item.source_reference)?.created_at || item.created_at || new Date().toISOString()
+    });
+  }
+  return [...byReference.values()]
+    .sort((a, b) => Number(b.human_realism_score || 0) + Number(b.hook_strength || 0) - Number(b.boring_risk || 0)
+      - (Number(a.human_realism_score || 0) + Number(a.hook_strength || 0) - Number(a.boring_risk || 0)))
+    .slice(0, 1500);
+}
+
+function buildStyleBrainSourceProfiles() {
+  return [
+    ...readFacebookPosts().map(styleBrainProfileFromFacebookPost),
+    ...readGeneratedStories().map(styleBrainProfileFromGeneratedStory),
+    ...readResearchStories().map(styleBrainProfileFromResearchStory),
+    ...readPublishingPackages().map(styleBrainProfileFromApprovedPackage)
+  ].filter(Boolean);
+}
+
+function averageStyleScore(items = [], key) {
+  return items.length ? Math.round(items.reduce((sum, item) => sum + Number(item[key] || 0), 0) / items.length) : 0;
+}
+
+function styleBrainMode(items = [], key, fallback = "balanced story paragraphs") {
+  return countBy(items, (item) => item[key] || "unknown")[0]?.name || fallback;
+}
+
+function buildStyleBrainStatistics(profiles = readStyleBrainProfiles()) {
+  const safeProfiles = Array.isArray(profiles) ? profiles : [];
+  return {
+    module: "Style Brain v1",
+    profiles_count: safeProfiles.length,
+    hook_strength: averageStyleScore(safeProfiles, "hook_strength"),
+    emotional_intensity: averageStyleScore(safeProfiles, "emotional_intensity"),
+    dialogue_density: averageStyleScore(safeProfiles, "dialogue_density"),
+    boring_risk: averageStyleScore(safeProfiles, "boring_risk"),
+    human_realism_score: averageStyleScore(safeProfiles, "human_realism_score"),
+    facebook_readability_score: averageStyleScore(safeProfiles, "facebook_readability_score"),
+    top_opening_styles: countBy(safeProfiles, (item) => item.opening_style || "unknown").slice(0, 8),
+    top_sentence_rhythms: countBy(safeProfiles, (item) => item.sentence_rhythm || "unknown").slice(0, 8),
+    top_paragraph_rhythms: countBy(safeProfiles, (item) => item.paragraph_rhythm || "unknown").slice(0, 8),
+    strongest_profiles: safeProfiles
+      .filter((item) => Number(item.hook_strength || 0) >= 60)
+      .slice(0, 10)
+      .map((item) => ({
+        source_type: item.source_type,
+        hook_strength: item.hook_strength,
+        human_realism_score: item.human_realism_score,
+        boring_risk: item.boring_risk,
+        opening_style: item.opening_style
+      })),
+    updated_at: new Date().toISOString()
+  };
+}
+
+function buildStyleBrainRecommendations(profiles = readStyleBrainProfiles()) {
+  const stats = buildStyleBrainStatistics(profiles);
+  const idealOpeningStyle = stats.top_opening_styles[0]?.name || "object-trigger opening";
+  const idealParagraphRhythm = stats.top_paragraph_rhythms[0]?.name || "short mobile paragraphs";
+  const idealDialogue = stats.dialogue_density < 22 ? "add 2-4 short dialogue lines" : "keep natural short dialogue";
+  return {
+    ok: true,
+    module: "Style Brain v1 Recommendations",
+    profiles_count: stats.profiles_count,
+    ideal_opening_style: idealOpeningStyle,
+    ideal_hook_type: idealOpeningStyle.includes("object") ? "hidden object + family silence in the first 2 lines" : "family conflict + emotional question",
+    ideal_emotional_intensity: stats.emotional_intensity < 55 ? "55-72 with a clear escalation before the reveal" : "keep current intensity but add one quiet release moment",
+    ideal_dialogue_density: idealDialogue,
+    paragraph_rhythm: idealParagraphRhythm,
+    what_makes_current_drafts_boring: [
+      "conflict starts too late",
+      "too many generic moral lines",
+      "not enough concrete household details",
+      "dialogue sounds explanatory instead of lived-in",
+      "paragraphs become too dense for Facebook/mobile reading"
+    ],
+    how_to_make_stories_more_human: [
+      "open with a specific object, room, smell, sound or gesture",
+      "put the conflict in the first 3 lines",
+      "add small imperfect details: cold tea, old slippers, unpaid receipt, shaking hands",
+      "use short dialogue where people avoid saying the whole truth",
+      "let the moral appear through action, not a final lecture"
+    ],
+    words_structures_to_avoid: [
+      "It was destiny",
+      "everything changed forever",
+      "from that moment on",
+      "lesson learned",
+      "her heart was full of emotions",
+      "generic long explanations before the conflict"
+    ],
+    target_scores: {
+      hook_strength: Math.max(72, stats.hook_strength),
+      human_realism_score: Math.max(76, stats.human_realism_score),
+      boring_risk_max: Math.min(35, stats.boring_risk || 35),
+      facebook_readability_score: Math.max(75, stats.facebook_readability_score),
+      dialogue_density: Math.max(24, stats.dialogue_density)
+    },
+    statistics: stats,
+    safety: {
+      stores_full_text: false,
+      publishes: false,
+      copies_competitors: false
+    }
+  };
+}
+
+async function refreshStyleBrainV1() {
+  const incoming = buildStyleBrainSourceProfiles();
+  const merged = mergeStyleBrainProfiles(readStyleBrainProfiles(), incoming);
+  await writeStyleBrainProfiles(merged);
+  const recommendations = buildStyleBrainRecommendations(merged);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object" ? brain.internet_research : {};
+  brain.internet_research = {
+    ...currentResearch,
+    style_brain_v1: {
+      statistics: recommendations.statistics,
+      recommendations,
+      updated_at: new Date().toISOString(),
+      safety: recommendations.safety
+    }
+  };
+  brain.recommendations = [
+    `Style Brain: use ${recommendations.ideal_opening_style}, ${recommendations.ideal_hook_type}, ${recommendations.ideal_dialogue_density}.`,
+    ...(brain.recommendations || []).slice(0, 9)
+  ];
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return {
+    ok: true,
+    module: "Style Brain v1",
+    analyzed: incoming.length,
+    profiles_count: merged.length,
+    statistics: recommendations.statistics,
+    recommendations,
+    safety: recommendations.safety
+  };
+}
+
+async function styleBrainGuidanceForGenerator() {
+  if (!readStyleBrainProfiles().length && buildStyleBrainSourceProfiles().length) {
+    await refreshStyleBrainV1();
+  }
+  const recommendations = buildStyleBrainRecommendations(readStyleBrainProfiles());
+  return {
+    opening_style: recommendations.ideal_opening_style,
+    hook_type: recommendations.ideal_hook_type,
+    emotional_intensity: recommendations.ideal_emotional_intensity,
+    dialogue_density: recommendations.ideal_dialogue_density,
+    paragraph_rhythm: recommendations.paragraph_rhythm,
+    make_human: recommendations.how_to_make_stories_more_human,
+    avoid: recommendations.words_structures_to_avoid,
+    target_scores: recommendations.target_scores
+  };
+}
+
+async function learnStyleBrainFromGeneratedStory(story = {}) {
+  const profile = styleBrainProfileFromGeneratedStory(story);
+  if (!profile) return null;
+  const merged = mergeStyleBrainProfiles(readStyleBrainProfiles(), [profile]);
+  await writeStyleBrainProfiles(merged);
+  return buildStyleBrainRecommendations(merged);
+}
+
 function mergeStoryDna(existing = [], incoming = []) {
   const byReference = new Map();
   for (const item of existing) {
@@ -4340,29 +4809,55 @@ function researchKeywordBlend(signals) {
   return words.slice(0, 10);
 }
 
-function buildGeneratedStoryText({ profile, emotion, length, seed, keywords }) {
+function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance = {} }) {
   const plan = storyLengthPlan(length);
   const hero = pick(["Mara", "Helen", "Nina", "Galina", "Elena", "Tamara"], `${seed}:hero`);
   const relation = pick(["her adult son", "her husband", "her daughter-in-law", "her younger sister", "her late mother's neighbor"], `${seed}:relation`);
   const witness = pick(["the kettle was still boiling", "nobody touched the tea", "the phone kept buzzing on the table", "the window was open to the evening rain"], `${seed}:witness`);
+  const settingLower = String(profile.setting || "").toLowerCase();
+  const domesticDetail = pick(["the tea had gone cold", "a chipped cup stood near her elbow", "someone had left wet shoes by the door", "the old kitchen clock ticked too loudly"], `${seed}:detail`);
+  const transitDetail = pick(["a bus ticket was turning soft from the rain", "her shopping bag had slipped against the bench", "headlights moved across the wet pavement", "the timetable shook in the wind"], `${seed}:transit-detail`);
+  const hospitalDetail = pick(["the corridor smelled faintly of antiseptic", "a plastic chair creaked under her coat", "someone's discharge papers lay folded in half", "the vending machine hummed too loudly"], `${seed}:hospital-detail`);
+  const eventDetail = pick(["paper plates were still on the table", "a half-cut cake stood untouched", "someone had turned the music down", "the children had gone quiet in the next room"], `${seed}:event-detail`);
+  const everydayDetail = /bus|stop|station|platform/.test(settingLower)
+    ? transitDetail
+    : /hospital|corridor/.test(settingLower)
+      ? hospitalDetail
+      : /party|dinner|lunch|celebration/.test(settingLower)
+        ? eventDetail
+        : domesticDetail;
+  const objectAnchor = /bus|stop|station|platform/.test(settingLower)
+    ? "beside a wet ticket and her shopping bag"
+    : /hospital|corridor/.test(settingLower)
+      ? "beside folded hospital papers"
+      : /party|dinner|lunch|celebration/.test(settingLower)
+        ? "beside the paper plates and cold tea"
+        : "next to the cold tea";
+  const settingPhrase = /bus|stop|station|platform/.test(settingLower)
+    ? `on the bench at ${profile.setting}`
+    : /hospital|corridor/.test(settingLower)
+      ? `on a plastic chair in ${profile.setting}`
+    : /party|dinner|lunch|celebration/.test(settingLower)
+      ? `on the table during ${profile.setting}`
+      : `in ${profile.setting}`;
   const title = `${hero} found ${profile.object}, and the whole family suddenly went silent`;
-  const hook = `${hero} thought the argument would end like all the others. Then she found ${profile.object} in ${profile.setting}, and even ${relation} could not look her in the eye.`;
+  const hook = `${hero} noticed ${profile.object} before anyone else did.\n\nIt was lying ${settingPhrase}, ${objectAnchor}, and even ${relation} suddenly stopped talking.\n\n"Who put this here?" she asked. No one answered.`;
   const paragraphs = [
     hook,
-    `For years, ${hero} had been the person who smoothed every quarrel over. She made tea, changed the subject, and told herself that family peace was worth a little silence.`,
-    `But that evening was different. The room felt smaller than usual, and ${witness}. What began as ${profile.conflict} turned into the kind of silence that makes people afraid to breathe.`,
-    `${hero} picked up ${profile.object} by accident. At first it looked ordinary. Then she saw one detail that did not belong, and her hands went cold.`,
-    `"Tell me this is not true," she said. No one answered. That was when she understood: the secret was not new. It had only been waiting for someone brave enough to see it.`,
-    `The first explanation hurt her pride. The second hurt her heart. Everyone had a version of the truth, but every version left one person looking like a villain.`,
-    `Then ${relation} finally spoke. The words came slowly, as if each one had been locked away for years. ${profile.turn}.`,
-    `${hero} sat down because standing suddenly felt impossible. All the anger she had carried changed shape. It did not disappear, but it stopped being simple.`,
-    `By midnight, nobody had won the argument. Still, something important had shifted: the family was no longer fighting over the surface of the story.`,
-    `In the morning, ${hero} put ${profile.object} back on the table and asked one question, softer this time: "What do we do with the truth now?"`,
-    `No one had an easy answer. But for the first time in years, they stayed in the same room long enough to look for one.`,
-    profile.moral
+    `For years, ${hero} had been the one who smoothed every quarrel over. She made tea, changed the subject, wiped the table twice if her hands were shaking, and pretended family peace did not cost her anything.`,
+    `But that evening was different. ${everydayDetail}, ${witness}, and what began as ${profile.conflict} turned into a silence so heavy that even the chairs seemed too loud when someone moved.`,
+    `${hero} picked up ${profile.object}. At first it looked ordinary. Then she saw one detail that did not belong, and her fingers tightened around the edge.`,
+    `"Tell me this is not true," she said.\n\n${relation} looked at the floor.\n\n"Not here," came the answer.\n\n"Here," ${hero} said. "I've been quiet long enough."`,
+    `The first explanation hurt her pride. The second hurt her heart. Everyone had a version of the truth, and every version made someone else look cruel.`,
+    `Then ${relation} finally spoke. The words came slowly, not like a confession from a film, but like something tired and human. ${profile.turn}.`,
+    `${hero} sat down because standing suddenly felt impossible. Anger was still there, but now it had names, dates, unpaid bills, old fear, and one decision nobody had dared to explain.`,
+    `No one cried loudly. That would have been easier. Instead, they sat with cold tea between them while the truth moved around the table from face to face.`,
+    `By midnight, nobody had won the argument. Still, something important had shifted: they were no longer fighting over the surface of the story.`,
+    `In the morning, ${hero} put ${profile.object} back on the table and asked, softer this time, "What do we do with the truth now?"`,
+    `No one had an easy answer. But for the first time in years, they stayed in the same room long enough to look for one. ${profile.moral}`
   ];
   const selected = paragraphs.slice(0, plan.paragraphs);
-  if (!selected.includes(profile.moral)) selected[selected.length - 1] = profile.moral;
+  if (!selected.some((paragraph) => paragraph.includes(profile.moral))) selected[selected.length - 1] = profile.moral;
   const keywordLine = keywords.length ? `\n\nResearch signal themes used only as inspiration: ${keywords.slice(0, 5).join(", ")}.` : "";
   return {
     title,
@@ -4560,7 +5055,8 @@ async function generateOriginalStoryV2(payload = {}) {
   const seed = `${category}:${emotion}:${length}:${Date.now()}:${crypto.randomUUID()}`;
   const profile = storyCategoryProfile(category, seed);
   const keywords = researchKeywordBlend(researchSignals);
-  const draft = buildGeneratedStoryText({ profile, emotion, length, seed, keywords });
+  const styleGuidance = await styleBrainGuidanceForGenerator();
+  const draft = buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance });
   const score = viralPredictionScore(researchSignals, facebookSignals, length);
   const story = {
     id: crypto.randomUUID(),
@@ -4577,10 +5073,12 @@ async function generateOriginalStoryV2(payload = {}) {
       `Uses ${researchSignals.filter((item) => item.source_status === "live_search").length} live research signals from high-scoring public results.`,
       facebookSignals.length ? `Calibrated against ${facebookSignals.length} top Facebook posts from your loaded Page data.` : "Facebook Page data is not loaded enough yet, so scoring leans more on research signals.",
       `Built around ${category}, ${emotion}, a concrete object, family tension and a late reveal.`,
+      `Style Brain guidance: ${styleGuidance.opening_style}, ${styleGuidance.dialogue_density}, ${styleGuidance.paragraph_rhythm}.`,
       "Original draft: new characters, new setting, new ending, no copied text."
     ].join(" "),
     research_signals: researchSignals,
     facebook_signals: facebookSignals,
+    style_brain_guidance: styleGuidance,
     status: "needs_approval",
     approval_required: true,
     publish_allowed: false,
@@ -4590,6 +5088,7 @@ async function generateOriginalStoryV2(payload = {}) {
   const saved = [story, ...readGeneratedStories()].slice(0, 200);
   await writeGeneratedStories(saved);
   await autoSyncProjectBrainV2({ sources: ["generated"], reason: "story_generated" });
+  await learnStyleBrainFromGeneratedStory(story);
   return {
     ok: true,
     module: "Story Generator v2",
@@ -5256,6 +5755,101 @@ function renderProjectBrainDashboard() {
         </div>
       </section>
     </main>`);
+}
+
+function renderStyleBrainDashboard() {
+  const profiles = readStyleBrainProfiles();
+  const recommendations = buildStyleBrainRecommendations(profiles);
+  const stats = recommendations.statistics;
+  const list = (items = [], empty = "No data yet.") => items.length
+    ? `<ol class="insight-list">${items.slice(0, 8).map((item) => `<li><strong>${escapeHtml(item.name || item)}</strong><span>${item.count ? `${item.count} signals` : ""}</span></li>`).join("")}</ol>`
+    : `<p class="empty-table">${escapeHtml(empty)}</p>`;
+  const tips = (items = []) => `<ol class="insight-list">${items.map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("")}</ol>`;
+  const profileRows = profiles.slice(0, 20).map((item) => `<tr>
+    <td>${escapeHtml(item.source_type || "")}</td>
+    <td>${Number(item.hook_strength || 0)}</td>
+    <td>${Number(item.emotional_intensity || 0)}</td>
+    <td>${Number(item.dialogue_density || 0)}</td>
+    <td>${Number(item.boring_risk || 0)}</td>
+    <td>${Number(item.human_realism_score || 0)}</td>
+    <td>${escapeHtml(item.opening_style || "")}</td>
+  </tr>`).join("") || `<tr><td colspan="7">Run Style Brain refresh after loading Facebook posts, research, or drafts.</td></tr>`;
+  return layout("Style Brain", `${renderHeader()}
+    <main class="insights-page">
+      <section class="insights-hero">
+        <p class="kicker">Style Brain v1</p>
+        <h1>Style Brain</h1>
+        <p>Analyzes narrative style, emotional rhythm, hook strength and human realism. It guides Story Generator and never publishes anything.</p>
+      </section>
+
+      <section class="insight-card">
+        <div class="section-title">
+          <div>
+            <h2>Style Status</h2>
+            <p class="helper-text">Stores structure and style signals only. No full copyrighted stories are stored.</p>
+          </div>
+          <div class="button-row">
+            <button class="primary-btn" id="styleBrainRefreshBtn" type="button">Refresh Style Brain</button>
+          </div>
+        </div>
+        <div class="autopilot-status-grid">
+          <article><span>Profiles</span><strong>${stats.profiles_count}</strong><p>Facebook, generated, research summaries, approved packages.</p></article>
+          <article><span>Hook strength</span><strong>${stats.hook_strength}%</strong><p>Average first-line pulling power.</p></article>
+          <article><span>Emotion intensity</span><strong>${stats.emotional_intensity}%</strong><p>Conflict and feeling signal.</p></article>
+          <article><span>Dialogue density</span><strong>${stats.dialogue_density}%</strong><p>Natural speech signal.</p></article>
+          <article><span>Boring risk</span><strong>${stats.boring_risk}%</strong><p>Lower is better.</p></article>
+          <article><span>Human realism</span><strong>${stats.human_realism_score}%</strong><p>Everyday details and believable texture.</p></article>
+        </div>
+        <p id="styleBrainMessage" class="helper-text">Ready.</p>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card"><h2>Current Recommendations</h2>
+          <p><strong>Opening:</strong> ${escapeHtml(recommendations.ideal_opening_style)}</p>
+          <p><strong>Hook:</strong> ${escapeHtml(recommendations.ideal_hook_type)}</p>
+          <p><strong>Dialogue:</strong> ${escapeHtml(recommendations.ideal_dialogue_density)}</p>
+          <p><strong>Paragraph rhythm:</strong> ${escapeHtml(recommendations.paragraph_rhythm)}</p>
+        </article>
+        <article class="insight-card"><h2>Top Opening Styles</h2>${list(stats.top_opening_styles)}</article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card"><h2>What Makes Drafts Boring</h2>${tips(recommendations.what_makes_current_drafts_boring)}</article>
+        <article class="insight-card"><h2>Make Stories More Human</h2>${tips(recommendations.how_to_make_stories_more_human)}</article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card"><h2>Words / Structures To Avoid</h2>${tips(recommendations.words_structures_to_avoid)}</article>
+        <article class="insight-card"><h2>Rhythm Signals</h2>
+          <h3>Sentence rhythm</h3>${list(stats.top_sentence_rhythms)}
+          <h3>Paragraph rhythm</h3>${list(stats.top_paragraph_rhythms)}
+        </article>
+      </section>
+
+      <section class="insight-card">
+        <h2>Latest Style Profiles</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Source</th><th>Hook</th><th>Emotion</th><th>Dialogue</th><th>Boring</th><th>Realism</th><th>Opening</th></tr></thead>
+            <tbody>${profileRows}</tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script>
+      const styleMessage = document.getElementById("styleBrainMessage");
+      document.getElementById("styleBrainRefreshBtn").addEventListener("click", async () => {
+        styleMessage.textContent = "Refreshing...";
+        try {
+          const response = await fetch("/api/style-brain-v1/refresh", { method: "POST" });
+          const result = await response.json();
+          styleMessage.textContent = result.ok ? "Style Brain refreshed. Reloading..." : (result.message || "Refresh failed.");
+          if (result.ok) window.location.reload();
+        } catch (error) {
+          styleMessage.textContent = error.message;
+        }
+      });
+    </script>`);
 }
 
 function renderAutopilotV1Dashboard() {
@@ -6357,6 +6951,62 @@ async function telegramBrainRecommendations(chatId) {
   return sendTelegramLongMessage(chatId, telegramBrainStatsText(buildProjectBrainV2Recommendations()), mainTelegramKeyboard());
 }
 
+function telegramStyleBrainStatsText(recommendations = buildStyleBrainRecommendations(readStyleBrainProfiles())) {
+  const stats = recommendations.statistics || buildStyleBrainStatistics(readStyleBrainProfiles());
+  const makeHuman = recommendations.how_to_make_stories_more_human
+    .slice(0, 4)
+    .map((item) => `• ${item}`)
+    .join("\n");
+  const avoid = recommendations.words_structures_to_avoid
+    .slice(0, 5)
+    .map((item) => `• ${item}`)
+    .join("\n");
+  return [
+    "✍️ <b>Style Brain v1</b>",
+    "",
+    `Profiles: ${stats.profiles_count}`,
+    `Hook strength: ${stats.hook_strength}%`,
+    `Emotional intensity: ${stats.emotional_intensity}%`,
+    `Dialogue density: ${stats.dialogue_density}%`,
+    `Boring risk: ${stats.boring_risk}%`,
+    `Human realism: ${stats.human_realism_score}%`,
+    "",
+    "<b>Рекомендации</b>",
+    `Opening: ${escapeHtml(recommendations.ideal_opening_style)}`,
+    `Hook: ${escapeHtml(recommendations.ideal_hook_type)}`,
+    `Dialogue: ${escapeHtml(recommendations.ideal_dialogue_density)}`,
+    `Paragraphs: ${escapeHtml(recommendations.paragraph_rhythm)}`,
+    "",
+    "<b>Сделать живее</b>",
+    escapeHtml(makeHuman),
+    "",
+    "<b>Избегать</b>",
+    escapeHtml(avoid),
+    "",
+    "Безопасность: Style Brain хранит только style signals и не публикует."
+  ].join("\n");
+}
+
+async function telegramStyleBrain(chatId, args = []) {
+  const mode = String(args[0] || "").toLowerCase();
+  if (mode === "обновить" || mode === "refresh" || mode === "update") {
+    const result = await refreshStyleBrainV1();
+    return sendTelegramLongMessage(chatId, [
+      "✍️ <b>Style Brain обновлён</b>",
+      "",
+      `Analyzed: ${result.analyzed}`,
+      `Profiles: ${result.profiles_count}`,
+      "",
+      telegramStyleBrainStatsText(result.recommendations)
+    ].join("\n"), mainTelegramKeyboard());
+  }
+  return sendTelegramLongMessage(chatId, telegramStyleBrainStatsText(), mainTelegramKeyboard());
+}
+
+async function telegramStyleBrainRecommendations(chatId) {
+  return sendTelegramLongMessage(chatId, telegramStyleBrainStatsText(buildStyleBrainRecommendations(readStyleBrainProfiles())), mainTelegramKeyboard());
+}
+
 async function telegramForceBrainSync(chatId) {
   return telegramBrain(chatId, ["обновить"]);
 }
@@ -6392,6 +7042,9 @@ async function telegramHelp(chatId) {
     "/мозг обновить — импорт Facebook/generated/research в Story DNA",
     "/обновить_мозг — принудительная полная синхронизация Project Brain",
     "/рекомендации — рекомендации Project Brain",
+    "/стиль — Style Brain v1",
+    "/стиль обновить — проанализировать Facebook/generated/research/approved packages",
+    "/стиль рекомендации — рекомендации по живому стилю",
     "/помощь — эта справка",
     "",
     "<b>English commands still work</b>",
@@ -6434,6 +7087,9 @@ function telegramCommandList() {
     { command: "brain", description: "Project Brain v2" },
     { command: "update_brain", description: "Force Project Brain sync" },
     { command: "recommendations", description: "Рекомендации мозга" },
+    { command: "style", description: "Style Brain v1" },
+    { command: "update_style", description: "Refresh Style Brain" },
+    { command: "style_recommendations", description: "Style recommendations" },
     { command: "approve", description: "Одобрить черновик" },
     { command: "reject", description: "Отклонить черновик" },
     { command: "help", description: "Помощь" }
@@ -6543,6 +7199,12 @@ async function handleTelegramMessage(message) {
   if (command === "/update_brain" || command === "/обновить_мозг") return telegramForceBrainSync(chatId);
   if (command === "/brain" || command === "/мозг") return telegramBrain(chatId, args);
   if (command === "/recommendations" || command === "/рекомендации") return telegramBrainRecommendations(chatId);
+  if (command === "/style" || command === "/стиль") {
+    if (String(args[0] || "").toLowerCase() === "рекомендации") return telegramStyleBrainRecommendations(chatId);
+    return telegramStyleBrain(chatId, args);
+  }
+  if (command === "/update_style") return telegramStyleBrain(chatId, ["refresh"]);
+  if (command === "/style_recommendations") return telegramStyleBrainRecommendations(chatId);
   if (command === "/stats") return telegramStats(chatId);
   if (command === "/drafts" || command === "/черновики") return telegramDrafts(chatId);
   if (command === "/draft" || command === "/черновик") return telegramDraftDetails(chatId, args[0]);
@@ -8590,6 +9252,31 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, readProjectBrain());
   }
 
+  if (pathname === "/api/style-brain-v1" && req.method === "GET") {
+    const profiles = readStyleBrainProfiles();
+    return sendJson(res, 200, {
+      ok: true,
+      module: "Style Brain v1",
+      statistics: buildStyleBrainStatistics(profiles),
+      recommendations: buildStyleBrainRecommendations(profiles),
+      profiles_sample: profiles.slice(0, 20),
+      safety: {
+        stores_full_copyrighted_text: false,
+        stores_style_signals_only: true,
+        publishing_enabled: false,
+        copies_competitor_text: false
+      }
+    });
+  }
+
+  if (pathname === "/api/style-brain-v1/refresh" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await refreshStyleBrainV1());
+  }
+
+  if (pathname === "/api/style-brain-v1/recommendations" && req.method === "GET") {
+    return sendJson(res, 200, buildStyleBrainRecommendations(readStyleBrainProfiles()));
+  }
+
   if (pathname === "/api/project-brain-v2" && req.method === "GET") {
     const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
     const brain = readProjectBrain();
@@ -8819,6 +9506,7 @@ async function router(req, res) {
     if (pathname === "/audience-insights") return send(res, 200, renderAudienceInsights());
     if (pathname === "/telegram-center") return send(res, 200, renderTelegramCenter());
     if (pathname === "/project-brain") return send(res, 200, renderProjectBrainDashboard());
+    if (pathname === "/style-brain") return send(res, 200, renderStyleBrainDashboard());
     if (pathname === "/ai-autopilot") return send(res, 200, renderAutopilotDashboard());
     if (pathname === "/ai-autopilot-v1") return send(res, 200, renderAutopilotV1Dashboard());
     if (pathname === "/production-status") return send(res, 200, renderProductionStatus());
