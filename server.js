@@ -12,6 +12,7 @@ const PROJECT_BRAIN_FILE = path.join(ROOT, "data", "project_brain.json");
 const FACEBOOK_CONNECTION_FILE = path.join(ROOT, "data", "facebook_connection.local.json");
 const INTERNET_RESEARCH_FILE = path.join(ROOT, "data", "internet_research.json");
 const RESEARCH_STORIES_FILE = path.join(ROOT, "data", "research_stories.json");
+const STORY_DNA_FILE = path.join(ROOT, "data", "story_dna.json");
 const GENERATED_STORIES_FILE = path.join(ROOT, "data", "generated_stories.json");
 const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
 const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
@@ -256,7 +257,19 @@ async function writeResearchStories(stories) {
   };
   brain.updated_at = new Date().toISOString();
   await writeProjectBrain(brain);
+  await learnStoryDnaFromResearchStories(safeStories);
   return safeStories;
+}
+
+function readStoryDna() {
+  return storageCache.storyDna || [];
+}
+
+async function writeStoryDna(items) {
+  storageCache.storyDna = items;
+  writeJsonBackup(STORY_DNA_FILE, items);
+  await persistStoryDna(items);
+  return items;
 }
 
 function readStoryIdeas() {
@@ -387,6 +400,7 @@ const storageCache = {
   competitors: readJsonArray(COMPETITORS_FILE),
   internetResearchItems: readJsonArray(INTERNET_RESEARCH_FILE),
   researchStories: readJsonArray(RESEARCH_STORIES_FILE),
+  storyDna: readJsonArray(STORY_DNA_FILE),
   generatedStories: readJsonArray(GENERATED_STORIES_FILE),
   storyIdeas: readJsonArray(STORY_IDEAS_FILE),
   imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
@@ -440,6 +454,7 @@ async function initializeStorage() {
     });
     await pgPool.query("select 1");
     await ensureResearchStoriesTable();
+    await ensureStoryDnaTable();
     await ensureGeneratedStoriesTable();
     await ensureScheduledPostsTable();
     await ensurePublishingPackagesTable();
@@ -455,6 +470,7 @@ async function initializeStorage() {
       ...row,
       keywords: Array.isArray(row.keywords) ? row.keywords : []
     }));
+    storageCache.storyDna = (await pgPool.query("select * from story_dna order by viral_score desc, engagement_score desc, created_at desc limit 1000")).rows.map(normalizeStoryDnaRow);
     storageCache.generatedStories = (await pgPool.query("select * from generated_stories order by created_at desc limit 200")).rows.map((row) => ({
       ...row,
       research_signals: Array.isArray(row.research_signals) ? row.research_signals : [],
@@ -526,6 +542,43 @@ async function ensureResearchStoriesTable() {
     create index if not exists research_stories_viral_score_idx on research_stories (viral_score desc);
     create index if not exists research_stories_similarity_score_idx on research_stories (similarity_score desc);
     create index if not exists research_stories_category_idx on research_stories (category);
+  `);
+}
+
+async function ensureStoryDnaTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists story_dna (
+      id text primary key,
+      source_type text not null default 'website',
+      source_reference text not null unique,
+      emotion text,
+      main_theme text,
+      secondary_theme text,
+      hook_type text,
+      conflict_type text,
+      twist_type text,
+      ending_type text,
+      characters jsonb not null default '[]'::jsonb,
+      age_group text,
+      family_structure text,
+      dialogue_density integer not null default 0,
+      story_length text,
+      emotion_curve jsonb not null default '[]'::jsonb,
+      viral_score integer not null default 0,
+      engagement_score integer not null default 0,
+      comments_score integer not null default 0,
+      shares_score integer not null default 0,
+      originality_score integer not null default 100,
+      structure_analysis jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    alter table story_dna add column if not exists structure_analysis jsonb not null default '{}'::jsonb;
+    create index if not exists story_dna_source_type_idx on story_dna (source_type);
+    create index if not exists story_dna_emotion_idx on story_dna (emotion);
+    create index if not exists story_dna_main_theme_idx on story_dna (main_theme);
+    create index if not exists story_dna_hook_type_idx on story_dna (hook_type);
+    create index if not exists story_dna_viral_score_idx on story_dna (viral_score desc);
   `);
 }
 
@@ -798,6 +851,80 @@ async function persistResearchStories(stories) {
     }
   } catch (error) {
     console.warn(`PostgreSQL research_stories persist failed: ${error.message}`);
+  }
+}
+
+function normalizeStoryDnaRow(row = {}) {
+  return {
+    ...row,
+    characters: Array.isArray(row.characters) ? row.characters : [],
+    emotion_curve: Array.isArray(row.emotion_curve) ? row.emotion_curve : [],
+    structure_analysis: row.structure_analysis && typeof row.structure_analysis === "object" ? row.structure_analysis : {}
+  };
+}
+
+async function persistStoryDna(items) {
+  if (!pgPool) return;
+  try {
+    await ensureStoryDnaTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into story_dna (
+          id, source_type, source_reference, emotion, main_theme, secondary_theme,
+          hook_type, conflict_type, twist_type, ending_type, characters, age_group,
+          family_structure, dialogue_density, story_length, emotion_curve, viral_score,
+          engagement_score, comments_score, shares_score, originality_score, structure_analysis, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+        on conflict (source_reference) do update set
+          source_type = excluded.source_type,
+          emotion = excluded.emotion,
+          main_theme = excluded.main_theme,
+          secondary_theme = excluded.secondary_theme,
+          hook_type = excluded.hook_type,
+          conflict_type = excluded.conflict_type,
+          twist_type = excluded.twist_type,
+          ending_type = excluded.ending_type,
+          characters = excluded.characters,
+          age_group = excluded.age_group,
+          family_structure = excluded.family_structure,
+          dialogue_density = excluded.dialogue_density,
+          story_length = excluded.story_length,
+          emotion_curve = excluded.emotion_curve,
+          viral_score = excluded.viral_score,
+          engagement_score = excluded.engagement_score,
+          comments_score = excluded.comments_score,
+          shares_score = excluded.shares_score,
+          originality_score = excluded.originality_score,
+          structure_analysis = excluded.structure_analysis`,
+        [
+          item.id || crypto.randomUUID(),
+          item.source_type || "website",
+          item.source_reference || "",
+          item.emotion || "",
+          item.main_theme || "",
+          item.secondary_theme || "",
+          item.hook_type || "",
+          item.conflict_type || "",
+          item.twist_type || "",
+          item.ending_type || "",
+          JSON.stringify(Array.isArray(item.characters) ? item.characters : []),
+          item.age_group || "",
+          item.family_structure || "",
+          Number(item.dialogue_density || 0),
+          item.story_length || "",
+          JSON.stringify(Array.isArray(item.emotion_curve) ? item.emotion_curve : []),
+          Number(item.viral_score || 0),
+          Number(item.engagement_score || 0),
+          Number(item.comments_score || 0),
+          Number(item.shares_score || 0),
+          Number(item.originality_score || 100),
+          JSON.stringify(item.structure_analysis || {}),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL story_dna persist failed: ${error.message}`);
   }
 }
 
@@ -1107,6 +1234,7 @@ function renderHeader() {
       <a href="/facebook-connect">Facebook Connect</a>
       <a href="/audience-insights">Audience Insights</a>
       <a href="/telegram-center">Telegram Center</a>
+      <a href="/project-brain">Project Brain</a>
       <a href="/ai-autopilot">AI Autopilot</a>
       <a href="/ai-autopilot-v1">Autopilot v1</a>
       <a href="/production-status">Production Status</a>
@@ -2267,6 +2395,8 @@ function rebuildProjectBrain() {
   const posts = readFacebookPosts();
   const stories = readStories();
   const dataState = realDataSources();
+  const storyDnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
+  const storyDnaStats = buildStoryDnaStatistics(storyDnaItems);
   const maxTopicScore = Math.max(1, ...(audience.best_topics || []).map((item) => item.avg_score || 0));
   const bestTopics = (audience.best_topics.length ? audience.best_topics : competitor.popular_topics).slice(0, 8).map((item) => ({
     topic: item.name,
@@ -2425,7 +2555,8 @@ function rebuildProjectBrain() {
   const existingAutopilotV1 = readProjectBrain().internet_research?.autopilot_v1;
   const internetResearch = {
     ...buildInternetResearchSnapshot(audience, competitor, stories),
-    ...(existingAutopilotV1 ? { autopilot_v1: existingAutopilotV1 } : {})
+    ...(existingAutopilotV1 ? { autopilot_v1: existingAutopilotV1 } : {}),
+    project_brain_v2: storyDnaStats
   };
   const workHistory = stories.slice(0, 20).map((story, index) => ({
     story_number: index + 1,
@@ -2442,6 +2573,7 @@ function rebuildProjectBrain() {
   const recommendations = [
     `Сегодня рекомендую: история про ${bestTopics[0]?.topic || "семью"}.`,
     `Эмоция: ${audience.best_emotions?.[0]?.name || "тревога + надежда"}.`,
+    `Story DNA: чаще использовать "${storyDnaStats.top_hooks[0]?.name || "hidden truth hook"}" и конфликт "${storyDnaStats.top_conflicts[0]?.name || "family moral conflict"}".`,
     `Изображение: ${bestImages[0]?.image_type || "пожилая женщина + семейный конфликт + кухня"}.`,
     `Публикация: ${bestTimes[0]?.time || "19:00"}.`,
     `Длина Facebook-поста: ${audience.best_length || "800-1200 символов"}.`,
@@ -2463,7 +2595,16 @@ function rebuildProjectBrain() {
     competitor_analytics: competitorAnalytics,
     internet_research: internetResearch,
     publication_statistics: publicationStatistics,
-    data_quality: dataState,
+    data_quality: {
+      ...dataState,
+      project_brain_v2: {
+        status: storyDnaStats.story_dna_count ? "active" : "needs_research_data",
+        story_dna_count: storyDnaStats.story_dna_count,
+        brain_confidence_score: storyDnaStats.brain_confidence_score,
+        stores_full_text: false,
+        updated_at: storyDnaStats.updated_at
+      }
+    },
     work_history: workHistory,
     autopilot_runs: [
       {
@@ -2486,6 +2627,7 @@ function rebuildProjectBrain() {
 }
 
 async function updateProjectBrain() {
+  await learnStoryDnaFromResearchStories(readResearchStories());
   const brain = rebuildProjectBrain();
   await writeProjectBrain(brain);
   return brain;
@@ -2530,6 +2672,339 @@ function storyFormatFromPost(post) {
   const hasImage = Boolean(post.image_url || post.full_picture || post.image_analysis?.has_image);
   const bucket = chars < 600 ? "short" : chars <= 1200 ? "medium" : "long";
   return `${bucket} post, ${paragraphs} paragraphs, ${hasImage ? "image" : "no image"}, ${hookPattern(text)}`;
+}
+
+function storyDnaSourceType(story = {}) {
+  const source = `${story.source || ""} ${story.url || story.source_url || ""}`.toLowerCase();
+  if (source.includes("facebook.com")) return "facebook";
+  if (source.includes("reddit.com") || source.includes("reddit")) return "reddit";
+  if (source.includes("tiktok.com") || source.includes("tiktok")) return "tiktok";
+  if (source.includes("youtube.com") || source.includes("youtu.be") || source.includes("youtube")) return "youtube";
+  if (source.includes("manual")) return "manual";
+  return "website";
+}
+
+function storyDnaText(story = {}) {
+  return [story.title, story.summary, story.emotion, story.category, ...(Array.isArray(story.keywords) ? story.keywords : [])]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function storyDnaSentences(text = "") {
+  return String(text || "")
+    .split(/(?<=[.!?])\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function matchStoryDnaPattern(text = "", rules = [], fallback = "general life story") {
+  const lower = String(text || "").toLowerCase();
+  const found = rules.find(([, regex]) => regex.test(lower));
+  return found ? found[0] : fallback;
+}
+
+function storyDnaConflictType(text = "") {
+  return matchStoryDnaPattern(text, [
+    ["betrayal secret", /betray|cheat|affair|secret|lied|hidden|измен|преда|тайн|обман/i],
+    ["inheritance dispute", /inherit|will|money|house|apartment|property|наслед|завещ|квартир|дом|деньг/i],
+    ["mother-in-law pressure", /mother.?in.?law|in-law|свекров|невестк|тещ/i],
+    ["parent-child conflict", /mother|father|son|daughter|child|parent|мать|отец|сын|дочь|дет/i],
+    ["poverty versus dignity", /poverty|poor|debt|homeless|бедн|долг|нищ/i],
+    ["old love returns", /first love|lost love|reunion|любов|встреч|вернул/i],
+    ["revenge choice", /revenge|payback|ответил|отомст|мест/i]
+  ], "family moral conflict");
+}
+
+function storyDnaTwistType(text = "") {
+  return matchStoryDnaPattern(text, [
+    ["hidden truth revealed", /truth|secret|letter|envelope|found|hidden|правд|тайн|письм|конверт|нашл/i],
+    ["role reversal", /actually|instead|turned out|оказал|вдруг|на самом деле/i],
+    ["late confession", /confess|admitted|told her|признал|сказал правд/i],
+    ["unexpected kindness", /kindness|helped|forgave|помог|простил|доброт/i],
+    ["inheritance surprise", /inherit|will|estate|наслед|завещ/i]
+  ], "emotional late reveal");
+}
+
+function storyDnaEndingType(text = "") {
+  return matchStoryDnaPattern(text, [
+    ["forgiveness ending", /forgive|forgave|простил|простила|прощ/i],
+    ["justice ending", /justice|court|truth won|справедлив|суд|наказ/i],
+    ["bittersweet ending", /sad|tears|goodbye|груст|слез|прощай/i],
+    ["hopeful reunion", /reunion|returned|together|вернул|вместе|снова/i],
+    ["moral lesson", /lesson|moral|understood|понял|вывод|урок/i]
+  ], "moral emotional ending");
+}
+
+function storyDnaCharacters(text = "") {
+  const lower = String(text || "").toLowerCase();
+  const roles = [
+    ["older woman", /older woman|elderly|grandmother|пожил|бабуш|стар/i],
+    ["mother", /mother|mom|мать|мама/i],
+    ["father", /father|dad|отец|папа/i],
+    ["adult son", /son|сын/i],
+    ["adult daughter", /daughter|дочь/i],
+    ["husband", /husband|муж/i],
+    ["wife", /wife|жена/i],
+    ["mother-in-law", /mother.?in.?law|свекров/i],
+    ["neighbor", /neighbor|сосед/i]
+  ];
+  return roles.filter(([, regex]) => regex.test(lower)).map(([name]) => name).slice(0, 6);
+}
+
+function storyDnaAgeGroup(text = "") {
+  const lower = String(text || "").toLowerCase();
+  if (/elderly|grandmother|grandfather|retired|пенси|пожил|стар/i.test(lower)) return "60+";
+  if (/mother|father|husband|wife|мать|отец|муж|жена/i.test(lower)) return "40-65";
+  if (/son|daughter|young|сын|дочь|молод/i.test(lower)) return "25-45";
+  return "40-65+";
+}
+
+function storyDnaFamilyStructure(text = "") {
+  return matchStoryDnaPattern(text, [
+    ["mother and adult child", /mother|son|daughter|мать|сын|дочь/i],
+    ["married couple", /husband|wife|marriage|муж|жена|брак/i],
+    ["in-law triangle", /mother.?in.?law|in-law|свекров|невестк/i],
+    ["siblings and inheritance", /brother|sister|inherit|брат|сестр|наслед/i],
+    ["lonely elder and family", /elderly|alone|grandmother|пожил|один|бабуш/i]
+  ], "family circle");
+}
+
+function storyDnaDialogueDensity(text = "") {
+  const quotes = (String(text || "").match(/["“”«»]/g) || []).length;
+  const dialogueMarkers = (String(text || "").match(/\b(said|asked|answered|told|сказал|спросил|ответил)\b/gi) || []).length;
+  return Math.min(100, Math.round((quotes * 8) + (dialogueMarkers * 14)));
+}
+
+function storyDnaLengthBucket(text = "") {
+  const chars = String(text || "").length;
+  if (chars < 240) return "short signal";
+  if (chars <= 700) return "medium signal";
+  return "long signal";
+}
+
+function storyDnaEmotionCurve(text = "", emotion = "") {
+  const lower = String(text || "").toLowerCase();
+  const curve = ["curiosity"];
+  if (/secret|hidden|truth|тайн|правд|скрыл/i.test(lower)) curve.push("tension");
+  if (/betray|inherit|conflict|argue|измен|наслед|ссор|конфликт/i.test(lower)) curve.push("conflict");
+  if (/sudden|unexpected|turned out|вдруг|оказал|не ожид/i.test(lower)) curve.push("surprise");
+  curve.push(emotion || detectResearchEmotion(text, ""));
+  if (/forgive|hope|returned|прост|надеж|вернул/i.test(lower)) curve.push("release");
+  return [...new Set(curve)].slice(0, 6);
+}
+
+function storyDnaOpeningStyle(text = "") {
+  return matchStoryDnaPattern(text, [
+    ["direct emotional confession", /i never|i thought|she thought|he thought|думал|думала|никогда/i],
+    ["object-trigger opening", /letter|envelope|photo|key|ring|письм|конверт|фото|ключ|кольц/i],
+    ["family argument opening", /argument|fight|dinner|kitchen|ссор|кухн|ужин|разговор/i],
+    ["question opening", /\?/],
+    ["memory opening", /years ago|old|childhood|много лет|стар|детств/i]
+  ], "emotional situation opening");
+}
+
+function storyDnaReadingDifficulty(sentences = []) {
+  const avgWords = sentences.length
+    ? sentences.reduce((sum, sentence) => sum + sentence.split(/\s+/).filter(Boolean).length, 0) / sentences.length
+    : 0;
+  if (avgWords <= 12) return "easy";
+  if (avgWords <= 20) return "medium";
+  return "dense";
+}
+
+function analyzeStoryStructure(story = {}) {
+  const text = storyDnaText(story);
+  const sentences = storyDnaSentences(text);
+  const opening = sentences[0] || story.title || "";
+  const emotion = story.emotion || story.emotional_angle || detectResearchEmotion(text, story.category || "");
+  const conflict = storyDnaConflictType(text);
+  const twist = storyDnaTwistType(text);
+  const ending = storyDnaEndingType(text);
+  const wordCounts = sentences.map((sentence) => sentence.split(/\s+/).filter(Boolean).length);
+  const avgSentenceLength = wordCounts.length ? Math.round(wordCounts.reduce((sum, count) => sum + count, 0) / wordCounts.length) : 0;
+  const dialogueDensity = storyDnaDialogueDensity(text);
+  return {
+    opening_style: storyDnaOpeningStyle(text),
+    hook: hookPattern(opening || text),
+    conflict,
+    emotional_peaks: storyDnaEmotionCurve(text, emotion).slice(1, 5),
+    plot_twists: [twist],
+    ending,
+    moral: ending.includes("moral") ? "lesson learned after family conflict" : `${ending} after ${conflict}`,
+    story_rhythm: detectStoryStructure(text, story.category || ""),
+    dialogue_percentage: dialogueDensity,
+    average_sentence_length: avgSentenceLength,
+    reading_difficulty: storyDnaReadingDifficulty(sentences),
+    emotion_progression: storyDnaEmotionCurve(text, emotion)
+  };
+}
+
+function storyDnaFromResearchStory(story = {}) {
+  const text = storyDnaText(story);
+  const sourceReference = story.url || story.source_url || story.id || story.title;
+  if (!sourceReference) return null;
+  const structure = analyzeStoryStructure(story);
+  const emotion = story.emotion || story.emotional_angle || detectResearchEmotion(text, story.category || "");
+  return {
+    id: `dna_${crypto.createHash("sha1").update(String(sourceReference)).digest("hex").slice(0, 24)}`,
+    source_type: storyDnaSourceType(story),
+    source_reference: sourceReference,
+    emotion,
+    main_theme: normalizeResearchCategory(story.category || detectTopic(text)),
+    secondary_theme: storyDnaConflictType(text),
+    hook_type: structure.hook,
+    conflict_type: structure.conflict,
+    twist_type: structure.plot_twists[0],
+    ending_type: structure.ending,
+    characters: storyDnaCharacters(text),
+    age_group: storyDnaAgeGroup(text),
+    family_structure: storyDnaFamilyStructure(text),
+    dialogue_density: structure.dialogue_percentage,
+    story_length: storyDnaLengthBucket(text),
+    emotion_curve: structure.emotion_progression,
+    viral_score: Number(story.viral_score || 0),
+    engagement_score: Math.round((Number(story.viral_score || 0) + Number(story.similarity_score || 0)) / 2),
+    comments_score: Math.round(Number(story.emotional_intensity || 0) * 0.7),
+    shares_score: Math.round(Number(story.surprise_factor || 0) * 0.8),
+    originality_score: 100,
+    structure_analysis: structure,
+    created_at: story.created_at || new Date().toISOString()
+  };
+}
+
+function mergeStoryDna(existing = [], incoming = []) {
+  const byReference = new Map();
+  for (const item of existing) {
+    if (item?.source_reference) byReference.set(item.source_reference, item);
+  }
+  for (const item of incoming) {
+    if (!item?.source_reference) continue;
+    const previous = byReference.get(item.source_reference);
+    byReference.set(item.source_reference, {
+      ...(previous || {}),
+      ...item,
+      created_at: previous?.created_at || item.created_at || new Date().toISOString()
+    });
+  }
+  return [...byReference.values()]
+    .sort((a, b) => Number(b.viral_score || 0) - Number(a.viral_score || 0) || new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, 1500);
+}
+
+function weightedDnaStats(items = [], key) {
+  const groups = new Map();
+  for (const item of items) {
+    const name = item[key] || "unknown";
+    const current = groups.get(name) || { name, count: 0, total_score: 0, viral_score: 0, engagement_score: 0 };
+    current.count += 1;
+    current.total_score += Number(item.viral_score || 0) + Number(item.engagement_score || 0);
+    current.viral_score += Number(item.viral_score || 0);
+    current.engagement_score += Number(item.engagement_score || 0);
+    groups.set(name, current);
+  }
+  return [...groups.values()]
+    .map((item) => ({
+      ...item,
+      avg_score: item.count ? Math.round(item.total_score / item.count / 2) : 0,
+      avg_viral_score: item.count ? Math.round(item.viral_score / item.count) : 0,
+      avg_engagement_score: item.count ? Math.round(item.engagement_score / item.count) : 0
+    }))
+    .sort((a, b) => b.avg_score - a.avg_score || b.count - a.count);
+}
+
+function storyDnaStructureName(item = {}) {
+  return [
+    item.hook_type || "hook",
+    item.conflict_type || "conflict",
+    item.twist_type || "twist",
+    item.ending_type || "ending"
+  ].join(" -> ");
+}
+
+function buildStoryDnaStatistics(items = readStoryDna()) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const topEmotions = weightedDnaStats(safeItems, "emotion").slice(0, 8);
+  const topHooks = weightedDnaStats(safeItems, "hook_type").slice(0, 8);
+  const topEndings = weightedDnaStats(safeItems, "ending_type").slice(0, 8);
+  const topConflicts = weightedDnaStats(safeItems, "conflict_type").slice(0, 8);
+  const trendingTopics = weightedDnaStats(safeItems, "main_theme").slice(0, 8);
+  const rhythmAnalysis = countBy(safeItems, (item) => item.structure_analysis?.story_rhythm || "unknown").slice(0, 8);
+  const successfulStructures = weightedDnaStats(safeItems.map((item) => ({
+    ...item,
+    structure_key: storyDnaStructureName(item)
+  })), "structure_key").slice(0, 8);
+  const averageOriginality = safeItems.length ? Math.round(safeItems.reduce((sum, item) => sum + Number(item.originality_score || 0), 0) / safeItems.length) : 0;
+  const confidenceScore = Math.min(100, Math.round(
+    Math.min(safeItems.length, 100) * 0.55 +
+    Math.min(topHooks.length * 4, 20) +
+    Math.min(trendingTopics.length * 3, 15) +
+    (averageOriginality >= 90 ? 10 : 0)
+  ));
+  return {
+    module: "Project Brain v2 Core",
+    story_dna_count: safeItems.length,
+    top_emotions: topEmotions,
+    top_hooks: topHooks,
+    top_endings: topEndings,
+    top_conflicts: topConflicts,
+    trending_topics: trendingTopics,
+    story_rhythm_analysis: rhythmAnalysis,
+    most_successful_structures: successfulStructures,
+    brain_confidence_score: confidenceScore,
+    brain_memory: {
+      worked: successfulStructures.slice(0, 5).map((item) => item.name),
+      failed: safeItems.filter((item) => Number(item.viral_score || 0) < 35).slice(0, 5).map(storyDnaStructureName),
+      audience_prefers: [
+        topEmotions[0]?.name,
+        topHooks[0]?.name,
+        topConflicts[0]?.name,
+        trendingTopics[0]?.name
+      ].filter(Boolean),
+      avoid: [
+        "copying full copyrighted text",
+        "reusing competitor characters or endings",
+        "saving raw scraped story content",
+        "publishing without explicit approval"
+      ]
+    },
+    safety: {
+      stores_full_copyrighted_text: false,
+      stores_patterns_only: true,
+      publishing_enabled: false,
+      generation_changed: false
+    },
+    updated_at: new Date().toISOString()
+  };
+}
+
+async function learnStoryDnaFromResearchStories(stories = readResearchStories()) {
+  const incoming = stories
+    .map(storyDnaFromResearchStory)
+    .filter(Boolean);
+  if (!incoming.length) return buildStoryDnaStatistics(readStoryDna());
+  const merged = mergeStoryDna(readStoryDna(), incoming);
+  await writeStoryDna(merged);
+  const stats = buildStoryDnaStatistics(merged);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object" ? brain.internet_research : {};
+  brain.internet_research = {
+    ...currentResearch,
+    project_brain_v2: stats
+  };
+  brain.data_quality = {
+    ...(brain.data_quality || {}),
+    project_brain_v2: {
+      status: merged.length ? "active" : "needs_data",
+      story_dna_count: merged.length,
+      stores_full_text: false,
+      updated_at: stats.updated_at
+    }
+  };
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return stats;
 }
 
 function weightedGroup(posts, keyFn) {
@@ -4141,6 +4616,107 @@ async function runAutopilotV1Plan() {
       approval_required: true
     }
   };
+}
+
+function renderProjectBrainDashboard() {
+  const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
+  const stats = buildStoryDnaStatistics(dnaItems);
+  const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
+  const rowList = (items = [], empty = "No data yet.") => items.length
+    ? `<ol class="insight-list">${items.slice(0, 8).map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${Number(item.count || 0)} signals · avg score ${Number(item.avg_score || 0)}</span></li>`).join("")}</ol>`
+    : `<p class="empty-table">${escapeHtml(empty)}</p>`;
+  const rhythmList = (items = []) => items.length
+    ? `<ol class="insight-list">${items.slice(0, 8).map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${Number(item.count || 0)} patterns</span></li>`).join("")}</ol>`
+    : `<p class="empty-table">No rhythm data yet.</p>`;
+  const dnaRows = dnaItems.slice(0, 12).map((item) => `<tr>
+    <td>${escapeHtml(item.source_type || "")}</td>
+    <td>${escapeHtml(item.main_theme || "")}</td>
+    <td>${escapeHtml(item.emotion || "")}</td>
+    <td>${escapeHtml(item.hook_type || "")}</td>
+    <td>${escapeHtml(item.conflict_type || "")}</td>
+    <td>${escapeHtml(item.twist_type || "")}</td>
+    <td>${Number(item.viral_score || 0)}</td>
+  </tr>`).join("") || `<tr><td colspan="7">Run Internet Research to create Story DNA patterns.</td></tr>`;
+  return layout("Project Brain", `${renderHeader()}
+    <main class="insights-page">
+      <section class="insights-hero">
+        <p class="kicker">Project Brain v2 Core</p>
+        <h1>Project Brain</h1>
+        <p>Central memory for story patterns. It learns from research summaries and performance signals, stores structures only, and never saves full copyrighted stories.</p>
+      </section>
+
+      <section class="insight-card">
+        <div class="section-title">
+          <div>
+            <h2>Brain Status</h2>
+            <p class="helper-text">Analysis only. No generation changes and no publishing.</p>
+          </div>
+          <button class="primary-btn" id="refreshProjectBrainV2" type="button">Refresh Brain v2</button>
+        </div>
+        <div class="autopilot-status-grid">
+          <article><span>Story DNA count</span><strong>${stats.story_dna_count}</strong><p>Pattern records, not full stories.</p></article>
+          <article><span>Brain confidence</span><strong>${stats.brain_confidence_score}%</strong><p>Based on DNA volume and pattern diversity.</p></article>
+          <article><span>Project Brain</span><strong>${brain.updated_at ? "active" : "needs refresh"}</strong><p>${escapeHtml(brain.updated_at || "No saved brain state yet.")}</p></article>
+          <article><span>Safety</span><strong>patterns only</strong><p>No full copyrighted text. No publishing.</p></article>
+        </div>
+        <p id="projectBrainV2Message" class="helper-text">Ready.</p>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card"><h2>Top emotions</h2>${rowList(stats.top_emotions, "No emotions yet.")}</article>
+        <article class="insight-card"><h2>Top hooks</h2>${rowList(stats.top_hooks, "No hooks yet.")}</article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card"><h2>Top endings</h2>${rowList(stats.top_endings, "No endings yet.")}</article>
+        <article class="insight-card"><h2>Top conflicts</h2>${rowList(stats.top_conflicts, "No conflicts yet.")}</article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card"><h2>Trending topics</h2>${rowList(stats.trending_topics, "No topics yet.")}</article>
+        <article class="insight-card"><h2>Story rhythm analysis</h2>${rhythmList(stats.story_rhythm_analysis)}</article>
+      </section>
+
+      <section class="insight-card">
+        <h2>Most successful structures</h2>
+        ${rowList(stats.most_successful_structures, "No structure data yet.")}
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Brain Memory: what worked</h2>
+          <ol class="insight-list">${stats.brain_memory.worked.length ? stats.brain_memory.worked.map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("") : "<li><strong>Not enough data yet</strong></li>"}</ol>
+        </article>
+        <article class="insight-card">
+          <h2>What to avoid</h2>
+          <ol class="insight-list">${stats.brain_memory.avoid.map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("")}</ol>
+        </article>
+      </section>
+
+      <section class="insight-card">
+        <h2>Latest Story DNA records</h2>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Source</th><th>Theme</th><th>Emotion</th><th>Hook</th><th>Conflict</th><th>Twist</th><th>Viral</th></tr></thead>
+            <tbody>${dnaRows}</tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script>
+      const message = document.getElementById("projectBrainV2Message");
+      document.getElementById("refreshProjectBrainV2")?.addEventListener("click", async () => {
+        message.textContent = "Refreshing...";
+        try {
+          const response = await fetch("/api/project-brain-v2/refresh", { method: "POST" });
+          const result = await response.json();
+          message.textContent = result.ok ? "Brain v2 refreshed. Reloading..." : (result.message || "Refresh failed.");
+          if (result.ok) window.location.reload();
+        } catch (error) {
+          message.textContent = error.message;
+        }
+      });
+    </script>`);
 }
 
 function renderAutopilotV1Dashboard() {
@@ -7346,6 +7922,39 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, readProjectBrain());
   }
 
+  if (pathname === "/api/project-brain-v2" && req.method === "GET") {
+    const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
+    return sendJson(res, 200, {
+      ok: true,
+      module: "Project Brain v2 Core",
+      statistics: buildStoryDnaStatistics(dnaItems),
+      story_dna_sample: dnaItems.slice(0, 20),
+      safety: {
+        stores_full_copyrighted_text: false,
+        stores_patterns_only: true,
+        publishing_enabled: false,
+        generation_changed: false
+      }
+    });
+  }
+
+  if (pathname === "/api/project-brain-v2/refresh" && ["GET", "POST"].includes(req.method)) {
+    const statistics = await learnStoryDnaFromResearchStories(readResearchStories());
+    const brain = await updateProjectBrain();
+    return sendJson(res, 200, {
+      ok: true,
+      module: "Project Brain v2 Core",
+      statistics,
+      project_brain_updated_at: brain.updated_at,
+      safety: {
+        stores_full_copyrighted_text: false,
+        stores_patterns_only: true,
+        publishing_enabled: false,
+        generation_changed: false
+      }
+    });
+  }
+
   if (pathname === "/api/security-audit" && req.method === "GET") {
     return sendJson(res, 200, securityAudit());
   }
@@ -7533,6 +8142,7 @@ async function router(req, res) {
     if (pathname === "/facebook-connect") return send(res, 200, renderFacebookConnect(url, req));
     if (pathname === "/audience-insights") return send(res, 200, renderAudienceInsights());
     if (pathname === "/telegram-center") return send(res, 200, renderTelegramCenter());
+    if (pathname === "/project-brain") return send(res, 200, renderProjectBrainDashboard());
     if (pathname === "/ai-autopilot") return send(res, 200, renderAutopilotDashboard());
     if (pathname === "/ai-autopilot-v1") return send(res, 200, renderAutopilotV1Dashboard());
     if (pathname === "/production-status") return send(res, 200, renderProductionStatus());
