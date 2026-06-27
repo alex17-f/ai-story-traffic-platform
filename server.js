@@ -4819,10 +4819,16 @@ function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, sty
   const transitDetail = pick(["a bus ticket was turning soft from the rain", "her shopping bag had slipped against the bench", "headlights moved across the wet pavement", "the timetable shook in the wind"], `${seed}:transit-detail`);
   const hospitalDetail = pick(["the corridor smelled faintly of antiseptic", "a plastic chair creaked under her coat", "someone's discharge papers lay folded in half", "the vending machine hummed too loudly"], `${seed}:hospital-detail`);
   const eventDetail = pick(["paper plates were still on the table", "a half-cut cake stood untouched", "someone had turned the music down", "the children had gone quiet in the next room"], `${seed}:event-detail`);
+  const stairwellDetail = pick(["the stairwell light flickered above her", "a neighbor's door clicked shut upstairs", "dust gathered along the concrete step", "the cold handrail left a mark on her palm"], `${seed}:stairwell-detail`);
+  const officeDetail = pick(["a stack of documents lay crooked on the desk", "the stamp pad was still open", "the notary's clock sounded too loud", "someone had forgotten a cheap pen beside the papers"], `${seed}:office-detail`);
   const everydayDetail = /bus|stop|station|platform/.test(settingLower)
     ? transitDetail
     : /hospital|corridor/.test(settingLower)
       ? hospitalDetail
+      : /stairwell|hallway/.test(settingLower)
+        ? stairwellDetail
+        : /office|notary/.test(settingLower)
+          ? officeDetail
       : /party|dinner|lunch|celebration/.test(settingLower)
         ? eventDetail
         : domesticDetail;
@@ -4830,6 +4836,10 @@ function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, sty
     ? "beside a wet ticket and her shopping bag"
     : /hospital|corridor/.test(settingLower)
       ? "beside folded hospital papers"
+      : /stairwell|hallway/.test(settingLower)
+        ? "on the concrete step beside her shopping bag"
+        : /office|notary/.test(settingLower)
+          ? "beside a stack of unsigned papers"
       : /party|dinner|lunch|celebration/.test(settingLower)
         ? "beside the paper plates and cold tea"
         : "next to the cold tea";
@@ -4837,16 +4847,24 @@ function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, sty
     ? `on the bench at ${profile.setting}`
     : /hospital|corridor/.test(settingLower)
       ? `on a plastic chair in ${profile.setting}`
+      : /stairwell|hallway/.test(settingLower)
+        ? `on the concrete step in ${profile.setting}`
+        : /office|notary/.test(settingLower)
+          ? `on the desk in ${profile.setting}`
     : /party|dinner|lunch|celebration/.test(settingLower)
       ? `on the table during ${profile.setting}`
       : `in ${profile.setting}`;
+  const conflictScene = String(profile.conflict || "")
+    .replace("a daughter is cut out of the will", "a daughter being cut out of the will")
+    .replace("siblings argue over a house before the funeral flowers fade", "siblings arguing over a house before the funeral flowers had faded")
+    .replace("a son returns only when money is mentioned", "a son returning only when money was mentioned");
   const sceneDetail = everydayDetail ? everydayDetail.charAt(0).toUpperCase() + everydayDetail.slice(1) : "";
   const title = `${hero} found ${profile.object}, and the whole family suddenly went silent`;
   const hook = `${hero} noticed ${profile.object} before anyone else did.\n\nIt was lying ${settingPhrase}, ${objectAnchor}, and even ${relation} suddenly stopped talking.\n\n"Who put this here?" she asked. No one answered.`;
   const paragraphs = [
     hook,
     `For years, ${hero} had been the one who smoothed every quarrel over. She made tea, changed the subject, wiped the table twice if her hands were shaking, and pretended family peace did not cost her anything.`,
-    `But that evening was different. ${sceneDetail}, ${witness}, and what began as ${profile.conflict} turned into a silence so heavy that even the chairs seemed too loud when someone moved.`,
+    `But that evening was different. ${sceneDetail}, ${witness}, and what began as ${conflictScene} turned into a silence so heavy that even the chairs seemed too loud when someone moved.`,
     `${hero} picked up ${profile.object}. At first it looked ordinary. Then she saw one detail that did not belong, and her fingers tightened around the edge.`,
     `"Tell me this is not true," she said.\n\n${relation} looked at the floor.\n\n"Not here," came the answer.\n\n"Here," ${hero} said. "I've been quiet long enough."`,
     `The first explanation hurt her pride. The second hurt her heart. Everyone had a version of the truth, and every version made someone else look cruel.`,
