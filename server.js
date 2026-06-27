@@ -4840,12 +4840,13 @@ function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, sty
     : /party|dinner|lunch|celebration/.test(settingLower)
       ? `on the table during ${profile.setting}`
       : `in ${profile.setting}`;
+  const sceneDetail = everydayDetail ? everydayDetail.charAt(0).toUpperCase() + everydayDetail.slice(1) : "";
   const title = `${hero} found ${profile.object}, and the whole family suddenly went silent`;
   const hook = `${hero} noticed ${profile.object} before anyone else did.\n\nIt was lying ${settingPhrase}, ${objectAnchor}, and even ${relation} suddenly stopped talking.\n\n"Who put this here?" she asked. No one answered.`;
   const paragraphs = [
     hook,
     `For years, ${hero} had been the one who smoothed every quarrel over. She made tea, changed the subject, wiped the table twice if her hands were shaking, and pretended family peace did not cost her anything.`,
-    `But that evening was different. ${everydayDetail}, ${witness}, and what began as ${profile.conflict} turned into a silence so heavy that even the chairs seemed too loud when someone moved.`,
+    `But that evening was different. ${sceneDetail}, ${witness}, and what began as ${profile.conflict} turned into a silence so heavy that even the chairs seemed too loud when someone moved.`,
     `${hero} picked up ${profile.object}. At first it looked ordinary. Then she saw one detail that did not belong, and her fingers tightened around the edge.`,
     `"Tell me this is not true," she said.\n\n${relation} looked at the floor.\n\n"Not here," came the answer.\n\n"Here," ${hero} said. "I've been quiet long enough."`,
     `The first explanation hurt her pride. The second hurt her heart. Everyone had a version of the truth, and every version made someone else look cruel.`,
