@@ -258,6 +258,7 @@ async function writeResearchStories(stories) {
   brain.updated_at = new Date().toISOString();
   await writeProjectBrain(brain);
   await learnStoryDnaFromResearchStories(safeStories);
+  await autoSyncProjectBrainV2({ sources: ["research"], reason: "research_saved" });
   return safeStories;
 }
 
@@ -2986,9 +2987,25 @@ function mergeStoryDna(existing = [], incoming = []) {
   for (const item of incoming) {
     if (!item?.source_reference) continue;
     const previous = byReference.get(item.source_reference);
+    const previousMetrics = previous?.structure_analysis?.source_metrics || null;
+    const nextMetrics = item?.structure_analysis?.source_metrics || null;
+    const previousHistory = Array.isArray(previous?.structure_analysis?.metrics_history)
+      ? previous.structure_analysis.metrics_history
+      : [];
+    const metricsChanged = previousMetrics && nextMetrics
+      ? JSON.stringify(previousMetrics) !== JSON.stringify(nextMetrics)
+      : Boolean(nextMetrics && !previousMetrics);
+    const metricsHistory = metricsChanged
+      ? [...previousHistory, { captured_at: new Date().toISOString(), ...(nextMetrics || {}) }].slice(-20)
+      : previousHistory;
     byReference.set(item.source_reference, {
       ...(previous || {}),
       ...item,
+      structure_analysis: {
+        ...(previous?.structure_analysis || {}),
+        ...(item.structure_analysis || {}),
+        ...(metricsHistory.length ? { metrics_history: metricsHistory } : {})
+      },
       created_at: previous?.created_at || item.created_at || new Date().toISOString()
     });
   }
@@ -3133,14 +3150,21 @@ async function learnStoryDnaFromResearchStories(stories = readResearchStories())
   return result.statistics;
 }
 
-async function importFacebookPostsToStoryDna() {
+async function importFacebookPostsToStoryDna(options = {}) {
   const posts = readFacebookPosts();
   const maxScore = Math.max(1, ...posts.map((post) => Number(post.total_score || 0)));
   const incoming = posts
     .map((post) => storyDnaFromFacebookPost(post, maxScore))
     .filter(Boolean);
   const result = await saveStoryDnaPatterns(incoming, "facebook");
-  await updateProjectBrain();
+  if (!options.skipBrainUpdate) {
+    await updateProjectBrain();
+    await recordProjectBrainV2Learning({
+      reason: options.reason || "manual_facebook_import",
+      sources: ["facebook"],
+      imported_facebook_posts: incoming.length
+    });
+  }
   return {
     ...result,
     source_posts: posts.length,
@@ -3153,13 +3177,20 @@ async function importFacebookPostsToStoryDna() {
   };
 }
 
-async function importGeneratedStoriesToStoryDna() {
+async function importGeneratedStoriesToStoryDna(options = {}) {
   const stories = readGeneratedStories();
   const incoming = stories
     .map(storyDnaFromGeneratedStory)
     .filter(Boolean);
   const result = await saveStoryDnaPatterns(incoming, "generated");
-  await updateProjectBrain();
+  if (!options.skipBrainUpdate) {
+    await updateProjectBrain();
+    await recordProjectBrainV2Learning({
+      reason: options.reason || "manual_generated_import",
+      sources: ["generated"],
+      imported_generated_stories: incoming.length
+    });
+  }
   return {
     ...result,
     source_generated_stories: stories.length,
@@ -3221,22 +3252,246 @@ function buildProjectBrainV2Recommendations() {
   };
 }
 
-async function refreshProjectBrainV2Expansion() {
-  const research = await saveStoryDnaPatterns(readResearchStories().map(storyDnaFromResearchStory).filter(Boolean), "research");
-  const facebook = await importFacebookPostsToStoryDna();
-  const generated = await importGeneratedStoriesToStoryDna();
+function imagePromptVisualPattern(item = {}) {
+  const prompt = `${item.prompt || ""} ${item.style || ""}`.toLowerCase();
+  const visual = item.visual_analysis || {};
+  const composition = /close-up|close up|portrait|eyes/i.test(prompt)
+    ? "emotional close-up"
+    : /cover|thumbnail|facebook/i.test(prompt)
+      ? "facebook cover composition"
+      : /horizontal|16:9|wide/i.test(prompt)
+        ? "wide story frame"
+        : "documentary scene";
+  const cameraAngle = /35mm/i.test(prompt)
+    ? "35mm documentary lens"
+    : /shallow|depth/i.test(prompt)
+      ? "shallow depth portrait"
+      : "natural eye-level camera";
+  const lighting = /warm|kitchen/i.test(prompt)
+    ? "warm interior light"
+    : /window|natural/i.test(prompt)
+      ? "natural window light"
+      : "realistic household light";
+  return {
+    id: item.id,
+    draft_id: item.draft_id || item.generated_story_id || "",
+    story_title: item.story_title || "",
+    visual_emotion: visual.emotion || detectResearchEmotion(prompt, ""),
+    composition,
+    camera_angle: cameraAngle,
+    lighting,
+    image_style: item.style || "story_prompt",
+    status: item.status || "",
+    approved_at: item.updated_at || item.created_at || new Date().toISOString()
+  };
+}
+
+function buildApprovedImagePromptMemory() {
+  const approved = readImageQueue()
+    .filter((item) => item.status === "approved")
+    .map(imagePromptVisualPattern);
+  return {
+    approved_count: approved.length,
+    visual_patterns: approved.slice(0, 50),
+    top_visual_emotions: countBy(approved, (item) => item.visual_emotion).slice(0, 8),
+    top_compositions: countBy(approved, (item) => item.composition).slice(0, 8),
+    top_camera_angles: countBy(approved, (item) => item.camera_angle).slice(0, 8),
+    top_lighting: countBy(approved, (item) => item.lighting).slice(0, 8),
+    top_image_styles: countBy(approved, (item) => item.image_style).slice(0, 8),
+    updated_at: new Date().toISOString()
+  };
+}
+
+function buildApprovedScheduleMemory() {
+  const approved = readScheduledPosts().filter((item) => item.status === "approved");
+  const enriched = approved.map((item) => {
+    const date = new Date(item.scheduled_time || item.created_at || Date.now());
+    return {
+      id: item.id,
+      draft_id: item.draft_id,
+      hour: String(date.getHours()).padStart(2, "0") + ":00",
+      weekday: date.toLocaleDateString("en-US", { weekday: "long" }),
+      sequence: item.rhythm_step || item.theme || "mixed",
+      theme: item.theme || "",
+      emotion: item.emotion || "",
+      scheduled_time: item.scheduled_time
+    };
+  });
+  return {
+    approved_count: enriched.length,
+    best_publish_hours: countBy(enriched, (item) => item.hour).slice(0, 8),
+    best_weekdays: countBy(enriched, (item) => item.weekday).slice(0, 7),
+    best_sequences: countBy(enriched, (item) => item.sequence).slice(0, 8),
+    latest_schedule_patterns: enriched.slice(0, 50),
+    updated_at: new Date().toISOString()
+  };
+}
+
+function buildPermanentBrainMemory(stats = buildStoryDnaStatistics(readStoryDna()), recommendations = buildProjectBrainV2Recommendations(), history = []) {
+  const previous = history[history.length - 2] || null;
+  const latest = history[history.length - 1] || null;
+  const confidenceChange = previous && latest ? Number(latest.confidence_score || 0) - Number(previous.confidence_score || 0) : 0;
+  const month = new Date().toLocaleDateString("en-US", { month: "long" });
+  return {
+    what_works: stats.most_successful_structures.slice(0, 5).map((item) => ({
+      pattern: item.name,
+      avg_score: item.avg_score,
+      count: item.count
+    })),
+    what_stopped_working: stats.brain_memory.failed.slice(0, 5),
+    audience_preference_changes: confidenceChange
+      ? [`Brain confidence changed by ${confidenceChange} points since previous sync.`]
+      : ["Not enough sync history for preference change detection yet."],
+    emerging_trends: stats.trending_topics.slice(0, 5).map((item) => item.name),
+    seasonal_themes: [
+      `${month}: family memories, reunions, household conflict, second chances`,
+      "Evening posts: emotional reveals and continuation links",
+      "Weekend posts: family dilemmas and moral endings"
+    ],
+    avoid: recommendations.avoid_topics.length
+      ? recommendations.avoid_topics.map((item) => item.name)
+      : stats.brain_memory.avoid,
+    updated_at: new Date().toISOString()
+  };
+}
+
+async function recordProjectBrainV2Learning(event = {}) {
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object" ? brain.internet_research : {};
+  const previousAuto = currentResearch.project_brain_v2_auto || {};
+  const stats = buildStoryDnaStatistics(readStoryDna());
+  const recommendations = buildProjectBrainV2Recommendations();
+  const now = new Date().toISOString();
+  const sources = Array.isArray(event.sources) ? event.sources : [event.source || "mixed"].filter(Boolean);
+  const previousHistory = Array.isArray(previousAuto.history) ? previousAuto.history : [];
+  const historyEntry = {
+    at: now,
+    reason: event.reason || "auto_sync",
+    sources,
+    story_dna_count: stats.story_dna_count,
+    confidence_score: stats.brain_confidence_score,
+    imported_facebook_posts: Number(event.imported_facebook_posts || 0),
+    imported_generated_stories: Number(event.imported_generated_stories || 0),
+    imported_research_stories: Number(event.imported_research_stories || 0),
+    approved_image_prompts: Number(event.approved_image_prompts || 0),
+    approved_schedule_items: Number(event.approved_schedule_items || 0)
+  };
+  const history = [...previousHistory, historyEntry].slice(-80);
+  const visualMemory = buildApprovedImagePromptMemory();
+  const scheduleMemory = buildApprovedScheduleMemory();
+  const autoState = {
+    status: "active",
+    automatic_sync_enabled: true,
+    last_learning_time: now,
+    last_facebook_sync: sources.includes("facebook") ? now : previousAuto.last_facebook_sync || null,
+    last_research_sync: sources.includes("research") ? now : previousAuto.last_research_sync || null,
+    last_story_sync: sources.includes("generated") ? now : previousAuto.last_story_sync || null,
+    last_image_sync: sources.includes("images") ? now : previousAuto.last_image_sync || null,
+    last_schedule_sync: sources.includes("schedules") ? now : previousAuto.last_schedule_sync || null,
+    history,
+    brain_growth_graph: history.map((item) => ({ at: item.at, confidence_score: item.confidence_score })),
+    dna_growth_graph: history.map((item) => ({ at: item.at, story_dna_count: item.story_dna_count })),
+    confidence_history: history.map((item) => ({ at: item.at, confidence_score: item.confidence_score, reason: item.reason })),
+    visual_memory: visualMemory,
+    schedule_memory: scheduleMemory,
+    recommendations,
+    permanent_memory: buildPermanentBrainMemory(stats, recommendations, history),
+    safety: {
+      stores_full_copyrighted_text: false,
+      publishing_enabled: false,
+      facebook_posting_enabled: false
+    }
+  };
+  brain.internet_research = {
+    ...currentResearch,
+    project_brain_v2: stats,
+    project_brain_v2_auto: autoState
+  };
+  brain.recommendations = [
+    `Project Brain v2: next story ${recommendations.suggested_next_story_type.theme}, ${recommendations.suggested_next_story_type.emotion}, ${recommendations.suggested_next_story_type.hook_type}.`,
+    ...(brain.recommendations || []).slice(0, 9)
+  ];
+  brain.data_quality = {
+    ...(brain.data_quality || {}),
+    project_brain_v2_auto: {
+      status: "active",
+      automatic_sync_enabled: true,
+      last_learning_time: now,
+      story_dna_count: stats.story_dna_count,
+      confidence_score: stats.brain_confidence_score
+    }
+  };
+  brain.updated_at = now;
+  await writeProjectBrain(brain);
+  return autoState;
+}
+
+async function autoSyncProjectBrainV2(options = {}) {
+  const sources = new Set(options.sources || []);
+  if (options.facebook) sources.add("facebook");
+  if (options.generated) sources.add("generated");
+  if (options.research) sources.add("research");
+  if (options.images) sources.add("images");
+  if (options.schedules) sources.add("schedules");
+  if (!sources.size) sources.add("research");
+  const summary = {
+    ok: true,
+    module: "Project Brain v2 Auto Sync",
+    reason: options.reason || "auto_sync",
+    sources: [...sources],
+    imported_facebook_posts: 0,
+    imported_generated_stories: 0,
+    imported_research_stories: 0,
+    approved_image_prompts: buildApprovedImagePromptMemory().approved_count,
+    approved_schedule_items: buildApprovedScheduleMemory().approved_count
+  };
+  if (sources.has("research")) {
+    const incoming = readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
+    const result = await saveStoryDnaPatterns(incoming, "research");
+    summary.imported_research_stories = result.imported || 0;
+  }
+  if (sources.has("facebook")) {
+    const result = await importFacebookPostsToStoryDna({ skipBrainUpdate: true, reason: options.reason || "auto_facebook_sync" });
+    summary.imported_facebook_posts = result.imported_facebook_posts || 0;
+  }
+  if (sources.has("generated")) {
+    const result = await importGeneratedStoriesToStoryDna({ skipBrainUpdate: true, reason: options.reason || "auto_generated_sync" });
+    summary.imported_generated_stories = result.imported_generated_stories || 0;
+  }
   const brain = await updateProjectBrain();
+  const autoState = await recordProjectBrainV2Learning(summary);
+  return {
+    ...summary,
+    story_dna_count: autoState.recommendations?.dna_count || buildStoryDnaStatistics(readStoryDna()).story_dna_count,
+    confidence_score: autoState.recommendations?.confidence_score || buildStoryDnaStatistics(readStoryDna()).brain_confidence_score,
+    last_learning_time: autoState.last_learning_time,
+    project_brain_updated_at: brain.updated_at,
+    safety: {
+      stores_full_copyrighted_text: false,
+      publishing_enabled: false,
+      facebook_posting_enabled: false
+    }
+  };
+}
+
+async function refreshProjectBrainV2Expansion() {
+  const sync = await autoSyncProjectBrainV2({
+    sources: ["research", "facebook", "generated", "images", "schedules"],
+    reason: "forced_full_sync"
+  });
   const recommendations = buildProjectBrainV2Recommendations();
   return {
     ok: true,
-    module: "Project Brain v2 Expansion",
-    research_imported: research.imported || 0,
-    facebook_imported: facebook.imported_facebook_posts || 0,
-    generated_imported: generated.imported_generated_stories || 0,
+    module: "Project Brain v2 Auto Sync",
+    research_imported: sync.imported_research_stories || 0,
+    facebook_imported: sync.imported_facebook_posts || 0,
+    generated_imported: sync.imported_generated_stories || 0,
     story_dna_count: recommendations.dna_count,
     confidence_score: recommendations.confidence_score,
     recommendations,
-    project_brain_updated_at: brain.updated_at,
+    automatic_sync_enabled: true,
+    last_learning_time: sync.last_learning_time,
+    project_brain_updated_at: sync.project_brain_updated_at,
     safety: {
       stores_full_text: false,
       publishing_enabled: false,
@@ -4274,6 +4529,9 @@ async function updateImageQueueStatusByNumber(numberText, status) {
       }
     : item);
   await writeImageQueue(updated);
+  if (status === "approved") {
+    await autoSyncProjectBrainV2({ sources: ["images"], reason: "image_prompt_approved" });
+  }
   return updated.find((item) => item.id === prompt.id);
 }
 
@@ -4331,6 +4589,7 @@ async function generateOriginalStoryV2(payload = {}) {
   };
   const saved = [story, ...readGeneratedStories()].slice(0, 200);
   await writeGeneratedStories(saved);
+  await autoSyncProjectBrainV2({ sources: ["generated"], reason: "story_generated" });
   return {
     ok: true,
     module: "Story Generator v2",
@@ -4654,6 +4913,7 @@ async function approveSchedulerV2() {
     ? { ...item, status: "approved", publish_allowed: false, updated_at: new Date().toISOString() }
     : item);
   await writeScheduledPosts(updated);
+  await autoSyncProjectBrainV2({ sources: ["schedules"], reason: "schedule_approved" });
   return {
     ok: true,
     module: "AI Scheduler v2",
@@ -4859,8 +5119,10 @@ async function runAutopilotV1Plan() {
 function renderProjectBrainDashboard() {
   const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
   const stats = buildStoryDnaStatistics(dnaItems);
-  const recommendations = buildProjectBrainV2Recommendations();
   const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
+  const autoState = brain.internet_research?.project_brain_v2_auto || {};
+  const history = Array.isArray(autoState.history) ? autoState.history : [];
+  const recommendations = autoState.recommendations || buildProjectBrainV2Recommendations();
   const rowList = (items = [], empty = "No data yet.") => items.length
     ? `<ol class="insight-list">${items.slice(0, 8).map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${Number(item.count || 0)} signals · avg score ${Number(item.avg_score || 0)}</span></li>`).join("")}</ol>`
     : `<p class="empty-table">${escapeHtml(empty)}</p>`;
@@ -4876,6 +5138,9 @@ function renderProjectBrainDashboard() {
     <td>${escapeHtml(item.twist_type || "")}</td>
     <td>${Number(item.viral_score || 0)}</td>
   </tr>`).join("") || `<tr><td colspan="7">Run Internet Research to create Story DNA patterns.</td></tr>`;
+  const graphRows = (items = [], valueKey, label) => items.length
+    ? `<ol class="insight-list">${items.slice(-10).map((item) => `<li><strong>${escapeHtml(new Date(item.at).toLocaleString("ru-RU"))}</strong><span>${escapeHtml(label)}: ${Number(item[valueKey] || 0)} · ${escapeHtml(item.reason || "sync")}</span></li>`).join("")}</ol>`
+    : `<p class="empty-table">No ${escapeHtml(label)} history yet.</p>`;
   return layout("Project Brain", `${renderHeader()}
     <main class="insights-page">
       <section class="insights-hero">
@@ -4888,21 +5153,32 @@ function renderProjectBrainDashboard() {
         <div class="section-title">
           <div>
             <h2>Brain Status</h2>
-            <p class="helper-text">Analysis only. No generation changes and no publishing.</p>
-          </div>
-          <div class="button-row">
-            <button class="secondary-btn" data-brain-action="/api/project-brain-v2/import-facebook" type="button">Import Facebook Posts</button>
-            <button class="secondary-btn" data-brain-action="/api/project-brain-v2/import-generated" type="button">Import Generated Stories</button>
-            <button class="primary-btn" data-brain-action="/api/project-brain-v2/refresh" type="button">Refresh Brain v2</button>
+            <p class="helper-text">Auto Sync is active. Manual import buttons are no longer required. Analysis only, no publishing.</p>
           </div>
         </div>
         <div class="autopilot-status-grid">
           <article><span>Story DNA count</span><strong>${stats.story_dna_count}</strong><p>Pattern records, not full stories.</p></article>
           <article><span>Brain confidence</span><strong>${stats.brain_confidence_score}%</strong><p>Based on DNA volume and pattern diversity.</p></article>
-          <article><span>Project Brain</span><strong>${brain.updated_at ? "active" : "needs refresh"}</strong><p>${escapeHtml(brain.updated_at || "No saved brain state yet.")}</p></article>
+          <article><span>Auto Sync</span><strong>${autoState.automatic_sync_enabled ? "active" : "ready"}</strong><p>${escapeHtml(autoState.last_learning_time || "Waiting for next data event.")}</p></article>
           <article><span>Safety</span><strong>patterns only</strong><p>No full copyrighted text. No publishing.</p></article>
         </div>
-        <p id="projectBrainV2Message" class="helper-text">Ready.</p>
+      </section>
+
+      <section class="insight-card">
+        <h2>Auto Sync Timeline</h2>
+        <div class="autopilot-status-grid">
+          <article><span>Last learning time</span><strong>${escapeHtml(autoState.last_learning_time || "not yet")}</strong><p>Updated after every import/sync event.</p></article>
+          <article><span>Last Facebook sync</span><strong>${escapeHtml(autoState.last_facebook_sync || "not yet")}</strong><p>Runs after Load Page Posts.</p></article>
+          <article><span>Last Research sync</span><strong>${escapeHtml(autoState.last_research_sync || "not yet")}</strong><p>Runs after Internet Research saves summaries.</p></article>
+          <article><span>Last Story sync</span><strong>${escapeHtml(autoState.last_story_sync || "not yet")}</strong><p>Runs after Story Generator creates drafts.</p></article>
+          <article><span>Last Image sync</span><strong>${escapeHtml(autoState.last_image_sync || "not yet")}</strong><p>Runs after image prompt approval.</p></article>
+          <article><span>Last Schedule sync</span><strong>${escapeHtml(autoState.last_schedule_sync || "not yet")}</strong><p>Runs after schedule approval.</p></article>
+        </div>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card"><h2>DNA growth graph</h2>${graphRows(history, "story_dna_count", "DNA")}</article>
+        <article class="insight-card"><h2>Confidence history</h2>${graphRows(history, "confidence_score", "confidence")}</article>
       </section>
 
       <section class="insight-card">
@@ -4940,11 +5216,33 @@ function renderProjectBrainDashboard() {
       <section class="insight-grid">
         <article class="insight-card">
           <h2>Brain Memory: what worked</h2>
-          <ol class="insight-list">${stats.brain_memory.worked.length ? stats.brain_memory.worked.map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("") : "<li><strong>Not enough data yet</strong></li>"}</ol>
+          <ol class="insight-list">${(autoState.permanent_memory?.what_works || stats.brain_memory.worked).length ? (autoState.permanent_memory?.what_works || stats.brain_memory.worked).slice(0, 6).map((item) => `<li><strong>${escapeHtml(item.pattern || item)}</strong><span>${item.avg_score ? `score ${item.avg_score}` : ""}</span></li>`).join("") : "<li><strong>Not enough data yet</strong></li>"}</ol>
         </article>
         <article class="insight-card">
           <h2>What to avoid</h2>
-          <ol class="insight-list">${stats.brain_memory.avoid.map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("")}</ol>
+          <ol class="insight-list">${(autoState.permanent_memory?.avoid || stats.brain_memory.avoid).map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("")}</ol>
+        </article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Emerging trends</h2>
+          <ol class="insight-list">${(autoState.permanent_memory?.emerging_trends || []).length ? autoState.permanent_memory.emerging_trends.map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("") : "<li><strong>Not enough trend history yet</strong></li>"}</ol>
+        </article>
+        <article class="insight-card">
+          <h2>Seasonal themes</h2>
+          <ol class="insight-list">${(autoState.permanent_memory?.seasonal_themes || []).length ? autoState.permanent_memory.seasonal_themes.map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("") : "<li><strong>Seasonal memory will appear after sync.</strong></li>"}</ol>
+        </article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Approved image prompt memory</h2>
+          <ol class="insight-list">${(autoState.visual_memory?.top_compositions || []).length ? autoState.visual_memory.top_compositions.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${item.count} approved prompts</span></li>`).join("") : "<li><strong>No approved image prompts yet</strong></li>"}</ol>
+        </article>
+        <article class="insight-card">
+          <h2>Approved schedule memory</h2>
+          <ol class="insight-list">${(autoState.schedule_memory?.best_publish_hours || []).length ? autoState.schedule_memory.best_publish_hours.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${item.count} approved slots</span></li>`).join("") : "<li><strong>No approved schedule slots yet</strong></li>"}</ol>
         </article>
       </section>
 
@@ -4957,24 +5255,7 @@ function renderProjectBrainDashboard() {
           </table>
         </div>
       </section>
-    </main>
-    <script>
-      const message = document.getElementById("projectBrainV2Message");
-      document.querySelectorAll("[data-brain-action]").forEach((button) => button.addEventListener("click", async () => {
-        message.textContent = "Working...";
-        button.disabled = true;
-        try {
-          const response = await fetch(button.dataset.brainAction, { method: "POST" });
-          const result = await response.json();
-          message.textContent = result.ok ? "Brain v2 updated. Reloading..." : (result.message || "Action failed.");
-          if (result.ok) window.location.reload();
-        } catch (error) {
-          message.textContent = error.message;
-        } finally {
-          button.disabled = false;
-        }
-      }));
-    </script>`);
+    </main>`);
 }
 
 function renderAutopilotV1Dashboard() {
@@ -6076,6 +6357,10 @@ async function telegramBrainRecommendations(chatId) {
   return sendTelegramLongMessage(chatId, telegramBrainStatsText(buildProjectBrainV2Recommendations()), mainTelegramKeyboard());
 }
 
+async function telegramForceBrainSync(chatId) {
+  return telegramBrain(chatId, ["обновить"]);
+}
+
 async function legacyTelegramHelp(chatId) {
   return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status — system connection status\n/stats — stories and traffic stats\n/drafts — drafts and stories waiting for review\n/approve — show approval list\n/approve STORY_ID — approve a story locally\n/reject — show rejection list\n/reject STORY_ID — reject a story locally\n/help — command list\n\nButtons:\n✅ Approve — marks story as approved\n✏ Edit — returns story to review\n❌ Reject — marks story as rejected\n\nPublishing is never automatic.`, mainTelegramKeyboard());
 }
@@ -6105,6 +6390,7 @@ async function telegramHelp(chatId) {
     "/готово — одобренные пакеты",
     "/мозг — Project Brain v2",
     "/мозг обновить — импорт Facebook/generated/research в Story DNA",
+    "/обновить_мозг — принудительная полная синхронизация Project Brain",
     "/рекомендации — рекомендации Project Brain",
     "/помощь — эта справка",
     "",
@@ -6146,6 +6432,7 @@ function telegramCommandList() {
     { command: "approve_schedule", description: "Одобрить расписание" },
     { command: "stats", description: "Статистика" },
     { command: "brain", description: "Project Brain v2" },
+    { command: "update_brain", description: "Force Project Brain sync" },
     { command: "recommendations", description: "Рекомендации мозга" },
     { command: "approve", description: "Одобрить черновик" },
     { command: "reject", description: "Отклонить черновик" },
@@ -6253,6 +6540,7 @@ async function handleTelegramMessage(message) {
   if (command === "/approve_package" || command === "/одобрить_пакет") return telegramApprovePackage(chatId, args[0] || "1");
   if (command === "/reject_package" || command === "/отклонить_пакет") return telegramRejectPackage(chatId, args[0] || "1");
   if (command === "/ready" || command === "/готово") return telegramReadyPackages(chatId);
+  if (command === "/update_brain" || command === "/обновить_мозг") return telegramForceBrainSync(chatId);
   if (command === "/brain" || command === "/мозг") return telegramBrain(chatId, args);
   if (command === "/recommendations" || command === "/рекомендации") return telegramBrainRecommendations(chatId);
   if (command === "/stats") return telegramStats(chatId);
@@ -7499,7 +7787,7 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
   const skippedDuplicates = updatedExisting + duplicateInApi;
   const merged = [...mergedById.values()].sort((a, b) => b.total_score - a.total_score);
   writeFacebookPosts(merged);
-  await updateProjectBrain();
+  const autoSync = await autoSyncProjectBrainV2({ sources: ["facebook"], reason: "facebook_posts_loaded" });
 
   const stoppedByTimeout = Boolean(nextUrl && Date.now() - startedAt >= timeoutMs);
   const stoppedByMaxPosts = Boolean(nextUrl && fetchedPosts.length >= maxPosts);
@@ -7518,6 +7806,11 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
       max_posts: maxPosts,
       stopped_by_timeout: stoppedByTimeout,
       stopped_by_max_posts: stoppedByMaxPosts,
+      auto_sync: {
+        story_dna_count: autoSync.story_dna_count,
+        confidence_score: autoSync.confidence_score,
+        last_learning_time: autoSync.last_learning_time
+      },
       has_more: Boolean(nextUrl),
       selected_endpoint: selectedAttempt.edge,
       selected_field_profile: selectedAttempt.field_profile,
@@ -7991,12 +8284,24 @@ async function loadFacebookPosts(req, options = {}) {
       ...existingPosts.filter((item) => !posts.some((post) => post.facebook_post_id === item.facebook_post_id))
     ].sort((a, b) => b.total_score - a.total_score);
     writeFacebookPosts(merged);
-    await updateProjectBrain();
+    const autoSync = await autoSyncProjectBrainV2({ sources: ["facebook"], reason: "facebook_historical_sync" });
     return {
       ok: true,
       configured: true,
       posts: merged,
-      summary: { count: merged.length, loaded: posts.length, pages, best_score: merged[0]?.total_score || 0, selected_endpoint: selectedAttempt.edge, selected_field_profile: selectedAttempt.field_profile },
+      summary: {
+        count: merged.length,
+        loaded: posts.length,
+        pages,
+        best_score: merged[0]?.total_score || 0,
+        selected_endpoint: selectedAttempt.edge,
+        selected_field_profile: selectedAttempt.field_profile,
+        auto_sync: {
+          story_dna_count: autoSync.story_dna_count,
+          confidence_score: autoSync.confidence_score,
+          last_learning_time: autoSync.last_learning_time
+        }
+      },
       message: `Historical sync complete via ${selectedAttempt.edge} (${selectedAttempt.field_profile}). Loaded posts: ${posts.length}, API pages: ${pages}. Project Brain updated.`
     };
   }
@@ -8016,7 +8321,7 @@ async function loadFacebookPosts(req, options = {}) {
     ...existingPosts.filter((item) => !posts.some((post) => post.facebook_post_id === item.facebook_post_id))
   ].sort((a, b) => b.total_score - a.total_score);
   writeFacebookPosts(merged);
-  await updateProjectBrain();
+  const autoSync = await autoSyncProjectBrainV2({ sources: ["facebook"], reason: "facebook_posts_loaded" });
   return {
     ok: true,
     configured: true,
@@ -8027,6 +8332,11 @@ async function loadFacebookPosts(req, options = {}) {
       loaded: posts.length,
       selected_endpoint: selectedAttempt.edge,
       selected_field_profile: selectedAttempt.field_profile,
+      auto_sync: {
+        story_dna_count: autoSync.story_dna_count,
+        confidence_score: autoSync.confidence_score,
+        last_learning_time: autoSync.last_learning_time
+      },
       attempts
     },
     message: `Загружено и сохранено постов: ${posts.length}. Таблица отсортирована по лучшим результатам.`
@@ -8282,10 +8592,19 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/project-brain-v2" && req.method === "GET") {
     const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
+    const brain = readProjectBrain();
+    const autoSync = brain.internet_research?.project_brain_v2_auto || {
+      status: "ready",
+      automatic_sync_enabled: true,
+      last_learning_time: null,
+      history: []
+    };
     return sendJson(res, 200, {
       ok: true,
-      module: "Project Brain v2 Core",
+      module: "Project Brain v2 Auto Sync",
       statistics: buildStoryDnaStatistics(dnaItems),
+      auto_sync: autoSync,
+      recommendations: autoSync.recommendations || buildProjectBrainV2Recommendations(),
       story_dna_sample: dnaItems.slice(0, 20),
       safety: {
         stores_full_copyrighted_text: false,
