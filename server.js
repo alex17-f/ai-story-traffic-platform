@@ -2874,6 +2874,110 @@ function storyDnaFromResearchStory(story = {}) {
   };
 }
 
+function storyDnaPostLengthBucket(chars = 0) {
+  const value = Number(chars || 0);
+  if (value < 600) return "short";
+  if (value <= 1200) return "medium";
+  return "long";
+}
+
+function storyDnaFromFacebookPost(post = {}, maxScore = 0) {
+  const text = String(post.message || "");
+  const postId = post.facebook_post_id || post.id;
+  if (!postId || !text.trim()) return null;
+  const score = Number(post.total_score || 0);
+  const sourceReference = `facebook:${postId}`;
+  const theme = post.detected_topic || detectTopic(text);
+  const emotion = post.detected_emotion || detectEmotion(text);
+  const structure = analyzeStoryStructure({
+    title: storyHook(text),
+    summary: shortText(text, 900),
+    emotion,
+    category: theme,
+    keywords: [theme, emotion]
+  });
+  return {
+    id: `dna_${crypto.createHash("sha1").update(sourceReference).digest("hex").slice(0, 24)}`,
+    source_type: "facebook",
+    source_reference: sourceReference,
+    emotion,
+    main_theme: theme,
+    secondary_theme: storyDnaConflictType(text),
+    hook_type: hookPattern(text),
+    conflict_type: structure.conflict,
+    twist_type: structure.plot_twists[0],
+    ending_type: structure.ending,
+    characters: storyDnaCharacters(text),
+    age_group: storyDnaAgeGroup(text),
+    family_structure: storyDnaFamilyStructure(text),
+    dialogue_density: storyDnaDialogueDensity(text),
+    story_length: storyDnaPostLengthBucket(post.text_length || text.length),
+    emotion_curve: storyDnaEmotionCurve(text, emotion),
+    viral_score: maxScore ? Math.round((score / maxScore) * 100) : Math.min(100, score),
+    engagement_score: score,
+    comments_score: Number(post.comments_count || 0) * 3,
+    shares_score: Number(post.shares_count || 0) * 5,
+    originality_score: 100,
+    structure_analysis: {
+      ...structure,
+      source_metrics: {
+        likes_count: Number(post.likes_count || 0),
+        comments_count: Number(post.comments_count || 0),
+        shares_count: Number(post.shares_count || 0),
+        link_clicks_count: Number(post.link_clicks_count || 0),
+        total_score: score
+      }
+    },
+    created_at: post.published_at || post.created_at || new Date().toISOString()
+  };
+}
+
+function storyDnaFromGeneratedStory(story = {}) {
+  const text = [story.title, story.hook, story.full_story, story.moral].filter(Boolean).join(" ");
+  const storyId = story.id;
+  if (!storyId || !text.trim()) return null;
+  const sourceReference = `generated:${storyId}`;
+  const emotion = story.emotion || detectResearchEmotion(text, story.category || "");
+  const theme = story.category || normalizeResearchCategory(detectTopic(text));
+  const structure = analyzeStoryStructure({
+    title: story.title,
+    summary: shortText([story.hook, story.full_story, story.moral].filter(Boolean).join(" "), 1000),
+    emotion,
+    category: theme,
+    keywords: [theme, emotion]
+  });
+  const score = Number(story.viral_prediction_score || 0);
+  return {
+    id: `dna_${crypto.createHash("sha1").update(sourceReference).digest("hex").slice(0, 24)}`,
+    source_type: "generated",
+    source_reference: sourceReference,
+    emotion,
+    main_theme: theme,
+    secondary_theme: storyDnaConflictType(text),
+    hook_type: hookPattern(story.hook || story.title || text),
+    conflict_type: structure.conflict,
+    twist_type: structure.plot_twists[0],
+    ending_type: structure.ending,
+    characters: storyDnaCharacters(text),
+    age_group: storyDnaAgeGroup(text),
+    family_structure: storyDnaFamilyStructure(text),
+    dialogue_density: storyDnaDialogueDensity(text),
+    story_length: story.length || storyDnaPostLengthBucket(text.length),
+    emotion_curve: storyDnaEmotionCurve(text, emotion),
+    viral_score: score,
+    engagement_score: score,
+    comments_score: 0,
+    shares_score: 0,
+    originality_score: 100,
+    structure_analysis: {
+      ...structure,
+      generated_status: story.status || "needs_approval",
+      own_content: true
+    },
+    created_at: story.created_at || new Date().toISOString()
+  };
+}
+
 function mergeStoryDna(existing = [], incoming = []) {
   const byReference = new Map();
   for (const item of existing) {
@@ -2979,11 +3083,18 @@ function buildStoryDnaStatistics(items = readStoryDna()) {
   };
 }
 
-async function learnStoryDnaFromResearchStories(stories = readResearchStories()) {
-  const incoming = stories
-    .map(storyDnaFromResearchStory)
-    .filter(Boolean);
-  if (!incoming.length) return buildStoryDnaStatistics(readStoryDna());
+async function saveStoryDnaPatterns(incoming = [], sourceLabel = "mixed") {
+  if (!incoming.length) {
+    const stats = buildStoryDnaStatistics(readStoryDna());
+    return {
+      ok: true,
+      module: "Project Brain v2 Core",
+      source: sourceLabel,
+      imported: 0,
+      story_dna_count: stats.story_dna_count,
+      statistics: stats
+    };
+  }
   const merged = mergeStoryDna(readStoryDna(), incoming);
   await writeStoryDna(merged);
   const stats = buildStoryDnaStatistics(merged);
@@ -3004,7 +3115,134 @@ async function learnStoryDnaFromResearchStories(stories = readResearchStories())
   };
   brain.updated_at = new Date().toISOString();
   await writeProjectBrain(brain);
-  return stats;
+  return {
+    ok: true,
+    module: "Project Brain v2 Core",
+    source: sourceLabel,
+    imported: incoming.length,
+    story_dna_count: merged.length,
+    statistics: stats
+  };
+}
+
+async function learnStoryDnaFromResearchStories(stories = readResearchStories()) {
+  const incoming = stories
+    .map(storyDnaFromResearchStory)
+    .filter(Boolean);
+  const result = await saveStoryDnaPatterns(incoming, "research");
+  return result.statistics;
+}
+
+async function importFacebookPostsToStoryDna() {
+  const posts = readFacebookPosts();
+  const maxScore = Math.max(1, ...posts.map((post) => Number(post.total_score || 0)));
+  const incoming = posts
+    .map((post) => storyDnaFromFacebookPost(post, maxScore))
+    .filter(Boolean);
+  const result = await saveStoryDnaPatterns(incoming, "facebook");
+  await updateProjectBrain();
+  return {
+    ...result,
+    source_posts: posts.length,
+    imported_facebook_posts: incoming.length,
+    safety: {
+      stores_full_text: false,
+      stores_structure_and_stats_only: true,
+      publishing_enabled: false
+    }
+  };
+}
+
+async function importGeneratedStoriesToStoryDna() {
+  const stories = readGeneratedStories();
+  const incoming = stories
+    .map(storyDnaFromGeneratedStory)
+    .filter(Boolean);
+  const result = await saveStoryDnaPatterns(incoming, "generated");
+  await updateProjectBrain();
+  return {
+    ...result,
+    source_generated_stories: stories.length,
+    imported_generated_stories: incoming.length,
+    safety: {
+      stores_full_text: false,
+      stores_structure_only: true,
+      publishing_enabled: false
+    }
+  };
+}
+
+function lowestUsefulDnaStats(items = [], key) {
+  return weightedDnaStats(items, key)
+    .filter((item) => item.count >= 1 && Number(item.avg_score || 0) < 35 && item.name !== "unknown")
+    .sort((a, b) => a.avg_score - b.avg_score || b.count - a.count)
+    .slice(0, 6);
+}
+
+function buildProjectBrainV2Recommendations() {
+  const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
+  const stats = buildStoryDnaStatistics(dnaItems);
+  const lengthStats = weightedDnaStats(dnaItems, "story_length").slice(0, 6);
+  const avoidTopics = lowestUsefulDnaStats(dnaItems, "main_theme");
+  const bestEmotion = stats.top_emotions[0]?.name || "hope";
+  const bestHook = stats.top_hooks[0]?.name || "hidden truth hook";
+  const bestLength = lengthStats[0]?.name || "medium";
+  const bestConflict = stats.top_conflicts[0]?.name || "family moral conflict";
+  const bestEnding = stats.top_endings[0]?.name || "moral emotional ending";
+  const bestTopic = stats.trending_topics[0]?.name || "family conflict";
+  const suggested = {
+    theme: bestTopic,
+    emotion: bestEmotion,
+    hook_type: bestHook,
+    conflict_type: bestConflict,
+    ending_type: bestEnding,
+    story_length: bestLength,
+    format: `${bestHook} -> ${bestConflict} -> ${bestEnding}`
+  };
+  return {
+    ok: true,
+    module: "Project Brain v2 Recommendations",
+    dna_count: stats.story_dna_count,
+    confidence_score: stats.brain_confidence_score,
+    best_emotions: stats.top_emotions.slice(0, 5),
+    best_hook_types: stats.top_hooks.slice(0, 5),
+    best_story_length: lengthStats[0] || null,
+    avoid_topics: avoidTopics,
+    suggested_next_story_type: suggested,
+    reason_why: stats.story_dna_count
+      ? `Based on ${stats.story_dna_count} Story DNA patterns. Strongest signals: emotion "${bestEmotion}", hook "${bestHook}", conflict "${bestConflict}", length "${bestLength}".`
+      : "Not enough Story DNA yet. Import Facebook posts, generated stories, or run Internet Research first.",
+    safety: {
+      stores_full_copyrighted_text: false,
+      publishing_enabled: false,
+      auto_posting_enabled: false
+    },
+    updated_at: new Date().toISOString()
+  };
+}
+
+async function refreshProjectBrainV2Expansion() {
+  const research = await saveStoryDnaPatterns(readResearchStories().map(storyDnaFromResearchStory).filter(Boolean), "research");
+  const facebook = await importFacebookPostsToStoryDna();
+  const generated = await importGeneratedStoriesToStoryDna();
+  const brain = await updateProjectBrain();
+  const recommendations = buildProjectBrainV2Recommendations();
+  return {
+    ok: true,
+    module: "Project Brain v2 Expansion",
+    research_imported: research.imported || 0,
+    facebook_imported: facebook.imported_facebook_posts || 0,
+    generated_imported: generated.imported_generated_stories || 0,
+    story_dna_count: recommendations.dna_count,
+    confidence_score: recommendations.confidence_score,
+    recommendations,
+    project_brain_updated_at: brain.updated_at,
+    safety: {
+      stores_full_text: false,
+      publishing_enabled: false,
+      auto_posting_enabled: false
+    }
+  };
 }
 
 function weightedGroup(posts, keyFn) {
@@ -4621,6 +4859,7 @@ async function runAutopilotV1Plan() {
 function renderProjectBrainDashboard() {
   const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
   const stats = buildStoryDnaStatistics(dnaItems);
+  const recommendations = buildProjectBrainV2Recommendations();
   const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
   const rowList = (items = [], empty = "No data yet.") => items.length
     ? `<ol class="insight-list">${items.slice(0, 8).map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${Number(item.count || 0)} signals · avg score ${Number(item.avg_score || 0)}</span></li>`).join("")}</ol>`
@@ -4651,7 +4890,11 @@ function renderProjectBrainDashboard() {
             <h2>Brain Status</h2>
             <p class="helper-text">Analysis only. No generation changes and no publishing.</p>
           </div>
-          <button class="primary-btn" id="refreshProjectBrainV2" type="button">Refresh Brain v2</button>
+          <div class="button-row">
+            <button class="secondary-btn" data-brain-action="/api/project-brain-v2/import-facebook" type="button">Import Facebook Posts</button>
+            <button class="secondary-btn" data-brain-action="/api/project-brain-v2/import-generated" type="button">Import Generated Stories</button>
+            <button class="primary-btn" data-brain-action="/api/project-brain-v2/refresh" type="button">Refresh Brain v2</button>
+          </div>
         </div>
         <div class="autopilot-status-grid">
           <article><span>Story DNA count</span><strong>${stats.story_dna_count}</strong><p>Pattern records, not full stories.</p></article>
@@ -4660,6 +4903,18 @@ function renderProjectBrainDashboard() {
           <article><span>Safety</span><strong>patterns only</strong><p>No full copyrighted text. No publishing.</p></article>
         </div>
         <p id="projectBrainV2Message" class="helper-text">Ready.</p>
+      </section>
+
+      <section class="insight-card">
+        <h2>Recommendations</h2>
+        <div class="autopilot-status-grid">
+          <article><span>Next theme</span><strong>${escapeHtml(recommendations.suggested_next_story_type.theme)}</strong><p>${escapeHtml(recommendations.suggested_next_story_type.conflict_type)}</p></article>
+          <article><span>Best emotion</span><strong>${escapeHtml(recommendations.suggested_next_story_type.emotion)}</strong><p>Use in the first 1-2 lines.</p></article>
+          <article><span>Best hook</span><strong>${escapeHtml(recommendations.suggested_next_story_type.hook_type)}</strong><p>${escapeHtml(recommendations.suggested_next_story_type.format)}</p></article>
+          <article><span>Best length</span><strong>${escapeHtml(recommendations.suggested_next_story_type.story_length)}</strong><p>${escapeHtml(recommendations.reason_why)}</p></article>
+        </div>
+        <h3>Avoid topics</h3>
+        ${recommendations.avoid_topics.length ? rowList(recommendations.avoid_topics, "No weak topics yet.") : `<p class="empty-table">No weak topics yet.</p>`}
       </section>
 
       <section class="insight-grid">
@@ -4705,17 +4960,20 @@ function renderProjectBrainDashboard() {
     </main>
     <script>
       const message = document.getElementById("projectBrainV2Message");
-      document.getElementById("refreshProjectBrainV2")?.addEventListener("click", async () => {
-        message.textContent = "Refreshing...";
+      document.querySelectorAll("[data-brain-action]").forEach((button) => button.addEventListener("click", async () => {
+        message.textContent = "Working...";
+        button.disabled = true;
         try {
-          const response = await fetch("/api/project-brain-v2/refresh", { method: "POST" });
+          const response = await fetch(button.dataset.brainAction, { method: "POST" });
           const result = await response.json();
-          message.textContent = result.ok ? "Brain v2 refreshed. Reloading..." : (result.message || "Refresh failed.");
+          message.textContent = result.ok ? "Brain v2 updated. Reloading..." : (result.message || "Action failed.");
           if (result.ok) window.location.reload();
         } catch (error) {
           message.textContent = error.message;
+        } finally {
+          button.disabled = false;
         }
-      });
+      }));
     </script>`);
 }
 
@@ -5756,12 +6014,108 @@ async function telegramSettings(chatId) {
   return sendTelegramMessage(chatId, `⚙ <b>Настройки</b>\n\nFacebook API: ${fb.configured ? "✅" : "⏳"}\nTelegram: ${tg.configured ? "✅" : "⏳"}\nPostgreSQL: ${pgPool ? "✅" : "JSON backup mode"}\n\nСекреты хранятся только локально в .env или environment variables.`, mainTelegramKeyboard());
 }
 
+function telegramBrainStatsText(recommendations = buildProjectBrainV2Recommendations()) {
+  const topEmotions = recommendations.best_emotions.length
+    ? recommendations.best_emotions.slice(0, 3).map((item, index) => `${index + 1}. ${escapeHtml(item.name)} — score ${item.avg_score}`).join("\n")
+    : "Пока недостаточно данных.";
+  const topHooks = recommendations.best_hook_types.length
+    ? recommendations.best_hook_types.slice(0, 3).map((item, index) => `${index + 1}. ${escapeHtml(item.name)} — score ${item.avg_score}`).join("\n")
+    : "Пока недостаточно данных.";
+  const avoid = recommendations.avoid_topics.length
+    ? recommendations.avoid_topics.slice(0, 4).map((item) => `• ${escapeHtml(item.name)} — слабый score ${item.avg_score}`).join("\n")
+    : "Пока нет слабых тем. Продолжайте собирать данные.";
+  const next = recommendations.suggested_next_story_type || {};
+  return [
+    "🧠 <b>Project Brain v2</b>",
+    "",
+    `Story DNA: ${recommendations.dna_count}`,
+    `Confidence score: ${recommendations.confidence_score}%`,
+    "",
+    "<b>Топ эмоции</b>",
+    topEmotions,
+    "",
+    "<b>Топ hooks</b>",
+    topHooks,
+    "",
+    "<b>Следующая рекомендованная история</b>",
+    `Тема: ${escapeHtml(next.theme || "family conflict")}`,
+    `Эмоция: ${escapeHtml(next.emotion || "hope")}`,
+    `Hook: ${escapeHtml(next.hook_type || "hidden truth hook")}`,
+    `Конфликт: ${escapeHtml(next.conflict_type || "family moral conflict")}`,
+    `Длина: ${escapeHtml(next.story_length || "medium")}`,
+    "",
+    "<b>Что избегать</b>",
+    avoid,
+    "",
+    escapeHtml(recommendations.reason_why || ""),
+    "",
+    "Безопасность: полные чужие тексты не сохраняются. Публикации нет."
+  ].join("\n");
+}
+
+async function telegramBrain(chatId, args = []) {
+  const mode = String(args[0] || "").toLowerCase();
+  if (mode === "обновить" || mode === "refresh") {
+    const result = await refreshProjectBrainV2Expansion();
+    return sendTelegramLongMessage(chatId, [
+      "🧠 <b>Project Brain v2 обновлён</b>",
+      "",
+      `Facebook imported: ${result.facebook_imported}`,
+      `Generated imported: ${result.generated_imported}`,
+      `Research imported: ${result.research_imported}`,
+      `Story DNA: ${result.story_dna_count}`,
+      `Confidence score: ${result.confidence_score}%`,
+      "",
+      telegramBrainStatsText(result.recommendations)
+    ].join("\n"), mainTelegramKeyboard());
+  }
+  return sendTelegramLongMessage(chatId, telegramBrainStatsText(), mainTelegramKeyboard());
+}
+
+async function telegramBrainRecommendations(chatId) {
+  return sendTelegramLongMessage(chatId, telegramBrainStatsText(buildProjectBrainV2Recommendations()), mainTelegramKeyboard());
+}
+
 async function legacyTelegramHelp(chatId) {
   return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status — system connection status\n/stats — stories and traffic stats\n/drafts — drafts and stories waiting for review\n/approve — show approval list\n/approve STORY_ID — approve a story locally\n/reject — show rejection list\n/reject STORY_ID — reject a story locally\n/help — command list\n\nButtons:\n✅ Approve — marks story as approved\n✏ Edit — returns story to review\n❌ Reject — marks story as rejected\n\nPublishing is never automatic.`, mainTelegramKeyboard());
 }
 
 async function telegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform — команды</b>\n\n<b>Русский интерфейс</b>\n/старт — главное меню\n/статус — статус системы\n/поиск измена — найти идеи и тренды\n/создать измена 3 — создать 3 черновика\n/черновики — последние черновики\n/черновик 1 — полный текст черновика\n/картинка 1 — создать 3 промпта картинки\n/картинки — очередь промптов\n/одобрить_картинку 1 — одобрить промпт\n/план — план на завтра\n/план неделя — план на 7 дней\n/очередь — очередь расписания\n/создать_пакет 1 — собрать пакет на проверку\n/пакеты — последние пакеты\n/пакет 1 — детали пакета\n/одобрить_пакет 1 — одобрить пакет без публикации\n/отклонить_пакет 1 — отклонить пакет\n/готово — одобренные пакеты\n/помощь — эта справка\n\n<b>English commands still work</b>\n/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /help\n\nКнопки снизу показывают подсказки для ежедневной работы.\n\n${telegramSafetyFooter()}\nПубликации в Facebook нет.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, [
+    "<b>AI Story Traffic Platform — команды</b>",
+    "",
+    "<b>Русский интерфейс</b>",
+    "/старт — главное меню",
+    "/статус — статус системы",
+    "/поиск измена — найти идеи и тренды",
+    "/создать измена 3 — создать 3 черновика",
+    "/черновики — последние черновики",
+    "/черновик 1 — полный текст черновика",
+    "/картинка 1 — создать 3 промпта картинки",
+    "/картинки — очередь промптов",
+    "/одобрить_картинку 1 — одобрить промпт",
+    "/план — план на завтра",
+    "/план неделя — план на 7 дней",
+    "/очередь — очередь расписания",
+    "/создать_пакет 1 — собрать пакет на проверку",
+    "/пакеты — последние пакеты",
+    "/пакет 1 — детали пакета",
+    "/одобрить_пакет 1 — одобрить пакет без публикации",
+    "/отклонить_пакет 1 — отклонить пакет",
+    "/готово — одобренные пакеты",
+    "/мозг — Project Brain v2",
+    "/мозг обновить — импорт Facebook/generated/research в Story DNA",
+    "/рекомендации — рекомендации Project Brain",
+    "/помощь — эта справка",
+    "",
+    "<b>English commands still work</b>",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "",
+    "Кнопки снизу показывают подсказки для ежедневной работы.",
+    "",
+    telegramSafetyFooter(),
+    "Публикации в Facebook нет."
+  ].join("\n"), mainTelegramKeyboard());
 }
 
 function telegramCommandList() {
@@ -5791,6 +6145,8 @@ function telegramCommandList() {
     { command: "unschedule", description: "Убрать из расписания" },
     { command: "approve_schedule", description: "Одобрить расписание" },
     { command: "stats", description: "Статистика" },
+    { command: "brain", description: "Project Brain v2" },
+    { command: "recommendations", description: "Рекомендации мозга" },
     { command: "approve", description: "Одобрить черновик" },
     { command: "reject", description: "Отклонить черновик" },
     { command: "help", description: "Помощь" }
@@ -5897,6 +6253,8 @@ async function handleTelegramMessage(message) {
   if (command === "/approve_package" || command === "/одобрить_пакет") return telegramApprovePackage(chatId, args[0] || "1");
   if (command === "/reject_package" || command === "/отклонить_пакет") return telegramRejectPackage(chatId, args[0] || "1");
   if (command === "/ready" || command === "/готово") return telegramReadyPackages(chatId);
+  if (command === "/brain" || command === "/мозг") return telegramBrain(chatId, args);
+  if (command === "/recommendations" || command === "/рекомендации") return telegramBrainRecommendations(chatId);
   if (command === "/stats") return telegramStats(chatId);
   if (command === "/drafts" || command === "/черновики") return telegramDrafts(chatId);
   if (command === "/draft" || command === "/черновик") return telegramDraftDetails(chatId, args[0]);
@@ -7938,21 +8296,20 @@ async function handleApi(req, res, pathname) {
     });
   }
 
+  if (pathname === "/api/project-brain-v2/import-facebook" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await importFacebookPostsToStoryDna());
+  }
+
+  if (pathname === "/api/project-brain-v2/import-generated" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await importGeneratedStoriesToStoryDna());
+  }
+
+  if (pathname === "/api/project-brain-v2/recommendations" && req.method === "GET") {
+    return sendJson(res, 200, buildProjectBrainV2Recommendations());
+  }
+
   if (pathname === "/api/project-brain-v2/refresh" && ["GET", "POST"].includes(req.method)) {
-    const statistics = await learnStoryDnaFromResearchStories(readResearchStories());
-    const brain = await updateProjectBrain();
-    return sendJson(res, 200, {
-      ok: true,
-      module: "Project Brain v2 Core",
-      statistics,
-      project_brain_updated_at: brain.updated_at,
-      safety: {
-        stores_full_copyrighted_text: false,
-        stores_patterns_only: true,
-        publishing_enabled: false,
-        generation_changed: false
-      }
-    });
+    return sendJson(res, 200, await refreshProjectBrainV2Expansion());
   }
 
   if (pathname === "/api/security-audit" && req.method === "GET") {
