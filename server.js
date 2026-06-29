@@ -5927,22 +5927,91 @@ function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, sty
     : endingEmotion === "hope"
       ? "not because everything was fixed, but because someone finally chose not to run away"
       : "not because the pain vanished, but because the silence finally loosened its grip";
-  const title = `${hero} found ${profile.object}, and the whole family suddenly went silent`;
-  const hook = `${hero} noticed ${profile.object} before anyone else did.\n\nIt was lying ${settingPhrase}, ${objectAnchor}, and even ${relation} suddenly stopped talking.\n\n"Who put this here?" she asked. No one answered.`;
-  const paragraphs = [
-    hook,
-    `For years, ${hero} had been the one who smoothed every quarrel over. She made tea, changed the subject, wiped the table twice if her hands were shaking, and pretended family peace did not cost her anything.`,
-    `But that evening was different. ${sceneDetail}, ${witness}, and what began as ${conflictScene} turned into a silence so heavy that even the chairs seemed too loud when someone moved.`,
-    `${hero} picked up ${profile.object}. At first it looked ordinary. Then she saw one detail that did not belong, and her fingers tightened around the edge.`,
-    `"Tell me this is not true," she said.\n\n${relation} looked at the floor.\n\n"Not here," came the answer.\n\n"Here," ${hero} said. "I've been quiet long enough."`,
-    `The first explanation hurt her pride. The second hurt her heart. Everyone had a version of the truth, and every version made someone else look cruel.`,
-    `Then ${relation} finally spoke. The words came slowly, not like a confession from a film, but like something tired and human. ${profile.turn}. That was the ${peakEmotion} moment: quiet, sharp, and impossible to pretend away.`,
-    `${hero} sat down because standing suddenly felt impossible. Anger was still there, but now it had names, dates, unpaid bills, old fear, and one decision nobody had dared to explain.`,
-    `No one cried loudly. That would have been easier. Instead, they sat with cold tea between them while the truth moved around the table from face to face.`,
-    `By midnight, nobody had won the argument. Still, something important had shifted: they were no longer fighting over the surface of the story.`,
-    `In the morning, ${hero} put ${profile.object} back on the table and asked, softer this time, "What do we do with the truth now?"`,
-    `No one had an easy answer. But for the first time in years, they stayed in the same room long enough to look for one, ${recoveryBeat}. ${profile.moral}`
+  const storyFrames = [
+    {
+      title: `${hero} found ${profile.object}, and the whole family suddenly went silent`,
+      hook: `${hero} noticed ${profile.object} before anyone else did.\n\nIt was lying ${settingPhrase}, ${objectAnchor}, and even ${relation} suddenly stopped talking.\n\n"Who put this here?" she asked. No one answered.`,
+      paragraphs: null
+    },
+    {
+      title: `${hero} asked one simple question, and ${relation} put the cup down with shaking hands`,
+      hook: `"Who paid for this?" ${hero} asked.\n\nThe question was quiet. That was why it frightened everyone more than a shout.\n\n${profile.object} lay ${settingPhrase}, and nobody at the table wanted to look at it.`,
+      paragraphs: null
+    },
+    {
+      title: `Everyone blamed ${hero} until ${profile.object} showed what really happened`,
+      hook: `${hero} came prepared to apologize.\n\nShe had even practiced the words on the way there, swallowing her pride one sentence at a time.\n\nThen she saw ${profile.object}, and the apology died before it reached her mouth.`,
+      paragraphs: null
+    },
+    {
+      title: `${relation} begged ${hero} not to open it. That was the moment she knew the family secret was real`,
+      hook: `"Leave it alone," ${relation} said.\n\nNot angry. Not loud. Just tired in a way that made ${hero} stop breathing for a second.\n\nBut ${profile.object} was already in her hand.`,
+      paragraphs: null
+    }
   ];
+  const frame = pick(storyFrames, `${seed}:frame`);
+  const title = frame.title;
+  const hook = frame.hook;
+  const frameParagraphs = {
+    object_reveal: [
+      hook,
+      `For years, ${hero} had been the one who smoothed every quarrel over. She made tea, changed the subject, wiped the table twice if her hands were shaking, and pretended family peace did not cost her anything.`,
+      `But that evening was different. ${sceneDetail}, ${witness}, and what began as ${conflictScene} turned into a silence so heavy that even the chairs seemed too loud when someone moved.`,
+      `${hero} picked up ${profile.object}. At first it looked ordinary. Then she saw one detail that did not belong, and her fingers tightened around the edge.`,
+      `"Tell me this is not true," she said.\n\n${relation} looked at the floor.\n\n"Not here," came the answer.\n\n"Here," ${hero} said. "I've been quiet long enough."`,
+      `The first explanation hurt her pride. The second hurt her heart. Everyone had a version of the truth, and every version made someone else look cruel.`,
+      `Then ${relation} finally spoke. The words came slowly, not like a confession from a film, but like something tired and human. ${profile.turn}. That was the ${peakEmotion} moment: quiet, sharp, and impossible to pretend away.`,
+      `${hero} sat down because standing suddenly felt impossible. Anger was still there, but now it had names, dates, unpaid bills, old fear, and one decision nobody had dared to explain.`,
+      `No one cried loudly. That would have been easier. Instead, they sat with cold tea between them while the truth moved around the table from face to face.`,
+      `By midnight, nobody had won the argument. Still, something important had shifted: they were no longer fighting over the surface of the story.`,
+      `In the morning, ${hero} put ${profile.object} back on the table and asked, softer this time, "What do we do with the truth now?"`,
+      `No one had an easy answer. But for the first time in years, they stayed in the same room long enough to look for one, ${recoveryBeat}. ${profile.moral}`
+    ],
+    question_first: [
+      hook,
+      `${domesticDetail.charAt(0).toUpperCase() + domesticDetail.slice(1)}. Nobody moved to fix it. That alone told ${hero} that this was not a small mistake.`,
+      `The argument had started as ${conflictScene}, the kind of family quarrel people pretend is about manners when it is really about old wounds.`,
+      `${hero} did not wave ${profile.object} in the air. She placed it flat on the table, turned it so everyone could see, and waited.`,
+      `"Say it plainly," she told ${relation}.\n\n"I was going to," came the reply.\n\n"No," ${hero} said. "You were going to wait until I stopped asking."`,
+      `That sentence changed the room. The faces around her were familiar, but their silence was not.`,
+      `${relation} finally gave the answer nobody expected: ${profile.turn}. The truth did not arrive like thunder. It arrived like a bill nobody could pay.`,
+      `${hero} wanted to be angry at one person. It would have been simpler. But the story had too many hands on it, and some of those hands had been trying to protect her.`,
+      `For a while they only listened to the rain and the small sounds people make when they are ashamed to breathe too loudly.`,
+      `The worst part was not the secret. It was realizing how many ordinary days had been built around it.`,
+      `Before leaving, ${hero} pushed ${profile.object} back toward ${relation}. "Next time," she said, "trust me with the truth before it turns into poison."`,
+      `Nobody promised that everything would be fine. But the next silence between them was softer, ${recoveryBeat}. ${profile.moral}`
+    ],
+    apology_reversal: [
+      hook,
+      `${hero} had spent the whole morning telling herself to be sensible. Families make mistakes. People speak sharply. Pride ruins more homes than poverty ever could.`,
+      `Then ${sceneDetail}. She heard ${witness}, saw ${profile.object}, and understood that the quarrel had never really been about ${conflictScene}.`,
+      `She remembered every time someone had said, "Do not make a scene." Now she wondered whose comfort that sentence had been protecting.`,
+      `"I came here to say sorry," ${hero} said.\n\n${relation} looked up too quickly.\n\n"For what?"\n\n"For believing the version that made me look cruel."`,
+      `That was when the room broke open. Not loudly. No one slammed a door. The truth was worse because it sounded ordinary.`,
+      `${relation} admitted what had been hidden: ${profile.turn}. The confession changed the shape of every memory ${hero} had carried.`,
+      `She did not forgive anyone right away. Real forgiveness would have been too neat, and this was not neat. It smelled like cold tea, wet coats, and years of avoiding one subject.`,
+      `Still, ${hero} noticed something she had missed before: shame on one face, fear on another, and relief on the face of the person everyone had blamed.`,
+      `For the first time, she stopped asking who had hurt her most and started asking who had been left alone with the burden.`,
+      `She folded ${profile.object} carefully, not because it was precious, but because it was proof that the family could not go back to pretending.`,
+      `When she walked out, she was not healed. But she was no longer fooled, ${recoveryBeat}. ${profile.moral}`
+    ],
+    forbidden_object: [
+      hook,
+      `${hero} almost obeyed. Old habits are strange that way: even at her age, one tired voice from the family could make her feel like a child caught touching something forbidden.`,
+      `But then ${sceneDetail}. The room smelled of ordinary life, yet everyone stood as if a judge had entered.`,
+      `${profile.object} was small enough to hide in a drawer. The damage around it was not small at all.`,
+      `"If this is nothing," ${hero} said, "why are you afraid of me reading it?"\n\nNo one corrected the word afraid.`,
+      `The answer came in pieces. A date. A name. A payment. A visit nobody had mentioned. Each piece landed harder than the last.`,
+      `At the center was ${profile.turn}. The reveal was not clean justice. It was messy, human, and full of choices made by people who were scared.`,
+      `${hero} felt the ${peakEmotion} rise in her throat. She wanted to accuse someone, but the first person she looked at was already crying without a sound.`,
+      `That softened nothing, but it explained something. Sometimes explanation is not forgiveness. Sometimes it is only the first crack in the wall.`,
+      `They sat down because standing had become too dramatic for what came next: slow questions, ugly answers, and one apology that sounded almost too late.`,
+      `${hero} kept ${profile.object} beside her palm until morning, a reminder that silence had done enough damage.`,
+      `By sunrise, the family was not repaired. But the lie had lost its power, ${recoveryBeat}. ${profile.moral}`
+    ]
+  };
+  const paragraphVariants = [frameParagraphs.object_reveal, frameParagraphs.question_first, frameParagraphs.apology_reversal, frameParagraphs.forbidden_object];
+  const paragraphs = paragraphVariants[storyFrames.indexOf(frame)] || frameParagraphs.object_reveal;
   let selected = paragraphs.slice(0, plan.paragraphs);
   if (plan.paragraphs <= 3) {
     selected = [paragraphs[0], paragraphs[6], paragraphs[11]].slice(0, plan.paragraphs);
@@ -6146,7 +6215,7 @@ async function generateOriginalStoryV2(payload = {}) {
   const facebookSignals = bestFacebookPostSignals(5);
   const topEmotion = researchSignals.find((item) => item.emotion)?.emotion || "";
   const emotion = String(payload.emotion || topEmotion || "anxiety and hope").trim();
-  const seed = `${category}:${emotion}:${length}:${Date.now()}:${crypto.randomUUID()}`;
+  const seed = `${category}:${emotion}:${length}:${payload.variant_index || 0}:${Date.now()}:${crypto.randomUUID()}`;
   const profile = storyCategoryProfile(category, seed);
   const keywords = researchKeywordBlend(researchSignals);
   const styleGuidance = await styleBrainGuidanceForGenerator();
@@ -6221,7 +6290,8 @@ async function generateOriginalStoriesV2(payload = {}) {
   for (let index = 0; index < count; index += 1) {
     const result = await generateOriginalStoryV2({
       ...payload,
-      count: 1
+      count: 1,
+      variant_index: index
     });
     generated.push({
       ...result.story,
