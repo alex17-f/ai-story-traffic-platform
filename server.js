@@ -21,6 +21,7 @@ const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
 const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
 const STYLE_BRAIN_PROFILES_FILE = path.join(ROOT, "data", "style_brain_profiles.json");
 const CONTENT_SAFETY_REVIEWS_FILE = path.join(ROOT, "data", "content_safety_reviews.json");
+const EMOTION_TIMELINE_FILE = path.join(ROOT, "data", "emotion_timeline.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
@@ -272,6 +273,7 @@ async function writeStoryDna(items) {
   storageCache.storyDna = items;
   writeJsonBackup(STORY_DNA_FILE, items);
   await persistStoryDna(items);
+  await learnEmotionTimelinesFromStoryDna(items);
   return items;
 }
 
@@ -396,6 +398,17 @@ async function writeContentSafetyReviews(items) {
   return items;
 }
 
+function readEmotionTimelines() {
+  return storageCache.emotionTimelines || [];
+}
+
+async function writeEmotionTimelines(items) {
+  storageCache.emotionTimelines = items;
+  writeJsonBackup(EMOTION_TIMELINE_FILE, items);
+  await persistEmotionTimelines(items);
+  return items;
+}
+
 function readJsonArray(filePath) {
   if (!fs.existsSync(filePath)) return [];
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -434,6 +447,7 @@ const storageCache = {
   publishingPackages: readJsonArray(PUBLISHING_PACKAGES_FILE),
   styleBrainProfiles: readJsonArray(STYLE_BRAIN_PROFILES_FILE),
   contentSafetyReviews: readJsonArray(CONTENT_SAFETY_REVIEWS_FILE),
+  emotionTimelines: readJsonArray(EMOTION_TIMELINE_FILE),
   projectBrain: fs.existsSync(PROJECT_BRAIN_FILE)
     ? JSON.parse(fs.readFileSync(PROJECT_BRAIN_FILE, "utf8"))
     : {
@@ -487,6 +501,7 @@ async function initializeStorage() {
     await ensurePublishingPackagesTable();
     await ensureStyleBrainProfilesTable();
     await ensureContentSafetyReviewsTable();
+    await ensureEmotionTimelineTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
     storageCache.facebookPosts = (await pgPool.query("select * from facebook_posts order by total_score desc, published_at desc")).rows;
@@ -509,6 +524,7 @@ async function initializeStorage() {
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
     storageCache.styleBrainProfiles = (await pgPool.query("select * from style_brain_profiles order by created_at desc limit 1200")).rows.map(normalizeStyleBrainProfileRow);
     storageCache.contentSafetyReviews = (await pgPool.query("select * from content_safety_reviews order by created_at desc limit 1000")).rows.map(normalizeContentSafetyReviewRow);
+    storageCache.emotionTimelines = (await pgPool.query("select * from emotion_timeline order by created_at desc limit 1500")).rows.map(normalizeEmotionTimelineRow);
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
       storageCache.projectBrain = {
@@ -737,6 +753,44 @@ async function ensureContentSafetyReviewsTable() {
     create index if not exists content_safety_reviews_recommendation_idx on content_safety_reviews (recommendation);
     create index if not exists content_safety_reviews_safety_score_idx on content_safety_reviews (safety_score desc);
     create index if not exists content_safety_reviews_created_at_idx on content_safety_reviews (created_at desc);
+  `);
+}
+
+async function ensureEmotionTimelineTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists emotion_timeline (
+      id text primary key,
+      draft_id text,
+      story_dna_id text,
+      source_type text,
+      source_reference text not null unique,
+      emotion_0 text,
+      emotion_10 text,
+      emotion_20 text,
+      emotion_30 text,
+      emotion_40 text,
+      emotion_50 text,
+      emotion_60 text,
+      emotion_70 text,
+      emotion_80 text,
+      emotion_90 text,
+      emotion_100 text,
+      peak_emotion text,
+      peak_position integer not null default 70,
+      emotion_volatility integer not null default 0,
+      slow_build_score integer not null default 0,
+      fast_build_score integer not null default 0,
+      ending_satisfaction integer not null default 0,
+      reader_recovery integer not null default 0,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists emotion_timeline_draft_idx on emotion_timeline (draft_id);
+    create index if not exists emotion_timeline_story_dna_idx on emotion_timeline (story_dna_id);
+    create index if not exists emotion_timeline_source_type_idx on emotion_timeline (source_type);
+    create index if not exists emotion_timeline_peak_emotion_idx on emotion_timeline (peak_emotion);
+    create index if not exists emotion_timeline_peak_position_idx on emotion_timeline (peak_position);
+    create index if not exists emotion_timeline_created_at_idx on emotion_timeline (created_at desc);
   `);
 }
 
@@ -1266,6 +1320,86 @@ async function persistContentSafetyReviews(items) {
   }
 }
 
+function normalizeEmotionTimelineRow(row = {}) {
+  return {
+    ...row,
+    peak_position: Number(row.peak_position || 70),
+    emotion_volatility: Number(row.emotion_volatility || 0),
+    slow_build_score: Number(row.slow_build_score || 0),
+    fast_build_score: Number(row.fast_build_score || 0),
+    ending_satisfaction: Number(row.ending_satisfaction || 0),
+    reader_recovery: Number(row.reader_recovery || 0)
+  };
+}
+
+async function persistEmotionTimelines(items) {
+  if (!pgPool) return;
+  try {
+    await ensureEmotionTimelineTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into emotion_timeline (
+          id, draft_id, story_dna_id, source_type, source_reference,
+          emotion_0, emotion_10, emotion_20, emotion_30, emotion_40, emotion_50,
+          emotion_60, emotion_70, emotion_80, emotion_90, emotion_100,
+          peak_emotion, peak_position, emotion_volatility, slow_build_score,
+          fast_build_score, ending_satisfaction, reader_recovery, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+        on conflict (source_reference) do update set
+          draft_id = excluded.draft_id,
+          story_dna_id = excluded.story_dna_id,
+          source_type = excluded.source_type,
+          emotion_0 = excluded.emotion_0,
+          emotion_10 = excluded.emotion_10,
+          emotion_20 = excluded.emotion_20,
+          emotion_30 = excluded.emotion_30,
+          emotion_40 = excluded.emotion_40,
+          emotion_50 = excluded.emotion_50,
+          emotion_60 = excluded.emotion_60,
+          emotion_70 = excluded.emotion_70,
+          emotion_80 = excluded.emotion_80,
+          emotion_90 = excluded.emotion_90,
+          emotion_100 = excluded.emotion_100,
+          peak_emotion = excluded.peak_emotion,
+          peak_position = excluded.peak_position,
+          emotion_volatility = excluded.emotion_volatility,
+          slow_build_score = excluded.slow_build_score,
+          fast_build_score = excluded.fast_build_score,
+          ending_satisfaction = excluded.ending_satisfaction,
+          reader_recovery = excluded.reader_recovery`,
+        [
+          item.id || crypto.randomUUID(),
+          item.draft_id || "",
+          item.story_dna_id || "",
+          item.source_type || "manual",
+          item.source_reference || item.id || crypto.randomUUID(),
+          item.emotion_0 || "curiosity",
+          item.emotion_10 || "curiosity",
+          item.emotion_20 || "tension",
+          item.emotion_30 || "tension",
+          item.emotion_40 || "tension",
+          item.emotion_50 || "shock",
+          item.emotion_60 || "sadness",
+          item.emotion_70 || "hope",
+          item.emotion_80 || "hope",
+          item.emotion_90 || "relief",
+          item.emotion_100 || "relief",
+          item.peak_emotion || "tension",
+          Number(item.peak_position || 70),
+          Number(item.emotion_volatility || 0),
+          Number(item.slow_build_score || 0),
+          Number(item.fast_build_score || 0),
+          Number(item.ending_satisfaction || 0),
+          Number(item.reader_recovery || 0),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL emotion_timeline persist failed: ${error.message}`);
+  }
+}
+
 function escapeHtml(value = "") {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -1431,6 +1565,7 @@ function renderHeader() {
       <a href="/telegram-center">Telegram Center</a>
       <a href="/project-brain">Project Brain</a>
       <a href="/style-brain">Style Brain</a>
+      <a href="/emotion-engine">Emotion Engine</a>
       <a href="/content-safety">Content Safety</a>
       <a href="/ai-autopilot">AI Autopilot</a>
       <a href="/ai-autopilot-v1">Autopilot v1</a>
@@ -3539,6 +3674,391 @@ async function learnStyleBrainFromGeneratedStory(story = {}) {
   return buildStyleBrainRecommendations(merged);
 }
 
+const emotionEnginePositions = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+const emotionEngineAllowedEmotions = [
+  "curiosity",
+  "comfort",
+  "tension",
+  "anger",
+  "betrayal",
+  "shock",
+  "sadness",
+  "hopelessness",
+  "hope",
+  "love",
+  "justice",
+  "relief"
+];
+
+const emotionEngineIntensity = {
+  curiosity: 24,
+  comfort: 18,
+  tension: 58,
+  anger: 74,
+  betrayal: 82,
+  shock: 92,
+  sadness: 66,
+  hopelessness: 78,
+  hope: 42,
+  love: 34,
+  justice: 64,
+  relief: 26
+};
+
+function normalizeEmotionEngineEmotion(value = "", fallback = "curiosity") {
+  const text = String(value || "").toLowerCase();
+  if (emotionEngineAllowedEmotions.includes(text)) return text;
+  if (/comfort|warm|family warmth|уют|тепл/i.test(text)) return "comfort";
+  if (/tension|conflict|anxiety|тревог|напряж/i.test(text)) return "tension";
+  if (/anger|rage|зл/i.test(text)) return "anger";
+  if (/betray|измен|предател/i.test(text)) return "betrayal";
+  if (/shock|surprise|удив|шок|неожид/i.test(text)) return "shock";
+  if (/sad|grief|груст|печал/i.test(text)) return "sadness";
+  if (/hopeless|despair|безнадеж/i.test(text)) return "hopelessness";
+  if (/hope|надеж/i.test(text)) return "hope";
+  if (/love|люб/i.test(text)) return "love";
+  if (/justice|справедлив|суд/i.test(text)) return "justice";
+  if (/relief|release|облегч|прост/i.test(text)) return "relief";
+  return fallback;
+}
+
+function emotionEngineTextFromGeneratedStory(story = {}) {
+  return [story.title, story.hook, story.full_story, story.moral].filter(Boolean).join("\n\n").trim();
+}
+
+function emotionEngineSegments(text = "") {
+  const clean = String(text || "").replace(/\r\n/g, "\n").trim();
+  const sentences = storyDnaSentences(clean);
+  const units = sentences.length >= 6 ? sentences : styleBrainParagraphs(clean);
+  if (!units.length) return emotionEnginePositions.map(() => clean);
+  return emotionEnginePositions.map((position) => {
+    const startRatio = Math.max(0, (position - 8) / 100);
+    const endRatio = Math.min(1, (position + 12) / 100);
+    const start = Math.min(units.length - 1, Math.floor(startRatio * units.length));
+    const end = Math.max(start + 1, Math.ceil(endRatio * units.length));
+    return units.slice(start, end).join(" ");
+  });
+}
+
+function emotionEngineSegmentScores(segment = "", position = 0) {
+  const lower = String(segment || "").toLowerCase();
+  const score = {
+    curiosity: position <= 20 ? 24 : 2,
+    comfort: position <= 20 ? 12 : 4,
+    tension: position >= 20 && position <= 60 ? 18 : 6,
+    anger: 0,
+    betrayal: 0,
+    shock: position >= 50 && position <= 80 ? 14 : 2,
+    sadness: position >= 50 && position <= 90 ? 10 : 2,
+    hopelessness: position >= 50 && position <= 80 ? 6 : 0,
+    hope: position >= 70 ? 12 : 2,
+    love: position >= 80 ? 8 : 4,
+    justice: position >= 80 ? 8 : 1,
+    relief: position >= 90 ? 16 : 0
+  };
+  const add = (emotion, amount, regex) => {
+    const hits = (lower.match(regex) || []).length;
+    score[emotion] += hits * amount;
+  };
+  add("curiosity", 12, /who|why|what|noticed|found|saw|asked|mystery|secret|old|кто|почему|что|нашла|увидела|тайн/g);
+  add("comfort", 12, /home|kitchen|tea|table|warm|family dinner|mother|family|дом|кухн|чай|стол|тепл|сем/g);
+  add("tension", 13, /silent|quiet|stopped talking|shaking|conflict|argument|fight|heavy|no one answered|молч|тихо|ссора|конфликт|дрож/g);
+  add("anger", 14, /anger|angry|cruel|shouted|blame|humiliated|rage|зл|крик|обвин|униж/g);
+  add("betrayal", 18, /betray|cheat|affair|lied|double life|hotel|secret|измен|предател|обман|тайн/g);
+  add("shock", 18, /suddenly|truth|not true|turned out|confession|revealed|impossible|вдруг|правд|оказал|призн/g);
+  add("sadness", 13, /hurt|tears|goodbye|alone|sad|heart|cry|lost|боль|слез|прощ|одинок|груст/g);
+  add("hopelessness", 16, /impossible|nothing left|no answer|too late|ruined|hopeless|невозмож|поздно|безнадеж|разруш/g);
+  add("hope", 14, /hope|morning|softer|stayed|answer|heal|chance|надеж|утро|мягче|остал|исцел|шанс/g);
+  add("love", 13, /love|together|held|mother|son|daughter|wife|husband|люб|вместе|мать|сын|дочь|жена|муж/g);
+  add("justice", 15, /justice|court|truth won|fair|will|inheritance|справедлив|суд|завещ|наслед/g);
+  add("relief", 16, /relief|forgave|forgive|released|peace|calm|облегч|прост|мир|спокой/g);
+  if (position >= 90) {
+    score.hope += 16;
+    score.relief += 22;
+    score.love += 8;
+    score.shock = Math.round(score.shock * 0.45);
+    score.betrayal = Math.round(score.betrayal * 0.55);
+    score.tension = Math.round(score.tension * 0.55);
+  }
+  return score;
+}
+
+function emotionEngineDetectEmotion(segment = "", fallback = "curiosity", position = 0) {
+  const scores = emotionEngineSegmentScores(segment, position);
+  const winner = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  if (!winner || winner[1] <= 0) return normalizeEmotionEngineEmotion(fallback, "curiosity");
+  return normalizeEmotionEngineEmotion(winner[0], fallback);
+}
+
+function emotionEngineTimelineFromText({ draft_id = "", story_dna_id = "", source_type = "generated", source_reference = "", text = "", base_emotion = "", created_at } = {}) {
+  if (!source_reference || !String(text || "").trim()) return null;
+  const segments = emotionEngineSegments(text);
+  const fallbackEmotion = normalizeEmotionEngineEmotion(base_emotion || detectEmotion(text), "curiosity");
+  const emotions = emotionEnginePositions.map((position, index) => emotionEngineDetectEmotion(segments[index] || text, fallbackEmotion, position));
+  const peakIndex = emotions.reduce((bestIndex, emotion, index) => {
+    const current = emotionEngineIntensity[emotion] || 0;
+    const best = emotionEngineIntensity[emotions[bestIndex]] || 0;
+    return current > best ? index : bestIndex;
+  }, 0);
+  const peakPosition = emotionEnginePositions[peakIndex] || 70;
+  const transitions = emotions.slice(1).reduce((sum, emotion, index) => sum + (emotion !== emotions[index] ? 1 : 0), 0);
+  const endingEmotion = emotions[emotions.length - 1] || "relief";
+  const positiveEnding = ["hope", "love", "justice", "relief", "comfort"].includes(endingEmotion);
+  const heavyPeak = ["shock", "betrayal", "anger", "sadness", "hopelessness", "tension"].includes(emotions[peakIndex]);
+  const slowBuildScore = clampStyleScore(100 - Math.abs(peakPosition - 70) * 2 - Math.max(0, transitions - 6) * 5 + (emotions[0] === "curiosity" ? 8 : 0));
+  const fastBuildScore = clampStyleScore((peakPosition <= 40 ? 72 : 30) + (emotions[0] === "tension" ? 12 : 0) + Math.min(16, transitions * 2));
+  const endingSatisfaction = clampStyleScore((positiveEnding ? 68 : 28) + (endingEmotion === "relief" ? 18 : 0) + (endingEmotion === "justice" ? 12 : 0) + (heavyPeak ? 8 : 0) - (endingEmotion === "hopelessness" ? 36 : 0));
+  const readerRecovery = clampStyleScore((positiveEnding ? 62 : 25) + (heavyPeak ? 18 : 0) - (emotions[emotions.length - 2] === endingEmotion ? 0 : 4));
+  const timeline = {
+    id: `emotion_${crypto.createHash("sha1").update(String(source_reference)).digest("hex").slice(0, 24)}`,
+    draft_id,
+    story_dna_id,
+    source_type,
+    source_reference,
+    peak_emotion: emotions[peakIndex] || fallbackEmotion,
+    peak_position: peakPosition,
+    emotion_volatility: clampStyleScore(Math.round((transitions / Math.max(1, emotions.length - 1)) * 100)),
+    slow_build_score: slowBuildScore,
+    fast_build_score: fastBuildScore,
+    ending_satisfaction: endingSatisfaction,
+    reader_recovery: readerRecovery,
+    created_at: created_at || new Date().toISOString()
+  };
+  emotionEnginePositions.forEach((position, index) => {
+    timeline[`emotion_${position}`] = emotions[index] || fallbackEmotion;
+  });
+  return timeline;
+}
+
+function emotionEngineTimelineFromGeneratedStory(story = {}) {
+  const text = emotionEngineTextFromGeneratedStory(story);
+  if (!story.id || !text) return null;
+  return emotionEngineTimelineFromText({
+    draft_id: story.id,
+    source_type: "generated",
+    source_reference: `generated:${story.id}`,
+    text,
+    base_emotion: story.emotion,
+    created_at: story.created_at
+  });
+}
+
+function emotionEngineDnaCurve(dna = {}) {
+  const curve = Array.isArray(dna.emotion_curve) ? dna.emotion_curve : [];
+  const structure = dna.structure_analysis && typeof dna.structure_analysis === "object" ? dna.structure_analysis : {};
+  const progression = Array.isArray(structure.emotion_progression) ? structure.emotion_progression : [];
+  const source = [...curve, ...progression].map((item) => normalizeEmotionEngineEmotion(item, "")).filter(Boolean);
+  const fallback = normalizeEmotionEngineEmotion(dna.emotion || structure.peak_emotion || "", "tension");
+  const base = source.length ? source : ["curiosity", "tension", fallback, "shock", normalizeEmotionEngineEmotion(dna.ending_type || "", "relief")];
+  return emotionEnginePositions.map((position, index) => {
+    const ratio = index / Math.max(1, emotionEnginePositions.length - 1);
+    const sourceIndex = Math.min(base.length - 1, Math.floor(ratio * base.length));
+    if (position <= 10 && !["curiosity", "comfort"].includes(base[sourceIndex])) return "curiosity";
+    if (position >= 90) return normalizeEmotionEngineEmotion(dna.ending_type || base[sourceIndex], base[sourceIndex] || "relief");
+    return base[sourceIndex] || fallback;
+  });
+}
+
+function emotionEngineTimelineFromStoryDna(dna = {}) {
+  const reference = dna.source_reference || dna.id;
+  if (!reference) return null;
+  const emotions = emotionEngineDnaCurve(dna);
+  const pseudoText = [
+    dna.hook_type,
+    dna.conflict_type,
+    dna.twist_type,
+    dna.ending_type,
+    dna.emotion,
+    dna.main_theme
+  ].filter(Boolean).join(" ");
+  const timeline = emotionEngineTimelineFromText({
+    story_dna_id: dna.id || "",
+    source_type: `story_dna:${dna.source_type || "unknown"}`,
+    source_reference: `story_dna:${reference}`,
+    text: pseudoText || emotions.join(" "),
+    base_emotion: dna.emotion,
+    created_at: dna.created_at
+  });
+  if (!timeline) return null;
+  emotionEnginePositions.forEach((position, index) => {
+    timeline[`emotion_${position}`] = emotions[index] || timeline[`emotion_${position}`];
+  });
+  const peakIndex = emotions.reduce((bestIndex, emotion, index) => {
+    const current = emotionEngineIntensity[emotion] || 0;
+    const best = emotionEngineIntensity[emotions[bestIndex]] || 0;
+    return current > best ? index : bestIndex;
+  }, 0);
+  timeline.peak_emotion = emotions[peakIndex] || timeline.peak_emotion;
+  timeline.peak_position = emotionEnginePositions[peakIndex] || timeline.peak_position;
+  return timeline;
+}
+
+function mergeEmotionTimelines(existing = [], incoming = []) {
+  const byReference = new Map();
+  for (const item of existing) {
+    if (item?.source_reference) byReference.set(item.source_reference, item);
+  }
+  for (const item of incoming) {
+    if (!item?.source_reference) continue;
+    byReference.set(item.source_reference, {
+      ...(byReference.get(item.source_reference) || {}),
+      ...item,
+      created_at: byReference.get(item.source_reference)?.created_at || item.created_at || new Date().toISOString()
+    });
+  }
+  return [...byReference.values()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, 2000);
+}
+
+async function learnEmotionTimelineFromGeneratedStory(story = {}) {
+  const timeline = emotionEngineTimelineFromGeneratedStory(story);
+  if (!timeline) return null;
+  const merged = mergeEmotionTimelines(readEmotionTimelines(), [timeline]);
+  await writeEmotionTimelines(merged);
+  return timeline;
+}
+
+async function learnEmotionTimelinesFromStoryDna(items = []) {
+  const incoming = (Array.isArray(items) ? items : []).map(emotionEngineTimelineFromStoryDna).filter(Boolean);
+  if (!incoming.length) return { imported: 0, timelines_count: readEmotionTimelines().length };
+  const merged = mergeEmotionTimelines(readEmotionTimelines(), incoming);
+  await writeEmotionTimelines(merged);
+  return { imported: incoming.length, timelines_count: merged.length };
+}
+
+function emotionEngineSourceTimelines() {
+  return [
+    ...readGeneratedStories().map(emotionEngineTimelineFromGeneratedStory),
+    ...readStoryDna().map(emotionEngineTimelineFromStoryDna)
+  ].filter(Boolean);
+}
+
+function emotionEngineTimelineArray(timeline = {}) {
+  return emotionEnginePositions.map((position) => timeline[`emotion_${position}`] || "curiosity");
+}
+
+function emotionEngineTransitionStats(timelines = []) {
+  const transitions = [];
+  for (const timeline of timelines) {
+    const emotions = emotionEngineTimelineArray(timeline);
+    for (let index = 1; index < emotions.length; index += 1) {
+      if (emotions[index] !== emotions[index - 1]) transitions.push(`${emotions[index - 1]} -> ${emotions[index]}`);
+    }
+  }
+  return countBy(transitions, (item) => item).slice(0, 10);
+}
+
+function buildEmotionEngineStatistics(timelines = readEmotionTimelines()) {
+  const safeItems = Array.isArray(timelines) ? timelines : [];
+  const endings = countBy(safeItems, (item) => item.emotion_100 || "relief").slice(0, 8);
+  return {
+    module: "Human Emotion Engine v1",
+    timelines_count: safeItems.length,
+    average_peak_position: averageStyleScore(safeItems, "peak_position"),
+    average_volatility: averageStyleScore(safeItems, "emotion_volatility"),
+    average_slow_build_score: averageStyleScore(safeItems, "slow_build_score"),
+    average_fast_build_score: averageStyleScore(safeItems, "fast_build_score"),
+    average_ending_satisfaction: averageStyleScore(safeItems, "ending_satisfaction"),
+    average_reader_recovery: averageStyleScore(safeItems, "reader_recovery"),
+    top_peak_emotions: countBy(safeItems, (item) => item.peak_emotion || "tension").slice(0, 8),
+    top_ending_emotions: endings,
+    top_transitions: emotionEngineTransitionStats(safeItems),
+    strongest_timelines: safeItems
+      .filter((item) => Number(item.ending_satisfaction || 0) >= 60)
+      .sort((a, b) => Number(b.ending_satisfaction || 0) + Number(b.reader_recovery || 0) - (Number(a.ending_satisfaction || 0) + Number(a.reader_recovery || 0)))
+      .slice(0, 8),
+    updated_at: new Date().toISOString()
+  };
+}
+
+function buildEmotionEngineRecommendations(timelines = readEmotionTimelines()) {
+  const stats = buildEmotionEngineStatistics(timelines);
+  const bestItems = stats.strongest_timelines.length ? stats.strongest_timelines : timelines.slice(0, 8);
+  const bestCurve = bestItems[0] ? emotionEngineTimelineArray(bestItems[0]) : ["curiosity", "curiosity", "tension", "tension", "betrayal", "shock", "sadness", "hope", "justice", "relief", "relief"];
+  const bestEndingEmotion = stats.top_ending_emotions[0]?.name || "relief";
+  const repeatedPeaks = countBy(readGeneratedStories().slice(0, 10), (story) => normalizeEmotionEngineEmotion(story.emotion || "", "tension"))
+    .filter((item) => item.count >= 3)
+    .map((item) => item.name);
+  const idealPeak = stats.average_peak_position
+    ? Math.max(55, Math.min(80, stats.average_peak_position))
+    : 70;
+  return {
+    ok: true,
+    module: "Human Emotion Engine v1 Recommendations",
+    timelines_count: stats.timelines_count,
+    best_emotional_curve: bestCurve,
+    ideal_peak_position: `${idealPeak}%`,
+    best_ending_emotion: bestEndingEmotion,
+    recommended_story_rhythm: stats.average_fast_build_score > stats.average_slow_build_score
+      ? `fast hook -> early tension -> ${idealPeak}% sharp peak -> warm recovery`
+      : `slow curiosity -> growing tension -> ${idealPeak}% emotional peak -> satisfying ${bestEndingEmotion}`,
+    emotions_to_avoid_repeating: repeatedPeaks.length ? repeatedPeaks : ["same peak emotion three drafts in a row", "flat tension without recovery"],
+    how_to_make_next_story_more_emotional: [
+      "start with curiosity or comfort, not immediate explanation",
+      "raise tension every 2-3 paragraphs with concrete household details",
+      "place the strongest shock, betrayal or justice moment around 65-75%",
+      "after the peak, give the reader a human recovery scene",
+      `end with ${bestEndingEmotion}, not only a moral sentence`
+    ],
+    generator_guidance: {
+      opening_emotion: bestCurve[0] || "curiosity",
+      peak_emotion: stats.top_peak_emotions[0]?.name || "shock",
+      peak_position: idealPeak,
+      ending_emotion: bestEndingEmotion,
+      rhythm: stats.average_fast_build_score > stats.average_slow_build_score ? "faster emotional escalation" : "slow-build emotional escalation",
+      avoid_repeating: repeatedPeaks
+    },
+    statistics: stats,
+    safety: {
+      stores_full_text: false,
+      stores_emotional_signals_only: true,
+      publishes: false
+    }
+  };
+}
+
+async function refreshEmotionEngineV1() {
+  const incoming = emotionEngineSourceTimelines();
+  const merged = mergeEmotionTimelines(readEmotionTimelines(), incoming);
+  await writeEmotionTimelines(merged);
+  const recommendations = buildEmotionEngineRecommendations(merged);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object" ? brain.internet_research : {};
+  brain.internet_research = {
+    ...currentResearch,
+    emotion_engine_v1: {
+      statistics: recommendations.statistics,
+      recommendations,
+      updated_at: new Date().toISOString(),
+      safety: recommendations.safety
+    }
+  };
+  brain.recommendations = [
+    `Emotion Engine: ${recommendations.recommended_story_rhythm}; peak near ${recommendations.ideal_peak_position}; end with ${recommendations.best_ending_emotion}.`,
+    ...(brain.recommendations || []).slice(0, 9)
+  ];
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return {
+    ok: true,
+    module: "Human Emotion Engine v1",
+    analyzed: incoming.length,
+    timelines_count: merged.length,
+    statistics: recommendations.statistics,
+    recommendations,
+    safety: recommendations.safety
+  };
+}
+
+async function emotionEngineGuidanceForGenerator() {
+  if (!readEmotionTimelines().length && emotionEngineSourceTimelines().length) {
+    await refreshEmotionEngineV1();
+  }
+  const recommendations = buildEmotionEngineRecommendations(readEmotionTimelines());
+  return recommendations.generator_guidance;
+}
+
 function contentSafetyTextFromDraft(draft = {}) {
   return [draft.title, draft.hook, draft.full_story, draft.moral].filter(Boolean).join("\n\n").trim();
 }
@@ -5222,7 +5742,7 @@ function researchKeywordBlend(signals) {
   return words.slice(0, 10);
 }
 
-function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance = {} }) {
+function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance = {}, emotionGuidance = {} }) {
   const plan = storyLengthPlan(length);
   const hero = pick(["Mara", "Helen", "Nina", "Galina", "Elena", "Tamara"], `${seed}:hero`);
   const relation = pick(["her adult son", "her husband", "her daughter-in-law", "her younger sister", "her late mother's neighbor"], `${seed}:relation`);
@@ -5272,6 +5792,13 @@ function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, sty
     .replace("siblings argue over a house before the funeral flowers fade", "siblings arguing over a house before the funeral flowers had faded")
     .replace("a son returns only when money is mentioned", "a son returning only when money was mentioned");
   const sceneDetail = everydayDetail ? everydayDetail.charAt(0).toUpperCase() + everydayDetail.slice(1) : "";
+  const peakEmotion = emotionGuidance.peak_emotion || "shock";
+  const endingEmotion = emotionGuidance.ending_emotion || "relief";
+  const recoveryBeat = endingEmotion === "justice"
+    ? "not because someone shouted louder, but because the truth finally had a place to stand"
+    : endingEmotion === "hope"
+      ? "not because everything was fixed, but because someone finally chose not to run away"
+      : "not because the pain vanished, but because the silence finally loosened its grip";
   const title = `${hero} found ${profile.object}, and the whole family suddenly went silent`;
   const hook = `${hero} noticed ${profile.object} before anyone else did.\n\nIt was lying ${settingPhrase}, ${objectAnchor}, and even ${relation} suddenly stopped talking.\n\n"Who put this here?" she asked. No one answered.`;
   const paragraphs = [
@@ -5281,14 +5808,21 @@ function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, sty
     `${hero} picked up ${profile.object}. At first it looked ordinary. Then she saw one detail that did not belong, and her fingers tightened around the edge.`,
     `"Tell me this is not true," she said.\n\n${relation} looked at the floor.\n\n"Not here," came the answer.\n\n"Here," ${hero} said. "I've been quiet long enough."`,
     `The first explanation hurt her pride. The second hurt her heart. Everyone had a version of the truth, and every version made someone else look cruel.`,
-    `Then ${relation} finally spoke. The words came slowly, not like a confession from a film, but like something tired and human. ${profile.turn}.`,
+    `Then ${relation} finally spoke. The words came slowly, not like a confession from a film, but like something tired and human. ${profile.turn}. That was the ${peakEmotion} moment: quiet, sharp, and impossible to pretend away.`,
     `${hero} sat down because standing suddenly felt impossible. Anger was still there, but now it had names, dates, unpaid bills, old fear, and one decision nobody had dared to explain.`,
     `No one cried loudly. That would have been easier. Instead, they sat with cold tea between them while the truth moved around the table from face to face.`,
     `By midnight, nobody had won the argument. Still, something important had shifted: they were no longer fighting over the surface of the story.`,
     `In the morning, ${hero} put ${profile.object} back on the table and asked, softer this time, "What do we do with the truth now?"`,
-    `No one had an easy answer. But for the first time in years, they stayed in the same room long enough to look for one. ${profile.moral}`
+    `No one had an easy answer. But for the first time in years, they stayed in the same room long enough to look for one, ${recoveryBeat}. ${profile.moral}`
   ];
-  const selected = paragraphs.slice(0, plan.paragraphs);
+  let selected = paragraphs.slice(0, plan.paragraphs);
+  if (plan.paragraphs <= 3) {
+    selected = [paragraphs[0], paragraphs[6], paragraphs[11]].slice(0, plan.paragraphs);
+  } else if (plan.paragraphs === 4) {
+    selected = [paragraphs[0], paragraphs[2], paragraphs[6], paragraphs[11]];
+  } else if (plan.paragraphs === 5) {
+    selected = [paragraphs[0], paragraphs[1], paragraphs[2], paragraphs[6], paragraphs[11]];
+  }
   if (!selected.some((paragraph) => paragraph.includes(profile.moral))) selected[selected.length - 1] = profile.moral;
   const keywordLine = keywords.length ? `\n\nResearch signal themes used only as inspiration: ${keywords.slice(0, 5).join(", ")}.` : "";
   return {
@@ -5488,7 +6022,8 @@ async function generateOriginalStoryV2(payload = {}) {
   const profile = storyCategoryProfile(category, seed);
   const keywords = researchKeywordBlend(researchSignals);
   const styleGuidance = await styleBrainGuidanceForGenerator();
-  const draft = buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance });
+  const emotionGuidance = await emotionEngineGuidanceForGenerator();
+  const draft = buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance, emotionGuidance });
   const score = viralPredictionScore(researchSignals, facebookSignals, length);
   const story = {
     id: crypto.randomUUID(),
@@ -5506,11 +6041,13 @@ async function generateOriginalStoryV2(payload = {}) {
       facebookSignals.length ? `Calibrated against ${facebookSignals.length} top Facebook posts from your loaded Page data.` : "Facebook Page data is not loaded enough yet, so scoring leans more on research signals.",
       `Built around ${category}, ${emotion}, a concrete object, family tension and a late reveal.`,
       `Style Brain guidance: ${styleGuidance.opening_style}, ${styleGuidance.dialogue_density}, ${styleGuidance.paragraph_rhythm}.`,
+      `Emotion Engine guidance: ${emotionGuidance.rhythm || "slow-build emotional escalation"}, peak near ${emotionGuidance.peak_position || 70}%, ending with ${emotionGuidance.ending_emotion || "relief"}.`,
       "Original draft: new characters, new setting, new ending, no copied text."
     ].join(" "),
     research_signals: researchSignals,
     facebook_signals: facebookSignals,
     style_brain_guidance: styleGuidance,
+    emotion_engine_guidance: emotionGuidance,
     status: "needs_approval",
     approval_required: true,
     publish_allowed: false,
@@ -5521,6 +6058,7 @@ async function generateOriginalStoryV2(payload = {}) {
   await writeGeneratedStories(saved);
   await autoSyncProjectBrainV2({ sources: ["generated"], reason: "story_generated" });
   await learnStyleBrainFromGeneratedStory(story);
+  const emotionTimeline = await learnEmotionTimelineFromGeneratedStory(story);
   const contentSafety = await checkContentSafetyDraft(story.id, { draft: story });
   return {
     ok: true,
@@ -5536,6 +6074,7 @@ async function generateOriginalStoryV2(payload = {}) {
     },
     saved: true,
     generated_stories_count: saved.length,
+    emotion_timeline: emotionTimeline || null,
     content_safety_review: contentSafety.review || null,
     safety: {
       copied_research_text: false,
@@ -5550,6 +6089,7 @@ async function generateOriginalStoriesV2(payload = {}) {
   const count = Math.max(1, Math.min(Number(payload.count || 3), 8));
   const generated = [];
   const contentSafetyReviews = [];
+  const emotionTimelines = [];
   for (let index = 0; index < count; index += 1) {
     const result = await generateOriginalStoryV2({
       ...payload,
@@ -5557,8 +6097,12 @@ async function generateOriginalStoriesV2(payload = {}) {
     });
     generated.push({
       ...result.story,
+      emotion_timeline: result.emotion_timeline || null,
       content_safety_review: result.content_safety_review || null
     });
+    if (result.emotion_timeline) {
+      emotionTimelines.push(result.emotion_timeline);
+    }
     if (result.content_safety_review) {
       contentSafetyReviews.push(result.content_safety_review);
     }
@@ -5576,10 +6120,13 @@ async function generateOriginalStoriesV2(payload = {}) {
       viral_prediction_score: story.viral_prediction_score,
       hook: story.hook,
       status: story.status,
+      peak_emotion: story.emotion_timeline?.peak_emotion || null,
+      ending_satisfaction: story.emotion_timeline?.ending_satisfaction || null,
       safety_score: story.content_safety_review?.safety_score || null,
       safety_recommendation: story.content_safety_review?.recommendation || "pending"
     })),
     generated_stories_count: readGeneratedStories().length,
+    emotion_timelines: emotionTimelines,
     content_safety_reviews: contentSafetyReviews,
     safety: {
       copied_research_text: false,
@@ -6056,7 +6603,8 @@ function buildAutopilotV1Status() {
       image_generator_queue: { status: "ready", queued: imageQueue.length },
       telegram_control: { status: telegramConfigStatus().configured ? "connected" : "needs_env" },
       scheduler: { status: "ready", planned_items: plan.length },
-      scheduler_v2: { status: "ready", scheduled_posts: scheduledPosts.length, approved: scheduledPosts.filter((item) => item.status === "approved").length }
+      scheduler_v2: { status: "ready", scheduled_posts: scheduledPosts.length, approved: scheduledPosts.filter((item) => item.status === "approved").length },
+      emotion_engine: { status: "ready", timelines: readEmotionTimelines().length }
     },
     top_signals: {
       themes: page.best_themes.slice(0, 5),
@@ -6405,6 +6953,97 @@ function renderContentSafetyDashboard() {
     </main>`);
 }
 
+function renderEmotionEngineDashboard() {
+  const timelines = readEmotionTimelines();
+  const stats = buildEmotionEngineStatistics(timelines);
+  const recommendations = buildEmotionEngineRecommendations(timelines);
+  const timelineRows = timelines.slice(0, 12).map((item) => `<tr>
+    <td>${escapeHtml(item.source_type || "")}</td>
+    <td>${escapeHtml(shortText(item.source_reference || "", 52))}</td>
+    <td>${escapeHtml(item.emotion_0 || "")}</td>
+    <td>${escapeHtml(item.emotion_30 || "")}</td>
+    <td>${escapeHtml(item.emotion_60 || "")}</td>
+    <td>${escapeHtml(item.emotion_80 || "")}</td>
+    <td>${escapeHtml(item.emotion_100 || "")}</td>
+    <td>${escapeHtml(item.peak_emotion || "")} @ ${Number(item.peak_position || 0)}%</td>
+    <td>${Number(item.ending_satisfaction || 0)}</td>
+    <td>${Number(item.reader_recovery || 0)}</td>
+  </tr>`).join("") || `<tr><td colspan="10">No emotion timelines yet. Generate a story or refresh the engine.</td></tr>`;
+  const listRows = (items = []) => items.length
+    ? items.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${Number(item.count || item.score || 0)}</span></li>`).join("")
+    : "<li><strong>No data yet</strong></li>";
+  return layout("Human Emotion Engine", `${renderHeader()}
+    <main class="insights-page">
+      <section class="insights-hero">
+        <p class="kicker">Human Emotion Engine v1</p>
+        <h1>Human Emotion Engine</h1>
+        <p>Understands emotional progression across stories and guides the generator toward stronger escalation, clearer peaks and satisfying endings. It stores emotional signals only.</p>
+      </section>
+
+      <section class="insight-card">
+        <div class="section-title">
+          <div>
+            <h2>Emotion System Status</h2>
+            <p class="helper-text">No publishing. No Facebook posting. No full copyrighted source text is stored in emotion timelines.</p>
+          </div>
+          <div>
+            <button class="primary-btn" id="emotionRefreshBtn" type="button">Refresh Emotion Engine</button>
+            <p class="helper-text" id="emotionMessage"></p>
+          </div>
+        </div>
+        <div class="autopilot-status-grid">
+          <article><span>Timelines</span><strong>${stats.timelines_count}</strong><p>Generated drafts + Story DNA emotional signals.</p></article>
+          <article><span>Peak position</span><strong>${stats.average_peak_position}%</strong><p>Average emotional high point.</p></article>
+          <article><span>Ending satisfaction</span><strong>${stats.average_ending_satisfaction}%</strong><p>How complete the ending feels.</p></article>
+          <article><span>Reader recovery</span><strong>${stats.average_reader_recovery}%</strong><p>Recovery after heavy emotions.</p></article>
+          <article><span>Volatility</span><strong>${stats.average_volatility}%</strong><p>How often emotions change.</p></article>
+          <article><span>Best ending</span><strong>${escapeHtml(recommendations.best_ending_emotion)}</strong><p>${escapeHtml(recommendations.recommended_story_rhythm)}</p></article>
+        </div>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Emotion Curve</h2>
+          <p><strong>Best curve:</strong> ${escapeHtml(recommendations.best_emotional_curve.join(" -> "))}</p>
+          <p><strong>Ideal peak:</strong> ${escapeHtml(recommendations.ideal_peak_position)}</p>
+          <p><strong>Ending emotion:</strong> ${escapeHtml(recommendations.best_ending_emotion)}</p>
+          <p><strong>Rhythm:</strong> ${escapeHtml(recommendations.recommended_story_rhythm)}</p>
+        </article>
+        <article class="insight-card">
+          <h2>Next Story Guidance</h2>
+          <ul class="insight-list">${recommendations.how_to_make_next_story_more_emotional.map((item) => `<li><strong>${escapeHtml(item)}</strong></li>`).join("")}</ul>
+        </article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card"><h2>Top Peak Emotions</h2><ol class="insight-list">${listRows(stats.top_peak_emotions)}</ol></article>
+        <article class="insight-card"><h2>Top Emotional Transitions</h2><ol class="insight-list">${listRows(stats.top_transitions)}</ol></article>
+      </section>
+
+      <section class="insight-card">
+        <h2>Emotion Timelines</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Source</th><th>Reference</th><th>0%</th><th>30%</th><th>60%</th><th>80%</th><th>100%</th><th>Peak</th><th>Ending</th><th>Recovery</th></tr></thead>
+          <tbody>${timelineRows}</tbody>
+        </table></div>
+      </section>
+    </main>
+    <script>
+      const emotionMessage = document.getElementById("emotionMessage");
+      document.getElementById("emotionRefreshBtn").addEventListener("click", async () => {
+        emotionMessage.textContent = "Refreshing...";
+        try {
+          const response = await fetch("/api/emotion-engine-v1/refresh", { method: "POST" });
+          const result = await response.json();
+          emotionMessage.textContent = result.ok ? "Emotion Engine refreshed. Reloading..." : (result.message || "Refresh failed.");
+          if (result.ok) window.location.reload();
+        } catch (error) {
+          emotionMessage.textContent = error.message;
+        }
+      });
+    </script>`);
+}
+
 function renderAutopilotV1Dashboard() {
   const status = buildAutopilotV1Status();
   const ideas = readStoryIdeas().slice(0, 6);
@@ -6419,6 +7058,7 @@ function renderAutopilotV1Dashboard() {
   const rejectedPackages = packages.filter((item) => item.status === "rejected");
   const reviewPackages = packages.filter((item) => item.status === "review");
   const contentSafety = buildContentSafetyDashboardData();
+  const emotionEngine = buildEmotionEngineRecommendations(readEmotionTimelines());
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
   const researchStories = readResearchStories();
@@ -6453,6 +7093,7 @@ function renderAutopilotV1Dashboard() {
           ${card("Project Brain", status.system.project_brain, readProjectBrain().updated_at || "Needs refresh")}
           ${card("Telegram", status.system.telegram, "Commands: /status /load_posts /analyze /research /ideas /plan /schedule /help")}
           ${card("Content Safety", `${contentSafety.average_safety_score}%`, `${contentSafety.reviews_count} reviews, ${contentSafety.needs_edit_drafts.length} need edit`)}
+          ${card("Emotion Engine", `${emotionEngine.statistics.average_ending_satisfaction}%`, `${emotionEngine.timelines_count} timelines, peak ${emotionEngine.ideal_peak_position}`)}
           ${card("Publishing", status.system.autopublishing, "Approval is required before any publishing step.")}
         </div>
       </section>
@@ -6467,6 +7108,18 @@ function renderAutopilotV1Dashboard() {
           ${card("Safe Packages", contentSafety.safe_packages.length, "Approved and safety-passed")}
         </div>
         <p class="helper-text"><a href="/content-safety">Open Content Safety dashboard</a></p>
+      </section>
+
+      <section class="insight-card">
+        <h2>Human Emotion Engine</h2>
+        <div class="autopilot-status-grid">
+          ${card("Timelines", emotionEngine.timelines_count, "Generated drafts + Story DNA emotional signals")}
+          ${card("Best Curve", emotionEngine.best_emotional_curve.slice(0, 4).join(" -> "), "Full curve guides the generator")}
+          ${card("Peak Position", emotionEngine.ideal_peak_position, emotionEngine.generator_guidance.peak_emotion || "shock")}
+          ${card("Best Ending", emotionEngine.best_ending_emotion, "Satisfying recovery after the peak")}
+          ${card("Reader Recovery", `${emotionEngine.statistics.average_reader_recovery}%`, emotionEngine.recommended_story_rhythm)}
+        </div>
+        <p class="helper-text"><a href="/emotion-engine">Open Emotion Engine dashboard</a></p>
       </section>
 
       <section class="insight-card">
@@ -7583,6 +8236,65 @@ async function telegramStyleBrainRecommendations(chatId) {
   return sendTelegramLongMessage(chatId, telegramStyleBrainStatsText(buildStyleBrainRecommendations(readStyleBrainProfiles())), mainTelegramKeyboard());
 }
 
+function telegramEmotionEngineText(recommendations = buildEmotionEngineRecommendations(readEmotionTimelines())) {
+  const stats = recommendations.statistics || buildEmotionEngineStatistics(readEmotionTimelines());
+  const curve = recommendations.best_emotional_curve.join(" -> ");
+  const avoid = recommendations.emotions_to_avoid_repeating
+    .slice(0, 5)
+    .map((item) => `• ${item}`)
+    .join("\n");
+  const tips = recommendations.how_to_make_next_story_more_emotional
+    .slice(0, 5)
+    .map((item) => `• ${item}`)
+    .join("\n");
+  return [
+    "💓 <b>Human Emotion Engine v1</b>",
+    "",
+    `Timelines: ${stats.timelines_count}`,
+    `Average peak position: ${stats.average_peak_position}%`,
+    `Ending satisfaction: ${stats.average_ending_satisfaction}%`,
+    `Reader recovery: ${stats.average_reader_recovery}%`,
+    `Emotion volatility: ${stats.average_volatility}%`,
+    "",
+    "<b>Рекомендации</b>",
+    `Best curve: ${escapeHtml(curve)}`,
+    `Ideal peak: ${escapeHtml(recommendations.ideal_peak_position)}`,
+    `Best ending emotion: ${escapeHtml(recommendations.best_ending_emotion)}`,
+    `Rhythm: ${escapeHtml(recommendations.recommended_story_rhythm)}`,
+    "",
+    "<b>Как усилить следующую историю</b>",
+    escapeHtml(tips),
+    "",
+    "<b>Не повторять слишком часто</b>",
+    escapeHtml(avoid),
+    "",
+    "Безопасность: сохраняются только эмоциональные сигналы. Публикации нет."
+  ].join("\n");
+}
+
+async function telegramEmotionEngine(chatId, args = []) {
+  const mode = String(args[0] || "").toLowerCase();
+  if (mode === "обновить" || mode === "refresh" || mode === "update") {
+    const result = await refreshEmotionEngineV1();
+    return sendTelegramLongMessage(chatId, [
+      "💓 <b>Emotion Engine обновлён</b>",
+      "",
+      `Analyzed: ${result.analyzed}`,
+      `Timelines: ${result.timelines_count}`,
+      "",
+      telegramEmotionEngineText(result.recommendations)
+    ].join("\n"), mainTelegramKeyboard());
+  }
+  if (mode === "рекомендации" || mode === "recommendations") {
+    return telegramEmotionRecommendations(chatId);
+  }
+  return sendTelegramLongMessage(chatId, telegramEmotionEngineText(), mainTelegramKeyboard());
+}
+
+async function telegramEmotionRecommendations(chatId) {
+  return sendTelegramLongMessage(chatId, telegramEmotionEngineText(buildEmotionEngineRecommendations(readEmotionTimelines())), mainTelegramKeyboard());
+}
+
 function telegramContentSafetyReviewText(resultOrReview = {}) {
   const review = resultOrReview.review || resultOrReview;
   if (!review?.id) return "Проверка безопасности не найдена.";
@@ -7688,13 +8400,16 @@ async function telegramHelp(chatId) {
     "/стиль — Style Brain v1",
     "/стиль обновить — проанализировать Facebook/generated/research/approved packages",
     "/стиль рекомендации — рекомендации по живому стилю",
+    "/эмоции — Human Emotion Engine v1",
+    "/эмоции обновить — пересчитать emotional timelines",
+    "/эмоции рекомендации — рекомендации по эмоциональной кривой",
     "/безопасность — статус Content Safety AI",
     "/проверить_черновик 1 — safety/originality check черновика",
     "/проверить_пакет 1 — safety/originality check пакета",
     "/помощь — эта справка",
     "",
     "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /check_draft 1, /check_package 1, /safety, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -7736,6 +8451,9 @@ function telegramCommandList() {
     { command: "style", description: "Style Brain v1" },
     { command: "update_style", description: "Refresh Style Brain" },
     { command: "style_recommendations", description: "Style recommendations" },
+    { command: "emotions", description: "Human Emotion Engine" },
+    { command: "update_emotions", description: "Refresh emotions" },
+    { command: "emotion_recommendations", description: "Emotion recommendations" },
     { command: "safety", description: "Content Safety status" },
     { command: "check_draft", description: "Check draft safety" },
     { command: "check_package", description: "Check package safety" },
@@ -7854,6 +8572,9 @@ async function handleTelegramMessage(message) {
   }
   if (command === "/update_style") return telegramStyleBrain(chatId, ["refresh"]);
   if (command === "/style_recommendations") return telegramStyleBrainRecommendations(chatId);
+  if (command === "/emotions" || command === "/эмоции") return telegramEmotionEngine(chatId, args);
+  if (command === "/update_emotions") return telegramEmotionEngine(chatId, ["refresh"]);
+  if (command === "/emotion_recommendations") return telegramEmotionRecommendations(chatId);
   if (command === "/safety" || command === "/безопасность") return telegramContentSafetyStatus(chatId);
   if (command === "/check_draft" || command === "/проверить_черновик") return telegramCheckDraftSafety(chatId, args[0] || "1");
   if (command === "/check_package" || command === "/проверить_пакет") return telegramCheckPackageSafety(chatId, args[0] || "1");
@@ -9929,6 +10650,31 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, buildStyleBrainRecommendations(readStyleBrainProfiles()));
   }
 
+  if (pathname === "/api/emotion-engine-v1" && req.method === "GET") {
+    const timelines = readEmotionTimelines();
+    return sendJson(res, 200, {
+      ok: true,
+      module: "Human Emotion Engine v1",
+      statistics: buildEmotionEngineStatistics(timelines),
+      recommendations: buildEmotionEngineRecommendations(timelines),
+      timelines_sample: timelines.slice(0, 20),
+      safety: {
+        stores_full_copyrighted_text: false,
+        stores_emotional_signals_only: true,
+        publishing_enabled: false,
+        facebook_posting_enabled: false
+      }
+    });
+  }
+
+  if (pathname === "/api/emotion-engine-v1/refresh" && ["GET", "POST"].includes(req.method)) {
+    return sendJson(res, 200, await refreshEmotionEngineV1());
+  }
+
+  if (pathname === "/api/emotion-engine-v1/recommendations" && req.method === "GET") {
+    return sendJson(res, 200, buildEmotionEngineRecommendations(readEmotionTimelines()));
+  }
+
   if (pathname === "/api/content-safety/v1/check-draft" && req.method === "POST") {
     const payload = await parseBody(req);
     return sendJson(res, 200, await checkContentSafetyDraft(payload.draft || payload.draft_id || payload.index || "1"));
@@ -10179,6 +10925,7 @@ async function router(req, res) {
     if (pathname === "/telegram-center") return send(res, 200, renderTelegramCenter());
     if (pathname === "/project-brain") return send(res, 200, renderProjectBrainDashboard());
     if (pathname === "/style-brain") return send(res, 200, renderStyleBrainDashboard());
+    if (pathname === "/emotion-engine") return send(res, 200, renderEmotionEngineDashboard());
     if (pathname === "/content-safety") return send(res, 200, renderContentSafetyDashboard());
     if (pathname === "/ai-autopilot") return send(res, 200, renderAutopilotDashboard());
     if (pathname === "/ai-autopilot-v1") return send(res, 200, renderAutopilotV1Dashboard());
