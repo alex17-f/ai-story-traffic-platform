@@ -20,6 +20,7 @@ const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
 const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
 const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
 const STYLE_BRAIN_PROFILES_FILE = path.join(ROOT, "data", "style_brain_profiles.json");
+const CONTENT_SAFETY_REVIEWS_FILE = path.join(ROOT, "data", "content_safety_reviews.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
@@ -384,6 +385,17 @@ async function writeStyleBrainProfiles(items) {
   return items;
 }
 
+function readContentSafetyReviews() {
+  return storageCache.contentSafetyReviews || [];
+}
+
+async function writeContentSafetyReviews(items) {
+  storageCache.contentSafetyReviews = items;
+  writeJsonBackup(CONTENT_SAFETY_REVIEWS_FILE, items);
+  await persistContentSafetyReviews(items);
+  return items;
+}
+
 function readJsonArray(filePath) {
   if (!fs.existsSync(filePath)) return [];
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -421,6 +433,7 @@ const storageCache = {
   scheduledPosts: readJsonArray(SCHEDULED_POSTS_FILE),
   publishingPackages: readJsonArray(PUBLISHING_PACKAGES_FILE),
   styleBrainProfiles: readJsonArray(STYLE_BRAIN_PROFILES_FILE),
+  contentSafetyReviews: readJsonArray(CONTENT_SAFETY_REVIEWS_FILE),
   projectBrain: fs.existsSync(PROJECT_BRAIN_FILE)
     ? JSON.parse(fs.readFileSync(PROJECT_BRAIN_FILE, "utf8"))
     : {
@@ -473,6 +486,7 @@ async function initializeStorage() {
     await ensureScheduledPostsTable();
     await ensurePublishingPackagesTable();
     await ensureStyleBrainProfilesTable();
+    await ensureContentSafetyReviewsTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
     storageCache.facebookPosts = (await pgPool.query("select * from facebook_posts order by total_score desc, published_at desc")).rows;
@@ -494,6 +508,7 @@ async function initializeStorage() {
     storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
     storageCache.styleBrainProfiles = (await pgPool.query("select * from style_brain_profiles order by created_at desc limit 1200")).rows.map(normalizeStyleBrainProfileRow);
+    storageCache.contentSafetyReviews = (await pgPool.query("select * from content_safety_reviews order by created_at desc limit 1000")).rows.map(normalizeContentSafetyReviewRow);
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
       storageCache.projectBrain = {
@@ -697,6 +712,31 @@ async function ensureStyleBrainProfilesTable() {
     create index if not exists style_brain_profiles_human_realism_idx on style_brain_profiles (human_realism_score desc);
     create index if not exists style_brain_profiles_boring_risk_idx on style_brain_profiles (boring_risk asc);
     create index if not exists style_brain_profiles_readability_idx on style_brain_profiles (facebook_readability_score desc);
+  `);
+}
+
+async function ensureContentSafetyReviewsTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists content_safety_reviews (
+      id text primary key,
+      draft_id text,
+      package_id text,
+      safety_score integer not null default 0,
+      originality_score integer not null default 0,
+      facebook_risk text not null default 'low',
+      quality_risk text not null default 'low',
+      policy_risk text not null default 'low',
+      recommendation text not null default 'needs_edit',
+      issues_json jsonb not null default '[]'::jsonb,
+      suggestions_json jsonb not null default '[]'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists content_safety_reviews_draft_idx on content_safety_reviews (draft_id);
+    create index if not exists content_safety_reviews_package_idx on content_safety_reviews (package_id);
+    create index if not exists content_safety_reviews_recommendation_idx on content_safety_reviews (recommendation);
+    create index if not exists content_safety_reviews_safety_score_idx on content_safety_reviews (safety_score desc);
+    create index if not exists content_safety_reviews_created_at_idx on content_safety_reviews (created_at desc);
   `);
 }
 
@@ -1176,6 +1216,56 @@ async function persistStyleBrainProfiles(items) {
   }
 }
 
+function normalizeContentSafetyReviewRow(row = {}) {
+  return {
+    ...row,
+    issues_json: Array.isArray(row.issues_json) ? row.issues_json : [],
+    suggestions_json: Array.isArray(row.suggestions_json) ? row.suggestions_json : []
+  };
+}
+
+async function persistContentSafetyReviews(items) {
+  if (!pgPool) return;
+  try {
+    await ensureContentSafetyReviewsTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into content_safety_reviews (
+          id, draft_id, package_id, safety_score, originality_score, facebook_risk,
+          quality_risk, policy_risk, recommendation, issues_json, suggestions_json, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        on conflict (id) do update set
+          draft_id = excluded.draft_id,
+          package_id = excluded.package_id,
+          safety_score = excluded.safety_score,
+          originality_score = excluded.originality_score,
+          facebook_risk = excluded.facebook_risk,
+          quality_risk = excluded.quality_risk,
+          policy_risk = excluded.policy_risk,
+          recommendation = excluded.recommendation,
+          issues_json = excluded.issues_json,
+          suggestions_json = excluded.suggestions_json`,
+        [
+          item.id || crypto.randomUUID(),
+          item.draft_id || "",
+          item.package_id || "",
+          Number(item.safety_score || 0),
+          Number(item.originality_score || 0),
+          item.facebook_risk || "low",
+          item.quality_risk || "low",
+          item.policy_risk || "low",
+          item.recommendation || "needs_edit",
+          JSON.stringify(Array.isArray(item.issues_json) ? item.issues_json : []),
+          JSON.stringify(Array.isArray(item.suggestions_json) ? item.suggestions_json : []),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL content_safety_reviews persist failed: ${error.message}`);
+  }
+}
+
 function escapeHtml(value = "") {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -1341,6 +1431,7 @@ function renderHeader() {
       <a href="/telegram-center">Telegram Center</a>
       <a href="/project-brain">Project Brain</a>
       <a href="/style-brain">Style Brain</a>
+      <a href="/content-safety">Content Safety</a>
       <a href="/ai-autopilot">AI Autopilot</a>
       <a href="/ai-autopilot-v1">Autopilot v1</a>
       <a href="/production-status">Production Status</a>
@@ -3448,6 +3539,328 @@ async function learnStyleBrainFromGeneratedStory(story = {}) {
   return buildStyleBrainRecommendations(merged);
 }
 
+function contentSafetyTextFromDraft(draft = {}) {
+  return [draft.title, draft.hook, draft.full_story, draft.moral].filter(Boolean).join("\n\n").trim();
+}
+
+function contentSafetyTokens(text = "") {
+  return [...new Set(String(text || "")
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, " ")
+    .split(/[^a-zа-яё0-9]+/i)
+    .filter((word) => word.length >= 4)
+    .filter((word) => !["that", "this", "with", "from", "they", "were", "have", "would", "there", "their", "story", "family"].includes(word))
+  )];
+}
+
+function contentSafetySimilarity(a = "", b = "") {
+  const left = contentSafetyTokens(a);
+  const right = contentSafetyTokens(b);
+  if (!left.length || !right.length) return 0;
+  const rightSet = new Set(right);
+  const intersection = left.filter((word) => rightSet.has(word)).length;
+  const union = new Set([...left, ...right]).size;
+  return Math.round((intersection / Math.max(1, union)) * 100);
+}
+
+function contentSafetyMaxSimilarity(text = "", sources = []) {
+  let best = { score: 0, source_type: "", source_reference: "" };
+  for (const source of sources) {
+    const score = contentSafetySimilarity(text, source.text || "");
+    if (score > best.score) {
+      best = {
+        score,
+        source_type: source.source_type || "",
+        source_reference: source.source_reference || ""
+      };
+    }
+  }
+  return best;
+}
+
+function contentSafetyReferenceSources(currentDraftId = "") {
+  const research = readResearchStories().map((item) => ({
+    source_type: "research",
+    source_reference: item.url || item.source_url || item.title || item.id,
+    text: [item.title, item.summary, item.emotion, ...(Array.isArray(item.keywords) ? item.keywords : [])].filter(Boolean).join(" ")
+  }));
+  const competitors = readCompetitors().map((item) => ({
+    source_type: "competitor",
+    source_reference: item.url || item.name || item.id,
+    text: [item.name, item.notes, item.popular_topics, item.popular_image_types, item.posting_frequency].filter(Boolean).join(" ")
+  }));
+  const drafts = readGeneratedStories()
+    .filter((item) => item.id !== currentDraftId)
+    .map((item) => ({
+      source_type: "generated",
+      source_reference: item.id,
+      text: contentSafetyTextFromDraft(item)
+    }));
+  const posts = readFacebookPosts().slice(0, 100).map((item) => ({
+    source_type: "facebook",
+    source_reference: item.facebook_post_id || item.id || item.permalink_url,
+    text: item.message || ""
+  }));
+  return { research, competitors, drafts, posts };
+}
+
+function contentSafetyRiskLevel(score = 0, medium = 35, high = 65) {
+  if (score >= high) return "high";
+  if (score >= medium) return "medium";
+  return "low";
+}
+
+function contentSafetyCountMatches(text = "", patterns = []) {
+  const lower = String(text || "").toLowerCase();
+  return patterns.filter((pattern) => pattern.test(lower)).length;
+}
+
+function contentSafetyFacebookRisk(text = "", draft = {}) {
+  const issues = [];
+  const sensational = contentSafetyCountMatches(text, [
+    /you won't believe/i,
+    /shocking/i,
+    /must read/i,
+    /share this/i,
+    /comment below/i,
+    /like if/i,
+    /tag someone/i,
+    /100% true/i,
+    /real story/i,
+    /unbelievable/i,
+    /сенсац/i,
+    /шок/i,
+    /срочно/i,
+    /ставь лайк/i
+  ]);
+  if (sensational) issues.push("В тексте есть слишком агрессивные или clickbait-фразы.");
+  if (/\b(read more|link in comments|continue here|продолжение здесь|ссылка в комментар)/i.test(text)) issues.push("Facebook-пост/история не должны звучать как engagement bait.");
+  if ((draft.title || "").length > 130) issues.push("Заголовок слишком длинный и может выглядеть как clickbait.");
+  const recentSameCategory = readGeneratedStories().slice(0, 12).filter((item) => item.id !== draft.id && item.category === draft.category).length;
+  if (recentSameCategory >= 5) issues.push("Тема слишком часто повторялась в последних черновиках.");
+  const riskScore = Math.min(100, sensational * 22 + issues.length * 16 + Math.max(0, recentSameCategory - 3) * 8);
+  return { score: riskScore, risk: contentSafetyRiskLevel(riskScore, 25, 55), issues };
+}
+
+function contentSafetyQualityRisk(text = "", draft = {}) {
+  const issues = [];
+  const suggestions = [];
+  const styleProfile = styleBrainProfileFromGeneratedStory(draft) || styleBrainProfileFromText({
+    source_type: "draft",
+    source_reference: `draft:${draft.id || "unknown"}`,
+    text
+  });
+  const hookStrength = Number(styleProfile?.hook_strength || 0);
+  const dialogue = Number(styleProfile?.dialogue_density || 0);
+  const boringRisk = Number(styleProfile?.boring_risk || 0);
+  const emotionalIntensity = Number(styleProfile?.emotional_intensity || 0);
+  const moralizing = contentSafetyCountMatches(text, [/lesson learned/i, /moral/i, /destiny/i, /from that moment/i, /everything changed forever/i, /судьба/i, /урок/i, /вывод/i]);
+  const genericAi = contentSafetyCountMatches(text, [/heart was full/i, /could not believe/i, /tears filled/i, /emotions overwhelmed/i, /life would never be the same/i]);
+  if (hookStrength < 58) {
+    issues.push("Слабый крючок в первых строках.");
+    suggestions.push("Начать с конкретного предмета, жеста или семейного молчания в первых 1-2 строках.");
+  }
+  if (dialogue < 18) {
+    issues.push("Слишком мало живого диалога.");
+    suggestions.push("Добавить 2-4 короткие реплики, где персонажи избегают полной правды.");
+  }
+  if (boringRisk > 48) {
+    issues.push("Высокий риск скучного начала или плотных абзацев.");
+    suggestions.push("Укоротить первые абзацы и поставить конфликт раньше.");
+  }
+  if (emotionalIntensity < 48) {
+    issues.push("Слабая эмоциональная эскалация.");
+    suggestions.push("Добавить нарастание: тревога -> конфликт -> поворот -> тихая развязка.");
+  }
+  if (moralizing >= 2) {
+    issues.push("Слишком много прямого морализаторства.");
+    suggestions.push("Показать вывод через действие персонажа, а не объяснять его в лоб.");
+  }
+  if (genericAi >= 2) {
+    issues.push("Есть признаки generic AI wording.");
+    suggestions.push("Заменить общие эмоции на бытовые детали: чай, чек, старая дверь, дрожащие руки.");
+  }
+  const riskScore = Math.min(100, (100 - hookStrength) * 0.2 + Math.max(0, 24 - dialogue) * 1.2 + boringRisk * 0.45 + moralizing * 10 + genericAi * 12);
+  return { score: Math.round(riskScore), risk: contentSafetyRiskLevel(riskScore, 32, 58), issues, suggestions, style_profile: styleProfile };
+}
+
+function contentSafetyPolicyRisk(text = "") {
+  const issues = [];
+  const suggestions = [];
+  const hate = /\b(kill all|exterminate|subhuman|ненавижу всех|уничтожить всех)\b/i.test(text);
+  const harassment = /\bworthless|disgusting loser|тварь|мразь|ничтожество\b/i.test(text);
+  const dangerous = /\bhow to poison|make a bomb|suicide method|как отравить|сделать бомбу\b/i.test(text);
+  const graphic = /\bgraphic blood|mutilated|gore|кишки|расчлен/i.test(text);
+  const fakeReal = /\bthis is a real story about|true story about [A-Z][a-z]+ [A-Z][a-z]+|реальная история известного/i.test(text);
+  const exploitation = /\bchild abuse details|sexual assault details|подробности насилия над ребенком/i.test(text);
+  if (hate) issues.push("Возможный hate/dehumanizing контент.");
+  if (harassment) issues.push("Возможное оскорбление/harassment.");
+  if (dangerous) issues.push("Возможные опасные инструкции или утверждения.");
+  if (graphic) issues.push("Слишком explicit graphic content.");
+  if (fakeReal) issues.push("Есть риск fake real-person claim / impersonation.");
+  if (exploitation) issues.push("Риск exploitation sensitive topic.");
+  if (issues.length) suggestions.push("Переписать сцену без оскорблений, опасных деталей, графики и заявлений о реальных людях.");
+  const score = Math.min(100, issues.length * 28);
+  return { score, risk: contentSafetyRiskLevel(score, 20, 50), issues, suggestions };
+}
+
+function contentSafetyOriginalityRisk(text = "", draft = {}) {
+  const sources = contentSafetyReferenceSources(draft.id || "");
+  const research = contentSafetyMaxSimilarity(text, sources.research);
+  const competitors = contentSafetyMaxSimilarity(text, sources.competitors);
+  const drafts = contentSafetyMaxSimilarity(text, sources.drafts);
+  const posts = contentSafetyMaxSimilarity(text, sources.posts);
+  const maxScore = Math.max(research.score, competitors.score, drafts.score, posts.score);
+  const issues = [];
+  const suggestions = [];
+  if (research.score >= 34) issues.push(`Похоже на research source (${research.score}%).`);
+  if (competitors.score >= 32) issues.push(`Похоже на competitor pattern (${competitors.score}%).`);
+  if (drafts.score >= 38) issues.push(`Похоже на предыдущий generated draft (${drafts.score}%).`);
+  if (posts.score >= 36) issues.push(`Похоже на наш недавний Facebook post (${posts.score}%).`);
+  if (issues.length) {
+    suggestions.push("Сменить персонажей, место действия, ключевой предмет, поворот и финальную развязку.");
+    suggestions.push("Использовать источники только как сигналы темы/структуры, не повторять формулировки.");
+  }
+  return {
+    risk_score: maxScore,
+    originality_score: clampStyleScore(100 - maxScore),
+    risk: contentSafetyRiskLevel(maxScore, 30, 50),
+    issues,
+    suggestions,
+    best_matches: { research, competitors, drafts, posts }
+  };
+}
+
+function contentSafetyRecommendation({ safetyScore, originalityScore, facebookRisk, qualityRisk, policyRisk }) {
+  if (policyRisk === "high" || facebookRisk === "high" || originalityScore < 50 || safetyScore < 45) return "reject";
+  if (policyRisk === "medium" || facebookRisk === "medium" || qualityRisk !== "low" || originalityScore < 72 || safetyScore < 74) return "needs_edit";
+  return "safe";
+}
+
+async function saveContentSafetyReview(review) {
+  const next = [review, ...readContentSafetyReviews()].slice(0, 1200);
+  await writeContentSafetyReviews(next);
+  return review;
+}
+
+async function checkContentSafetyDraft(ref = "1", options = {}) {
+  const draft = options.draft || generatedDraftByRef(ref) || readGeneratedStories().find((item) => item.id === ref);
+  if (!draft) {
+    return { ok: false, code: "draft_not_found", message: "Generated draft not found." };
+  }
+  const text = contentSafetyTextFromDraft(draft);
+  const originality = contentSafetyOriginalityRisk(text, draft);
+  const facebook = contentSafetyFacebookRisk(text, draft);
+  const quality = contentSafetyQualityRisk(text, draft);
+  const policy = contentSafetyPolicyRisk(text);
+  const issues = [
+    ...originality.issues.map((message) => ({ type: "originality", message })),
+    ...facebook.issues.map((message) => ({ type: "facebook", message })),
+    ...quality.issues.map((message) => ({ type: "quality", message })),
+    ...policy.issues.map((message) => ({ type: "policy", message }))
+  ];
+  const suggestions = [...new Set([
+    ...originality.suggestions,
+    ...quality.suggestions,
+    ...policy.suggestions,
+    ...(issues.length ? [] : ["Черновик выглядит безопасно. Перед публикацией всё равно проверьте вручную тон и факты."])
+  ])].map((message) => ({ message }));
+  const riskPenalty = Math.max(originality.risk_score, facebook.score, quality.score, policy.score);
+  const safetyScore = clampStyleScore(100 - (riskPenalty * 0.55) - issues.length * 4);
+  const recommendation = contentSafetyRecommendation({
+    safetyScore,
+    originalityScore: originality.originality_score,
+    facebookRisk: facebook.risk,
+    qualityRisk: quality.risk,
+    policyRisk: policy.risk
+  });
+  const review = {
+    id: crypto.randomUUID(),
+    draft_id: draft.id,
+    package_id: options.package_id || "",
+    safety_score: safetyScore,
+    originality_score: originality.originality_score,
+    facebook_risk: facebook.risk,
+    quality_risk: quality.risk,
+    policy_risk: policy.risk,
+    recommendation,
+    issues_json: issues,
+    suggestions_json: suggestions,
+    diagnostics: {
+      originality_best_matches: originality.best_matches,
+      quality_style_profile: {
+        hook_strength: quality.style_profile?.hook_strength || 0,
+        dialogue_density: quality.style_profile?.dialogue_density || 0,
+        boring_risk: quality.style_profile?.boring_risk || 0,
+        human_realism_score: quality.style_profile?.human_realism_score || 0
+      }
+    },
+    created_at: new Date().toISOString()
+  };
+  await saveContentSafetyReview(review);
+  return { ok: true, module: "Content Safety AI v1", draft, review, safety: contentSafetySafetyNotice() };
+}
+
+async function checkContentSafetyPackage(ref = "1") {
+  const pkg = publishingPackageByNumber(ref) || readPublishingPackages().find((item) => item.id === ref);
+  if (!pkg) return { ok: false, code: "package_not_found", message: "Publishing package not found." };
+  const details = publishingPackageDetails(pkg);
+  if (!details?.draft) return { ok: false, code: "package_draft_missing", message: "Package draft was not found." };
+  const result = await checkContentSafetyDraft(details.draft.id, { draft: details.draft, package_id: pkg.id });
+  return {
+    ...result,
+    package: pkg,
+    details,
+    review: {
+      ...result.review,
+      package_id: pkg.id
+    }
+  };
+}
+
+function latestContentSafetyReviewForDraft(draftId = "") {
+  return readContentSafetyReviews()
+    .filter((item) => item.draft_id === draftId)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0] || null;
+}
+
+function latestContentSafetyReviewForPackage(packageId = "") {
+  return readContentSafetyReviews()
+    .filter((item) => item.package_id === packageId)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0] || null;
+}
+
+function contentSafetyPackageIsSafe(pkg = {}) {
+  const review = latestContentSafetyReviewForPackage(pkg.id);
+  return Boolean(review && review.recommendation === "safe" && Number(review.safety_score || 0) >= 74);
+}
+
+function contentSafetySafetyNotice() {
+  return {
+    publish_allowed: false,
+    facebook_posting: false,
+    stores_full_copyrighted_text: false,
+    automatic_rejection_without_reason: false
+  };
+}
+
+function buildContentSafetyDashboardData() {
+  const reviews = readContentSafetyReviews();
+  const average = reviews.length ? Math.round(reviews.reduce((sum, item) => sum + Number(item.safety_score || 0), 0) / reviews.length) : 0;
+  const latest = [...reviews].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)).slice(0, 20);
+  return {
+    ok: true,
+    module: "Content Safety AI v1",
+    reviews_count: reviews.length,
+    average_safety_score: average,
+    high_risk_drafts: reviews.filter((item) => item.recommendation === "reject" || item.facebook_risk === "high" || item.policy_risk === "high").slice(0, 20),
+    needs_edit_drafts: reviews.filter((item) => item.recommendation === "needs_edit").slice(0, 20),
+    safe_packages: readPublishingPackages().filter((pkg) => pkg.status === "approved" && contentSafetyPackageIsSafe(pkg)).slice(0, 20),
+    latest_reviews: latest,
+    safety: contentSafetySafetyNotice()
+  };
+}
+
 function mergeStoryDna(existing = [], incoming = []) {
   const byReference = new Map();
   for (const item of existing) {
@@ -5108,6 +5521,7 @@ async function generateOriginalStoryV2(payload = {}) {
   await writeGeneratedStories(saved);
   await autoSyncProjectBrainV2({ sources: ["generated"], reason: "story_generated" });
   await learnStyleBrainFromGeneratedStory(story);
+  const contentSafety = await checkContentSafetyDraft(story.id, { draft: story });
   return {
     ok: true,
     module: "Story Generator v2",
@@ -5122,6 +5536,7 @@ async function generateOriginalStoryV2(payload = {}) {
     },
     saved: true,
     generated_stories_count: saved.length,
+    content_safety_review: contentSafety.review || null,
     safety: {
       copied_research_text: false,
       source_links_only_for_inspiration: true,
@@ -5134,12 +5549,19 @@ async function generateOriginalStoryV2(payload = {}) {
 async function generateOriginalStoriesV2(payload = {}) {
   const count = Math.max(1, Math.min(Number(payload.count || 3), 8));
   const generated = [];
+  const contentSafetyReviews = [];
   for (let index = 0; index < count; index += 1) {
     const result = await generateOriginalStoryV2({
       ...payload,
       count: 1
     });
-    generated.push(result.story);
+    generated.push({
+      ...result.story,
+      content_safety_review: result.content_safety_review || null
+    });
+    if (result.content_safety_review) {
+      contentSafetyReviews.push(result.content_safety_review);
+    }
   }
   return {
     ok: true,
@@ -5153,9 +5575,12 @@ async function generateOriginalStoriesV2(payload = {}) {
       emotion: story.emotion,
       viral_prediction_score: story.viral_prediction_score,
       hook: story.hook,
-      status: story.status
+      status: story.status,
+      safety_score: story.content_safety_review?.safety_score || null,
+      safety_recommendation: story.content_safety_review?.recommendation || "pending"
     })),
     generated_stories_count: readGeneratedStories().length,
+    content_safety_reviews: contentSafetyReviews,
     safety: {
       copied_research_text: false,
       source_links_only_for_inspiration: true,
@@ -5546,16 +5971,53 @@ async function createPublishingPackageFromDraft(ref = "1") {
 async function updatePublishingPackageStatus(numberText, status) {
   const allowed = new Set(["review", "approved", "rejected"]);
   if (!allowed.has(status)) return null;
-  const pkg = publishingPackageByNumber(numberText);
+  const pkg = publishingPackageByNumber(numberText) || readPublishingPackages().find((item) => item.id === numberText);
   if (!pkg) return null;
   const now = new Date().toISOString();
+  if (status === "approved") {
+    const safetyResult = await checkContentSafetyPackage(pkg.id);
+    if (!safetyResult.ok) {
+      return {
+        ...pkg,
+        status: "review",
+        safety_blocked: true,
+        safety_error: safetyResult.message || "Content Safety check failed.",
+        safety_review: null
+      };
+    }
+    const review = safetyResult.review;
+    if (review.recommendation !== "safe") {
+      const blockedStatus = review.recommendation === "reject" ? "rejected" : "review";
+      const updated = readPublishingPackages().map((item) => item.id === pkg.id
+        ? {
+            ...item,
+            status: blockedStatus,
+            publish_allowed: false,
+            approval_required: true,
+            approved_at: null,
+            safety_blocked: true,
+            safety_review_id: review.id,
+            updated_at: now
+          }
+        : item);
+      await writePublishingPackages(updated);
+      return {
+        ...(updated.find((item) => item.id === pkg.id) || pkg),
+        safety_blocked: true,
+        safety_review: review
+      };
+    }
+  }
   const updated = readPublishingPackages().map((item) => item.id === pkg.id
     ? {
         ...item,
         status,
         publish_allowed: false,
         approval_required: true,
-        approved_at: status === "approved" ? now : item.approved_at || null
+        approved_at: status === "approved" ? now : item.approved_at || null,
+        safety_blocked: false,
+        safety_review_id: status === "approved" ? latestContentSafetyReviewForPackage(pkg.id)?.id || item.safety_review_id || "" : item.safety_review_id || "",
+        updated_at: now
       }
     : item);
   await writePublishingPackages(updated);
@@ -5563,7 +6025,7 @@ async function updatePublishingPackageStatus(numberText, status) {
 }
 
 function readyPublishingPackages() {
-  return latestPublishingPackages(50).filter((item) => item.status === "approved");
+  return latestPublishingPackages(50).filter((item) => item.status === "approved" && contentSafetyPackageIsSafe(item));
 }
 
 function buildAutopilotV1Status() {
@@ -5871,6 +6333,78 @@ function renderStyleBrainDashboard() {
     </script>`);
 }
 
+function renderContentSafetyDashboard() {
+  const data = buildContentSafetyDashboardData();
+  const riskRows = (items = [], empty = "No items yet.") => items.length
+    ? items.slice(0, 10).map((item) => `<tr>
+      <td>${escapeHtml(item.draft_id || item.package_id || "")}</td>
+      <td>${Number(item.safety_score || 0)}</td>
+      <td>${Number(item.originality_score || 0)}</td>
+      <td>${escapeHtml(item.facebook_risk || "")}</td>
+      <td>${escapeHtml(item.recommendation || "")}</td>
+      <td>${escapeHtml((item.issues_json || []).slice(0, 2).map((issue) => issue.message || issue).join("; "))}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="6">${escapeHtml(empty)}</td></tr>`;
+  const packageRows = (items = []) => items.length
+    ? items.slice(0, 10).map((pkg) => {
+        const review = latestContentSafetyReviewForPackage(pkg.id);
+        return `<tr><td>${escapeHtml(pkg.id)}</td><td>${escapeHtml(pkg.draft_id || "")}</td><td>${Number(review?.safety_score || 0)}</td><td>${escapeHtml(review?.recommendation || "")}</td></tr>`;
+      }).join("")
+    : `<tr><td colspan="4">No safe packages yet.</td></tr>`;
+  return layout("Content Safety AI", `${renderHeader()}
+    <main class="insights-page">
+      <section class="insights-hero">
+        <p class="kicker">Content Safety AI v1</p>
+        <h1>Content Safety AI</h1>
+        <p>Checks originality, Facebook risk, quality risk and policy risk before a package can become ready. Publishing stays disabled.</p>
+      </section>
+
+      <section class="insight-card">
+        <div class="section-title">
+          <div>
+            <h2>Safety Status</h2>
+            <p class="helper-text">No publishing. No Facebook posting. Reviews store scores, issues and suggestions only.</p>
+          </div>
+        </div>
+        <div class="autopilot-status-grid">
+          <article><span>Reviews</span><strong>${data.reviews_count}</strong><p>Total safety checks.</p></article>
+          <article><span>Average safety</span><strong>${data.average_safety_score}%</strong><p>Across saved reviews.</p></article>
+          <article><span>High risk drafts</span><strong>${data.high_risk_drafts.length}</strong><p>Reject/high-risk signals.</p></article>
+          <article><span>Needs edit</span><strong>${data.needs_edit_drafts.length}</strong><p>Cannot become ready yet.</p></article>
+          <article><span>Safe packages</span><strong>${data.safe_packages.length}</strong><p>Approved and safety-passed.</p></article>
+          <article><span>Publishing</span><strong>disabled</strong><p>Manual approval only, no auto posting.</p></article>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Latest Reviews</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Draft/Package</th><th>Safety</th><th>Originality</th><th>FB Risk</th><th>Recommendation</th><th>Issues</th></tr></thead>
+          <tbody>${riskRows(data.latest_reviews, "No safety reviews yet.")}</tbody>
+        </table></div>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>High Risk Drafts</h2>
+          <div class="table-wrap"><table><tbody>${riskRows(data.high_risk_drafts, "No high risk drafts.")}</tbody></table></div>
+        </article>
+        <article class="insight-card">
+          <h2>Needs Edit Drafts</h2>
+          <div class="table-wrap"><table><tbody>${riskRows(data.needs_edit_drafts, "No needs-edit drafts.")}</tbody></table></div>
+        </article>
+      </section>
+
+      <section class="insight-card">
+        <h2>Safe Packages</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Package</th><th>Draft</th><th>Safety</th><th>Recommendation</th></tr></thead>
+          <tbody>${packageRows(data.safe_packages)}</tbody>
+        </table></div>
+      </section>
+    </main>`);
+}
+
 function renderAutopilotV1Dashboard() {
   const status = buildAutopilotV1Status();
   const ideas = readStoryIdeas().slice(0, 6);
@@ -5881,9 +6415,10 @@ function renderAutopilotV1Dashboard() {
   const approvedSchedule = scheduledPosts.filter((item) => item.status === "approved").slice(0, 6);
   const pendingSchedule = scheduledPosts.filter((item) => item.status === "draft").slice(0, 6);
   const packages = latestPublishingPackages(12);
-  const readyPackages = packages.filter((item) => item.status === "approved");
+  const readyPackages = readyPublishingPackages().slice(0, 12);
   const rejectedPackages = packages.filter((item) => item.status === "rejected");
   const reviewPackages = packages.filter((item) => item.status === "review");
+  const contentSafety = buildContentSafetyDashboardData();
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
   const researchStories = readResearchStories();
@@ -5917,8 +6452,21 @@ function renderAutopilotV1Dashboard() {
           ${card("Facebook Loading", status.system.facebook_loading, `${readFacebookPosts().length} stored posts`)}
           ${card("Project Brain", status.system.project_brain, readProjectBrain().updated_at || "Needs refresh")}
           ${card("Telegram", status.system.telegram, "Commands: /status /load_posts /analyze /research /ideas /plan /schedule /help")}
+          ${card("Content Safety", `${contentSafety.average_safety_score}%`, `${contentSafety.reviews_count} reviews, ${contentSafety.needs_edit_drafts.length} need edit`)}
           ${card("Publishing", status.system.autopublishing, "Approval is required before any publishing step.")}
         </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Content Safety AI</h2>
+        <div class="autopilot-status-grid">
+          ${card("Latest Reviews", contentSafety.reviews_count, "Originality, Facebook, quality and policy checks")}
+          ${card("Average Safety", `${contentSafety.average_safety_score}%`, "Higher is safer")}
+          ${card("High Risk Drafts", contentSafety.high_risk_drafts.length, "Reject/high-risk recommendations")}
+          ${card("Needs Edit", contentSafety.needs_edit_drafts.length, "Blocked from ready")}
+          ${card("Safe Packages", contentSafety.safe_packages.length, "Approved and safety-passed")}
+        </div>
+        <p class="helper-text"><a href="/content-safety">Open Content Safety dashboard</a></p>
       </section>
 
       <section class="insight-card">
@@ -6820,6 +7368,15 @@ async function telegramCreatePackage(chatId, draftNumber = "1") {
 async function telegramApprovePackage(chatId, numberText = "1") {
   const pkg = await updatePublishingPackageStatus(numberText, "approved");
   if (!pkg) return sendTelegramMessage(chatId, "Пакет не найден. Используйте /пакеты.", mainTelegramKeyboard());
+  if (pkg.safety_blocked) {
+    return sendTelegramLongMessage(chatId, [
+      `Пакет ${escapeHtml(numberText)} не может стать ready.`,
+      "",
+      telegramContentSafetyReviewText(pkg.safety_review || {}),
+      "",
+      "Статус пакета оставлен review или rejected. Публикация не запускалась."
+    ].join("\n"), mainTelegramKeyboard());
+  }
   const details = publishingPackageDetails(pkg);
   return sendTelegramMessage(chatId, `Пакет ${numberText} одобрен.\nЗаголовок: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nСтатус: ${escapeHtml(pkg.status)}\n\nПубликация не запускалась.`, mainTelegramKeyboard());
 }
@@ -7026,6 +7583,73 @@ async function telegramStyleBrainRecommendations(chatId) {
   return sendTelegramLongMessage(chatId, telegramStyleBrainStatsText(buildStyleBrainRecommendations(readStyleBrainProfiles())), mainTelegramKeyboard());
 }
 
+function telegramContentSafetyReviewText(resultOrReview = {}) {
+  const review = resultOrReview.review || resultOrReview;
+  if (!review?.id) return "Проверка безопасности не найдена.";
+  const issues = (review.issues_json || [])
+    .slice(0, 8)
+    .map((item) => `• [${item.type || "risk"}] ${item.message || item}`)
+    .join("\n") || "Критичных замечаний нет.";
+  const suggestions = (review.suggestions_json || [])
+    .slice(0, 8)
+    .map((item) => `• ${item.message || item}`)
+    .join("\n") || "Можно оставить как есть после ручной проверки.";
+  return [
+    "🛡 <b>Content Safety AI v1</b>",
+    "",
+    `Safety Score: ${Number(review.safety_score || 0)}/100`,
+    `Originality Score: ${Number(review.originality_score || 0)}/100`,
+    `Facebook Risk: ${escapeHtml(review.facebook_risk || "low")}`,
+    `Quality Risk: ${escapeHtml(review.quality_risk || "low")}`,
+    `Policy Risk: ${escapeHtml(review.policy_risk || "low")}`,
+    `Recommendation: ${escapeHtml(review.recommendation || "needs_edit")}`,
+    "",
+    "<b>Issues</b>",
+    escapeHtml(issues),
+    "",
+    "<b>Suggestions</b>",
+    escapeHtml(suggestions),
+    "",
+    "Публикация не запускается. Facebook posting disabled."
+  ].join("\n");
+}
+
+async function telegramCheckDraftSafety(chatId, numberText = "1") {
+  const result = await checkContentSafetyDraft(numberText || "1");
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Черновик не найден."), mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, telegramContentSafetyReviewText(result), mainTelegramKeyboard());
+}
+
+async function telegramCheckPackageSafety(chatId, numberText = "1") {
+  const result = await checkContentSafetyPackage(numberText || "1");
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Пакет не найден."), mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, telegramContentSafetyReviewText(result), mainTelegramKeyboard());
+}
+
+async function telegramContentSafetyStatus(chatId) {
+  const data = buildContentSafetyDashboardData();
+  const latest = data.latest_reviews.slice(0, 5).map((item, index) =>
+    `${index + 1}. safety ${item.safety_score}/100, originality ${item.originality_score}/100, ${item.recommendation}`
+  ).join("\n") || "Проверок пока нет.";
+  return sendTelegramLongMessage(chatId, [
+    "🛡 <b>Content Safety AI</b>",
+    "",
+    `Reviews: ${data.reviews_count}`,
+    `Average Safety Score: ${data.average_safety_score}/100`,
+    `High Risk Drafts: ${data.high_risk_drafts.length}`,
+    `Needs Edit Drafts: ${data.needs_edit_drafts.length}`,
+    `Safe Packages: ${data.safe_packages.length}`,
+    "",
+    "<b>Latest Reviews</b>",
+    escapeHtml(latest),
+    "",
+    "/проверить_черновик 1 — проверить черновик",
+    "/проверить_пакет 1 — проверить пакет",
+    "",
+    "Публикации нет. Safety gate только блокирует ready, если есть риск."
+  ].join("\n"), mainTelegramKeyboard());
+}
+
 async function telegramForceBrainSync(chatId) {
   return telegramBrain(chatId, ["обновить"]);
 }
@@ -7064,10 +7688,13 @@ async function telegramHelp(chatId) {
     "/стиль — Style Brain v1",
     "/стиль обновить — проанализировать Facebook/generated/research/approved packages",
     "/стиль рекомендации — рекомендации по живому стилю",
+    "/безопасность — статус Content Safety AI",
+    "/проверить_черновик 1 — safety/originality check черновика",
+    "/проверить_пакет 1 — safety/originality check пакета",
     "/помощь — эта справка",
     "",
     "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /check_draft 1, /check_package 1, /safety, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -7109,6 +7736,9 @@ function telegramCommandList() {
     { command: "style", description: "Style Brain v1" },
     { command: "update_style", description: "Refresh Style Brain" },
     { command: "style_recommendations", description: "Style recommendations" },
+    { command: "safety", description: "Content Safety status" },
+    { command: "check_draft", description: "Check draft safety" },
+    { command: "check_package", description: "Check package safety" },
     { command: "approve", description: "Одобрить черновик" },
     { command: "reject", description: "Отклонить черновик" },
     { command: "help", description: "Помощь" }
@@ -7224,6 +7854,9 @@ async function handleTelegramMessage(message) {
   }
   if (command === "/update_style") return telegramStyleBrain(chatId, ["refresh"]);
   if (command === "/style_recommendations") return telegramStyleBrainRecommendations(chatId);
+  if (command === "/safety" || command === "/безопасность") return telegramContentSafetyStatus(chatId);
+  if (command === "/check_draft" || command === "/проверить_черновик") return telegramCheckDraftSafety(chatId, args[0] || "1");
+  if (command === "/check_package" || command === "/проверить_пакет") return telegramCheckPackageSafety(chatId, args[0] || "1");
   if (command === "/stats") return telegramStats(chatId);
   if (command === "/drafts" || command === "/черновики") return telegramDrafts(chatId);
   if (command === "/draft" || command === "/черновик") return telegramDraftDetails(chatId, args[0]);
@@ -9296,6 +9929,26 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, buildStyleBrainRecommendations(readStyleBrainProfiles()));
   }
 
+  if (pathname === "/api/content-safety/v1/check-draft" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await checkContentSafetyDraft(payload.draft || payload.draft_id || payload.index || "1"));
+  }
+
+  if (pathname === "/api/content-safety/v1/check-package" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await checkContentSafetyPackage(payload.package || payload.package_id || payload.index || "1"));
+  }
+
+  if (pathname === "/api/content-safety/v1/reviews" && req.method === "GET") {
+    return sendJson(res, 200, buildContentSafetyDashboardData());
+  }
+
+  if (pathname.startsWith("/api/content-safety/v1/review/") && req.method === "GET") {
+    const id = decodeURIComponent(pathname.replace("/api/content-safety/v1/review/", ""));
+    const review = readContentSafetyReviews().find((item) => item.id === id);
+    return sendJson(res, review ? 200 : 404, review ? { ok: true, review } : { ok: false, code: "review_not_found" });
+  }
+
   if (pathname === "/api/project-brain-v2" && req.method === "GET") {
     const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
     const brain = readProjectBrain();
@@ -9526,6 +10179,7 @@ async function router(req, res) {
     if (pathname === "/telegram-center") return send(res, 200, renderTelegramCenter());
     if (pathname === "/project-brain") return send(res, 200, renderProjectBrainDashboard());
     if (pathname === "/style-brain") return send(res, 200, renderStyleBrainDashboard());
+    if (pathname === "/content-safety") return send(res, 200, renderContentSafetyDashboard());
     if (pathname === "/ai-autopilot") return send(res, 200, renderAutopilotDashboard());
     if (pathname === "/ai-autopilot-v1") return send(res, 200, renderAutopilotV1Dashboard());
     if (pathname === "/production-status") return send(res, 200, renderProductionStatus());
