@@ -315,7 +315,24 @@ function readImageQueue() {
 }
 
 async function writeImageQueue(items) {
-  return writeAutopilotV1Collection("imageQueue", IMAGE_QUEUE_FILE, "image_queue", items);
+  storageCache.imageQueue = items;
+  writeJsonBackup(IMAGE_QUEUE_FILE, items);
+  await persistImageQueue(items);
+  const brain = readProjectBrain();
+  const currentResearch = brain.internet_research && typeof brain.internet_research === "object"
+    ? brain.internet_research
+    : {};
+  brain.internet_research = {
+    ...currentResearch,
+    autopilot_v1: {
+      ...(currentResearch.autopilot_v1 || {}),
+      image_queue: items.slice(0, 120),
+      updated_at: new Date().toISOString()
+    }
+  };
+  brain.updated_at = new Date().toISOString();
+  await writeProjectBrain(brain);
+  return items;
 }
 
 function readContentPlan() {
@@ -477,6 +494,7 @@ const storageCache = {
 
 let pgPool = null;
 let storageMode = "json";
+let storageLastError = "";
 
 function pgColumnDate(value, fallback = new Date().toISOString()) {
   return value || fallback;
@@ -497,6 +515,7 @@ async function initializeStorage() {
     await ensureResearchStoriesTable();
     await ensureStoryDnaTable();
     await ensureGeneratedStoriesTable();
+    await ensureImageQueueTable();
     await ensureScheduledPostsTable();
     await ensurePublishingPackagesTable();
     await ensureStyleBrainProfilesTable();
@@ -520,6 +539,7 @@ async function initializeStorage() {
       research_signals: Array.isArray(row.research_signals) ? row.research_signals : [],
       facebook_signals: Array.isArray(row.facebook_signals) ? row.facebook_signals : []
     }));
+    storageCache.imageQueue = (await pgPool.query("select * from image_queue order by created_at desc limit 300")).rows.map(normalizeImageQueueRow);
     storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
     storageCache.styleBrainProfiles = (await pgPool.query("select * from style_brain_profiles order by created_at desc limit 1200")).rows.map(normalizeStyleBrainProfileRow);
@@ -558,6 +578,7 @@ async function initializeStorage() {
   } catch (error) {
     pgPool = null;
     storageMode = "json";
+    storageLastError = error.message;
     console.warn(`Storage: PostgreSQL unavailable, using JSON backup mode. ${error.message}`);
   }
 }
@@ -655,6 +676,37 @@ async function ensureGeneratedStoriesTable() {
     create index if not exists generated_stories_category_idx on generated_stories (category);
     create index if not exists generated_stories_score_idx on generated_stories (viral_prediction_score desc);
     create index if not exists generated_stories_created_at_idx on generated_stories (created_at desc);
+  `);
+}
+
+async function ensureImageQueueTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists image_queue (
+      id text primary key,
+      draft_id text,
+      generated_story_id text,
+      story_idea_id text,
+      story_title text,
+      prompt text not null,
+      style text,
+      status text not null default 'needs_approval',
+      generated_image_url text,
+      visual_analysis jsonb not null default '{}'::jsonb,
+      approval_required boolean not null default true,
+      publish_allowed boolean not null default false,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+    alter table image_queue add column if not exists draft_id text;
+    alter table image_queue add column if not exists generated_story_id text;
+    alter table image_queue add column if not exists story_idea_id text;
+    alter table image_queue add column if not exists visual_analysis jsonb not null default '{}'::jsonb;
+    alter table image_queue add column if not exists generated_image_url text;
+    create index if not exists image_queue_draft_idx on image_queue (draft_id);
+    create index if not exists image_queue_generated_story_idx on image_queue (generated_story_id);
+    create index if not exists image_queue_status_idx on image_queue (status);
+    create index if not exists image_queue_created_at_idx on image_queue (created_at desc);
   `);
 }
 
@@ -1120,6 +1172,61 @@ async function persistGeneratedStories(stories) {
     }
   } catch (error) {
     console.warn(`PostgreSQL generated_stories persist failed: ${error.message}`);
+  }
+}
+
+function normalizeImageQueueRow(row = {}) {
+  return {
+    ...row,
+    visual_analysis: row.visual_analysis && typeof row.visual_analysis === "object" ? row.visual_analysis : {},
+    approval_required: row.approval_required !== false,
+    publish_allowed: Boolean(row.publish_allowed)
+  };
+}
+
+async function persistImageQueue(items) {
+  if (!pgPool) return;
+  try {
+    await ensureImageQueueTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into image_queue (
+          id, draft_id, generated_story_id, story_idea_id, story_title, prompt, style, status,
+          generated_image_url, visual_analysis, approval_required, publish_allowed, created_at, updated_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        on conflict (id) do update set
+          draft_id = excluded.draft_id,
+          generated_story_id = excluded.generated_story_id,
+          story_idea_id = excluded.story_idea_id,
+          story_title = excluded.story_title,
+          prompt = excluded.prompt,
+          style = excluded.style,
+          status = excluded.status,
+          generated_image_url = excluded.generated_image_url,
+          visual_analysis = excluded.visual_analysis,
+          approval_required = excluded.approval_required,
+          publish_allowed = excluded.publish_allowed,
+          updated_at = excluded.updated_at`,
+        [
+          item.id || crypto.randomUUID(),
+          item.draft_id || item.generated_story_id || "",
+          item.generated_story_id || item.draft_id || "",
+          item.story_idea_id || "",
+          item.story_title || "",
+          item.prompt || "",
+          item.style || "",
+          item.status || "needs_approval",
+          item.generated_image_url || "",
+          JSON.stringify(item.visual_analysis || {}),
+          item.approval_required !== false,
+          Boolean(item.publish_allowed),
+          pgColumnDate(item.created_at),
+          pgColumnDate(item.updated_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL image_queue persist failed: ${error.message}`);
   }
 }
 
@@ -9029,6 +9136,119 @@ function securityAudit() {
   };
 }
 
+const productionPersistenceTables = [
+  "stories",
+  "facebook_posts",
+  "competitors",
+  "project_brain",
+  "facebook_connection",
+  "research_stories",
+  "story_dna",
+  "generated_stories",
+  "image_queue",
+  "scheduled_posts",
+  "publishing_packages",
+  "style_brain_profiles",
+  "content_safety_reviews",
+  "emotion_timeline"
+];
+
+function migrationFilesStatus() {
+  const migrationsDir = path.join(ROOT, "migrations");
+  const files = fs.existsSync(migrationsDir)
+    ? fs.readdirSync(migrationsDir).filter((file) => file.endsWith(".sql")).sort()
+    : [];
+  return {
+    runner: "npm run db:migrate",
+    idempotent: true,
+    files_count: files.length,
+    files,
+    startup_ensure_tables: true
+  };
+}
+
+async function buildStorageStatus() {
+  const databaseUrlPresent = Boolean(process.env.DATABASE_URL);
+  const base = {
+    ok: true,
+    database_url_present: databaseUrlPresent,
+    storage_mode: storageMode,
+    postgres_connected: Boolean(pgPool),
+    ssl: process.env.DATABASE_SSL === "false" ? "disabled" : "enabled_by_default",
+    last_error: storageLastError || "",
+    migrations_status: migrationFilesStatus(),
+    expected_tables: productionPersistenceTables,
+    tables_present: Object.fromEntries(productionPersistenceTables.map((table) => [table, false])),
+    current_counts: Object.fromEntries(productionPersistenceTables.map((table) => [table, null])),
+    cache_counts: {
+      stories: readStories().length,
+      facebook_posts: readFacebookPosts().length,
+      competitors: readCompetitors().length,
+      research_stories: readResearchStories().length,
+      story_dna: readStoryDna().length,
+      generated_stories: readGeneratedStories().length,
+      image_queue: readImageQueue().length,
+      scheduled_posts: readScheduledPosts().length,
+      publishing_packages: readPublishingPackages().length,
+      style_brain_profiles: readStyleBrainProfiles().length,
+      content_safety_reviews: readContentSafetyReviews().length,
+      emotion_timeline: readEmotionTimelines().length
+    },
+    safety: {
+      secrets_returned: false,
+      publishing_enabled: false,
+      facebook_posting_enabled: false
+    }
+  };
+  if (!pgPool) {
+    return {
+      ...base,
+      ok: false,
+      message: databaseUrlPresent
+        ? "DATABASE_URL is present, but PostgreSQL is not connected. Check last_error and Vercel env."
+        : "DATABASE_URL is missing. Production is using JSON/serverless state and will not persist workflow data reliably."
+    };
+  }
+  try {
+    await pgPool.query("select 1");
+    const tableRows = await pgPool.query(
+      `select table_name from information_schema.tables where table_schema = 'public' and table_name = any($1::text[])`,
+      [productionPersistenceTables]
+    );
+    const present = new Set(tableRows.rows.map((row) => row.table_name));
+    const tablesPresent = Object.fromEntries(productionPersistenceTables.map((table) => [table, present.has(table)]));
+    const counts = {};
+    for (const table of productionPersistenceTables) {
+      if (!present.has(table)) {
+        counts[table] = null;
+        continue;
+      }
+      const result = await pgPool.query(`select count(*)::integer as count from ${table}`);
+      counts[table] = Number(result.rows[0]?.count || 0);
+    }
+    const missingTables = productionPersistenceTables.filter((table) => !present.has(table));
+    return {
+      ...base,
+      ok: missingTables.length === 0,
+      postgres_connected: true,
+      tables_present: tablesPresent,
+      current_counts: counts,
+      missing_tables: missingTables,
+      message: missingTables.length
+        ? `PostgreSQL connected, but missing tables: ${missingTables.join(", ")}. Run npm run db:migrate or redeploy.`
+        : "PostgreSQL connected and all expected production persistence tables are present."
+    };
+  } catch (error) {
+    return {
+      ...base,
+      ok: false,
+      postgres_connected: false,
+      last_error: error.message,
+      message: "PostgreSQL status check failed."
+    };
+  }
+}
+
 function readFacebookConnection(req) {
   const stored = storageCache.facebookConnection || {};
   if (!req) return stored;
@@ -10734,6 +10954,10 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/project-brain-v2/refresh" && ["GET", "POST"].includes(req.method)) {
     return sendJson(res, 200, await refreshProjectBrainV2Expansion());
+  }
+
+  if (pathname === "/api/storage-status" && req.method === "GET") {
+    return sendJson(res, 200, await buildStorageStatus());
   }
 
   if (pathname === "/api/security-audit" && req.method === "GET") {

@@ -77,9 +77,11 @@ To enable it later, add `BOT_TOKEN` and `CHAT_ID` only to your local `.env` or h
 
 ## Create PostgreSQL Database
 
-Create a PostgreSQL database on your hosting provider, for example Render PostgreSQL, Railway PostgreSQL, Supabase, Neon, or a VPS.
+For Vercel production, the easiest recommended option is **Neon Postgres through the Vercel Marketplace**. It attaches directly to the Vercel project and can create the required `DATABASE_URL` environment variable for Production/Preview/Development.
 
-Copy the database connection string into `DATABASE_URL`.
+Other providers such as Supabase, Railway, Render, or a VPS PostgreSQL also work, but Neon is the lowest-friction path for this Vercel deployment.
+
+Copy the pooled PostgreSQL connection string into `DATABASE_URL`.
 
 For local PostgreSQL, it usually looks like:
 
@@ -89,6 +91,33 @@ DATABASE_SSL=false
 ```
 
 For cloud PostgreSQL, keep SSL enabled. The app uses SSL by default unless `DATABASE_SSL=false`.
+
+For Vercel + Neon, do not set `DATABASE_SSL=false`; leave SSL enabled.
+
+## Vercel + Neon Setup
+
+1. Open Vercel Dashboard.
+2. Open the `ai-story-traffic-platform` project.
+3. Go to **Storage** or **Marketplace**.
+4. Choose **Neon Postgres**.
+5. Create a new Neon database and connect it to the project.
+6. Make sure Vercel adds `DATABASE_URL` to Production environment variables.
+7. Redeploy the latest production deployment.
+8. Open:
+
+```text
+https://ai-story-traffic-platform.vercel.app/api/storage-status
+```
+
+Expected result:
+
+```json
+{
+  "database_url_present": true,
+  "storage_mode": "postgres",
+  "postgres_connected": true
+}
+```
 
 ## Install Dependencies
 
@@ -108,6 +137,37 @@ This creates:
 - `facebook_posts`
 - `competitors`
 - `project_brain`
+- `facebook_connection`
+- `research_stories`
+- `story_dna`
+- `generated_stories`
+- `image_queue`
+- `scheduled_posts`
+- `publishing_packages`
+- `style_brain_profiles`
+- `content_safety_reviews`
+- `emotion_timeline`
+
+All migrations are written to be safe to rerun with `create table if not exists`, `alter table add column if not exists`, and `create index if not exists`.
+
+## Check Storage Status
+
+The production diagnostic endpoint is:
+
+```text
+GET /api/storage-status
+```
+
+It returns:
+
+- `database_url_present`
+- `storage_mode`
+- `postgres_connected`
+- `migrations_status`
+- `tables_present`
+- `current_counts`
+
+It never returns the actual database URL or secrets.
 
 ## Import Old JSON Data
 
