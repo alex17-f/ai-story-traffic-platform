@@ -119,6 +119,8 @@ Expected result:
 }
 ```
 
+On production startup, the app automatically runs the idempotent SQL migrations from `migrations/` before reading tables. You can still run `npm run db:migrate` manually for local databases or one-off verification.
+
 ## Install Dependencies
 
 ```bash

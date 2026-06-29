@@ -500,6 +500,23 @@ function pgColumnDate(value, fallback = new Date().toISOString()) {
   return value || fallback;
 }
 
+async function runDatabaseMigrations(pool = pgPool) {
+  if (!pool) return { ok: false, files: [], error: "PostgreSQL pool is not connected." };
+  const migrationsDir = path.join(ROOT, "migrations");
+  const files = fs.existsSync(migrationsDir)
+    ? fs.readdirSync(migrationsDir).filter((file) => file.endsWith(".sql")).sort()
+    : [];
+  try {
+    for (const file of files) {
+      const sql = fs.readFileSync(path.join(migrationsDir, file), "utf8");
+      if (sql.trim()) await pool.query(sql);
+    }
+    return { ok: true, files, error: "" };
+  } catch (error) {
+    return { ok: false, files, error: error.message };
+  }
+}
+
 async function initializeStorage() {
   if (!process.env.DATABASE_URL) {
     console.log("Storage: JSON backup mode. Set DATABASE_URL to use PostgreSQL.");
@@ -512,6 +529,10 @@ async function initializeStorage() {
       ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false }
     });
     await pgPool.query("select 1");
+    const migrationResult = await runDatabaseMigrations(pgPool);
+    if (!migrationResult.ok) {
+      throw new Error(`Database migrations failed: ${migrationResult.error}`);
+    }
     await ensureResearchStoriesTable();
     await ensureStoryDnaTable();
     await ensureGeneratedStoriesTable();
@@ -9163,7 +9184,8 @@ function migrationFilesStatus() {
     idempotent: true,
     files_count: files.length,
     files,
-    startup_ensure_tables: true
+    startup_ensure_tables: true,
+    startup_auto_migrations: true
   };
 }
 
