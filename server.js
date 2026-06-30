@@ -4381,12 +4381,21 @@ async function emotionEngineGuidanceForGenerator() {
   return recommendations.generator_guidance;
 }
 
+function draftFullStoryWithoutRepeatedHook(draft = {}) {
+  const hook = String(draft.hook || "").trim();
+  const fullStory = String(draft.full_story || "").trim();
+  if (hook && fullStory.startsWith(hook)) {
+    return fullStory.slice(hook.length).trim();
+  }
+  return fullStory;
+}
+
 function contentSafetyTextFromDraft(draft = {}) {
-  return [draft.title, draft.hook, draft.full_story, draft.moral].filter(Boolean).join("\n\n").trim();
+  return [draft.title, draft.hook, draftFullStoryWithoutRepeatedHook(draft), draft.moral].filter(Boolean).join("\n\n").trim();
 }
 
 function editorialTextFromDraft(draft = {}) {
-  return [draft.hook, draft.full_story, draft.moral, draft.title].filter(Boolean).join("\n\n").trim();
+  return [draft.hook, draftFullStoryWithoutRepeatedHook(draft), draft.moral, draft.title].filter(Boolean).join("\n\n").trim();
 }
 
 function contentSafetyTokens(text = "") {
@@ -5341,49 +5350,43 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
   const previousScore = Number(editorialReview?.editorial_score || 0);
   const expectedScore = Math.min(100, Math.max(previousScore + 8, previousScore ? previousScore + 18 : 76));
   const candidateSeed = `${original.id}:${revisionNumber}:${Date.now()}`;
-  const diversityOne = editorialRewriteDiversityForCandidate({
-    original,
-    category: original.category || "betrayal",
-    seed: candidateSeed,
-    revisionNumber,
-    candidateIndex: 0
-  });
-  const firstCandidate = buildEditorialRewriteText({
-    draft: original,
-    review: editorialReview,
-    styleGuidance,
-    emotionGuidance,
-    safetyReview: originalSafety,
-    diversity: diversityOne
-  });
-  const firstSimilarity = editorialRewriteSimilarityCheck(firstCandidate, original);
-  let rewritten = firstCandidate;
-  let similarityCheck = firstSimilarity;
-  if (firstSimilarity.similarity_score >= 38) {
-    const diversityTwo = editorialRewriteDiversityForCandidate({
+  let bestRewriteCandidate = null;
+  for (let candidateIndex = 0; candidateIndex < narrativeDiversityProfiles.length; candidateIndex += 1) {
+    const diversity = editorialRewriteDiversityForCandidate({
       original,
       category: original.category || "betrayal",
-      seed: `${candidateSeed}:regenerate`,
+      seed: `${candidateSeed}:candidate:${candidateIndex}`,
       revisionNumber,
-      candidateIndex: 1
+      candidateIndex
     });
-    const secondCandidate = buildEditorialRewriteText({
+    const candidate = buildEditorialRewriteText({
       draft: original,
       review: editorialReview,
       styleGuidance,
       emotionGuidance,
       safetyReview: originalSafety,
-      diversity: diversityTwo
+      diversity
     });
-    const secondSimilarity = editorialRewriteSimilarityCheck(secondCandidate, original);
-    if (secondSimilarity.similarity_score <= firstSimilarity.similarity_score) {
-      rewritten = secondCandidate;
-      similarityCheck = {
-        ...secondSimilarity,
-        warning: secondSimilarity.warning || "regenerated_for_originality"
-      };
+    const similarity = {
+      ...editorialRewriteSimilarityCheck(candidate, original),
+      attempts: candidateIndex + 1,
+      narrative_frame: diversity.frame_id
+    };
+    const packed = { rewritten: candidate, similarity };
+    if (!bestRewriteCandidate || similarity.similarity_score < bestRewriteCandidate.similarity.similarity_score) {
+      bestRewriteCandidate = packed;
     }
+    if (similarity.similarity_score < 38) break;
   }
+  const rewritten = bestRewriteCandidate.rewritten;
+  const similarityCheck = {
+    ...bestRewriteCandidate.similarity,
+    warning: bestRewriteCandidate.similarity.similarity_score >= 38
+      ? "high_similarity_after_rewrite_retries"
+      : bestRewriteCandidate.similarity.attempts > 1
+        ? "regenerated_for_originality"
+        : ""
+  };
   const now = new Date().toISOString();
   const improvedDraft = {
     ...original,
