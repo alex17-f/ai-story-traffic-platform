@@ -4385,6 +4385,10 @@ function contentSafetyTextFromDraft(draft = {}) {
   return [draft.title, draft.hook, draft.full_story, draft.moral].filter(Boolean).join("\n\n").trim();
 }
 
+function editorialTextFromDraft(draft = {}) {
+  return [draft.hook, draft.full_story, draft.moral, draft.title].filter(Boolean).join("\n\n").trim();
+}
+
 function contentSafetyTokens(text = "") {
   return [...new Set(String(text || "")
     .toLowerCase()
@@ -4494,10 +4498,13 @@ function contentSafetyFacebookRisk(text = "", draft = {}) {
   const excludedDraftIds = contentSafetyExcludedDraftIds(draft.id || "", draft);
   const recentSameCategory = readGeneratedStories().slice(0, 12).filter((item) => !excludedDraftIds.has(item.id) && item.category === draft.category).length;
   const isEditorialRewrite = draft.revision_type === "editorial_rewrite";
-  if (recentSameCategory >= (isEditorialRewrite ? 8 : 5)) issues.push("Тема слишком часто повторялась в последних черновиках.");
+  const hasNarrativeDiversity = Boolean(draft.narrative_frame || draft.diversity_profile?.frame_id || /frame\s+[a-z_]+/i.test(draft.why_it_should_work || ""));
+  if (!hasNarrativeDiversity && recentSameCategory >= (isEditorialRewrite ? 8 : 5)) issues.push("Тема слишком часто повторялась в последних черновиках.");
   const repetitionPenalty = isEditorialRewrite
     ? Math.max(0, recentSameCategory - 5) * 4
-    : Math.max(0, recentSameCategory - 3) * 8;
+    : hasNarrativeDiversity
+      ? Math.max(0, recentSameCategory - 8) * 3
+      : Math.max(0, recentSameCategory - 3) * 8;
   const riskScore = Math.min(100, sensational * 22 + issues.length * 16 + repetitionPenalty);
   return { score: riskScore, risk: contentSafetyRiskLevel(riskScore, 25, 55), issues };
 }
@@ -4835,7 +4842,7 @@ function editorialFeedbackFromScores({ draft, paragraphs, weakest, scores, safet
 async function createEditorialReviewForDraft(ref = "1", options = {}) {
   const draft = options.draft || generatedDraftByRef(ref) || readGeneratedStories().find((item) => item.id === ref);
   if (!draft) return { ok: false, code: "draft_not_found", message: "Generated draft not found." };
-  const text = contentSafetyTextFromDraft(draft);
+  const text = editorialTextFromDraft(draft);
   const paragraphs = editorialParagraphs(text);
   const sentences = editorialSentences(text);
   const styleProfile = styleBrainProfileFromGeneratedStory(draft) || styleBrainProfileFromText({
@@ -6936,6 +6943,83 @@ function moralByPattern(pattern = "", hero = "She", object = "the proof") {
   return endings[pattern] || endings.truth_before_forgiveness;
 }
 
+function narrativeFrameBeats({ diversity, hero, relation, object, setting, turn, conflict, twistDevice, peakEmotion }) {
+  const sharedReveal = `${relation} finally admitted the part that had been missing: ${turn}.`;
+  const beats = {
+    first_person_confession: [
+      `${hero} had expected excuses, not a confession. The hallway still smelled of rain, and somebody's umbrella dripped steadily onto the floor while nobody bent to pick it up.`,
+      `"Start at the beginning," she said.\n\n"There is no beginning that makes me look good," ${relation} answered.`,
+      `The betrayal had grown out of ${conflict}, but the detail that made it real was ${twistDevice}. It was too specific to dismiss and too ordinary to dramatize.`,
+      `${sharedReveal} ${hero} felt ${peakEmotion} first, then the cold embarrassment of realizing how carefully she had been misled.`,
+      `"You chose my trust because it was convenient," she said.\n\n${relation} did not deny it. That was worse than another lie.`
+    ],
+    family_secret_dialogue: [
+      `${setting.charAt(0).toUpperCase() + setting.slice(1)} became a room full of unfinished sentences. Someone moved a chair, then stopped as if noise itself might confess something.`,
+      `"Say the name," ${hero} said.\n\n${relation} looked at ${object}. "If I do, this family changes tonight."`,
+      `${twistDevice} was the part nobody had planned for. It connected the secret to a date, and the date connected it to a person everyone had defended.`,
+      `${sharedReveal} The words did not sound dramatic. They sounded tired, which made them harder to doubt.`,
+      `${hero} did not cry. She asked one question after another until the story stopped protecting the wrong person.`
+    ],
+    object_reveal: [
+      `The hiding place mattered. It was not a drawer people used; it was the kind of place chosen by someone who needed ten seconds and a prayer.`,
+      `"How long has this been here?" ${hero} asked.\n\n${relation} answered too quickly. "I don't know."\n\nThat was when she knew they did.`,
+      `${conflict} had been explained to her as bad luck, stress, even misunderstanding. ${twistDevice} made those explanations look rehearsed.`,
+      `${sharedReveal} ${hero} felt the room tilt, not from surprise alone, but from the insult of how simple the clue had been.`,
+      `She put ${object} on the table. "Now tell it again without protecting yourself."`
+    ],
+    courtroom_memory: [
+      `People walked around them carrying papers, coffee, small private disasters. ${hero} could hear every footstep because ${relation} had stopped speaking.`,
+      `"You signed this," she said.\n\n"I was told it would help."\n\n"Help whom?"`,
+      `${twistDevice} changed the old memory. What the family had called confusion now had a signature, a witness, and a reason.`,
+      `${sharedReveal} The betrayal was not loud. It was administrative, stamped, filed, and left for her to discover too late.`,
+      `${hero} closed the folder. "You don't get to call paperwork a mistake when it cost someone a life."`
+    ],
+    hospital_or_letter_reveal: [
+      `The hospital light made everything look honest, which felt cruel. ${hero} held ${object} with both hands so nobody could say she had imagined the date.`,
+      `"Who was here that night?" she asked.\n\n${relation} rubbed their forehead. "Someone who should have told you."`,
+      `${conflict} had been a story of absence. ${twistDevice} turned it into a story of visits, payments, and choices made behind her back.`,
+      `${sharedReveal} ${hero} felt ${peakEmotion}, but underneath it was grief for all the years spent blaming the wrong silence.`,
+      `She folded ${object} once. "Do not ask me to be grateful for a truth you used as a locked door."`
+    ],
+    neighbor_witness: [
+      `The neighbor did not enjoy telling it. That was why ${hero} believed her. Gossip arrives smiling; truth often arrives ashamed.`,
+      `"I saw who came in," the neighbor said.\n\n${relation} whispered, "Please stop."\n\n${hero} did not stop.`,
+      `${twistDevice} gave the story a second pair of eyes. The betrayal was no longer one person's accusation; it had a witness.`,
+      `${sharedReveal} The old stairwell seemed smaller after that, as if every door had heard enough.`,
+      `${hero} thanked the neighbor and turned back to the family. "Now we talk without pretending I am the problem."`
+    ],
+    child_question_hook: [
+      `Children ask questions adults spend years avoiding. That morning, the room learned how sharp a small voice could be.`,
+      `"Who told you to draw that?" ${hero} asked softly.\n\n"No one," the child said. "I saw it."`,
+      `${object} became the clue everyone had ignored because it came from someone too young to be feared. ${twistDevice} made the child's question impossible to brush away.`,
+      `${sharedReveal} ${hero} felt ${peakEmotion} and then a fierce need to protect the child from carrying adult lies.`,
+      `"No more whispering in front of children," she said. "They hear more than we survive."`
+    ],
+    inheritance_document_twist: [
+      `Funeral flowers were still in a bucket near the sink. That made the fresh ink on ${object} feel almost obscene.`,
+      `"This was changed after she died," ${hero} said.\n\n${relation} looked offended too late.`,
+      `${twistDevice} turned grief into evidence. The betrayal had waited until everyone was too tired to ask careful questions.`,
+      `${sharedReveal} ${hero} did not care about the money in that moment. She cared that mourning had been used as cover.`,
+      `She slid ${object} back into the folder. "If you wanted the house, you should not have stolen the truth with it."`
+    ],
+    old_photo_reveal: [
+      `Dust clung to ${object}, but the date on the back was clean. Someone had handled it recently and put it back with trembling care.`,
+      `"Who is standing next to him?" ${hero} asked.\n\n${relation} answered, "Nobody important," which was the first real lie of the evening.`,
+      `${twistDevice} cracked open a memory the family had polished for years. The betrayal was not new; only the proof was.`,
+      `${sharedReveal} ${hero} felt ${peakEmotion} because the picture did not accuse anyone. It simply refused to disappear.`,
+      `She placed the photo where everyone could see it. "Tell me which part of my life this picture stole."`
+    ],
+    missed_call_or_voice_message: [
+      `The voice message was only forty seconds long. It still managed to age everyone in the room.`,
+      `"Turn it off," ${relation} said.\n\n"No," ${hero} answered. "You had years to turn off the lie."`,
+      `${twistDevice} made the betrayal impossible to edit. Tone, pause, breath, fear: all of it was there.`,
+      `${sharedReveal} ${hero} felt ${peakEmotion}, then a strange calm, because recorded truth does not blink.`,
+      `When the message ended, nobody reached for the phone. They waited for ${hero}, because now she was the one holding the ending.`
+    ]
+  };
+  return beats[diversity.frame_id] || beats.object_reveal;
+}
+
 function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, keywords, emotionGuidance = {} }) {
   const plan = storyLengthPlan(length);
   const hero = diversity.hero || "Nina";
@@ -6948,15 +7032,17 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
   const peakEmotion = emotionGuidance.peak_emotion || "shock";
   const paragraphs = [
     opening,
-    `${setting.charAt(0).toUpperCase() + setting.slice(1)} suddenly felt too small for three people and one secret. ${hero} noticed ordinary things first: a chair pushed back too far, a wet sleeve, the way ${relation} kept looking at ${object} instead of at her.`,
-    `"Say it plainly," ${hero} said.\n\n${relation} swallowed. "If I say it plainly, you will hate me."\n\n"I already hate guessing."`,
-    `The conflict had looked simple from the outside: ${diversity.conflict}. But simple stories are usually the ones someone has trimmed until the sharp parts are hidden.`,
-    `${hero} picked up ${object}. The detail that changed everything was small: ${twistDevice}. It turned suspicion into proof and proof into a question nobody wanted to answer.`,
-    `${relation} finally admitted the part that had been missing: ${turn}. The room did not explode. It went quiet in a worse way, the way a person goes quiet when the truth has taken away their last excuse.`,
-    `${hero} felt ${peakEmotion} first, then anger, then something more painful: the realization that she had been pushed toward the wrong conclusion on purpose.`,
-    `"You let me blame myself," she said.\n\n"No," ${relation} answered. "I let you blame the safest person."`,
-    `That sentence changed the betrayal. It was no longer only about what had happened. It was about who had been chosen to carry the shame.`,
-    `By the time the kettle clicked off, nobody was pretending anymore. ${hero} did not ask for promises. She asked for dates, names, and the parts of the story that had been left out.`,
+    ...narrativeFrameBeats({
+      diversity,
+      hero,
+      relation,
+      object,
+      setting,
+      turn,
+      conflict: diversity.conflict,
+      twistDevice,
+      peakEmotion
+    }),
     moralByPattern(diversity.moral_pattern, hero, object),
     `${profile.moral || "A family can survive a painful truth better than a comfortable lie."}`
   ];
