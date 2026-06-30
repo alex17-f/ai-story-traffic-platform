@@ -5282,6 +5282,24 @@ function editorialRewriteSimilarityCheck(candidate = {}, original = {}) {
   };
 }
 
+function generatedStorySimilarityCheck(candidate = {}) {
+  const candidateText = contentSafetyTextFromDraft(candidate);
+  const sources = readGeneratedStories()
+    .slice(0, 100)
+    .map((item) => ({
+      source_type: item.revision_type || "generated",
+      source_reference: item.id,
+      text: contentSafetyTextFromDraft(item)
+    }));
+  const best = contentSafetyMaxSimilarity(candidateText, sources);
+  return {
+    similarity_score: best.score,
+    source_type: best.source_type,
+    source_reference: best.source_reference,
+    warning: best.score >= 38 ? "generated_regenerated_for_originality" : ""
+  };
+}
+
 function editorialRewriteDiversityForCandidate({ original, category, seed, revisionNumber, candidateIndex }) {
   const memory = narrativeBatchMemory();
   const hash = crypto.createHash("sha256").update(String(original.id || seed || "")).digest()[0];
@@ -6849,6 +6867,26 @@ function narrativeBatchMemory() {
   };
 }
 
+function cloneNarrativeBatchMemory(memory = null) {
+  const cloned = narrativeBatchMemory();
+  if (!memory) return cloned;
+  for (const key of Object.keys(cloned)) {
+    for (const value of memory[key] || []) {
+      cloned[key].add(value);
+    }
+  }
+  return cloned;
+}
+
+function commitNarrativeBatchMemory(target = null, source = null) {
+  if (!target || !source) return;
+  for (const key of Object.keys(narrativeBatchMemory())) {
+    for (const value of source[key] || []) {
+      target[key]?.add(value);
+    }
+  }
+}
+
 function pickFresh(list = [], seed = "", memory, key = "") {
   if (!list.length) return "";
   const used = memory?.[key];
@@ -6885,6 +6923,72 @@ function selectNarrativeFrame(index = 0, requestedFrame = "", memory = null) {
   return narrativeDiversityProfiles[Number(index || 0) % narrativeDiversityProfiles.length];
 }
 
+function narrativeTexturePack(seed = "", frameId = "") {
+  const detailOne = [
+    "The kettle clicked off twice because nobody remembered to pour the water.",
+    "A pharmacy bag rustled under the chair whenever someone moved their foot.",
+    "The hallway smelled of wet coats and cheap soap from the stairwell.",
+    "A birthday ribbon was still taped to the cupboard, suddenly looking foolish.",
+    "The wall clock ticked too loudly, as if it had been waiting for this moment.",
+    "A cracked sugar bowl sat open on the table, full of spoons no one touched.",
+    "Rain tapped the balcony glass in small nervous bursts.",
+    "Someone's phone kept lighting up, but nobody was brave enough to read it.",
+    "The old radiator hissed, then went quiet at the worst possible second.",
+    "A grocery bag had split near the door, oranges rolling under the shoe rack."
+  ];
+  const bodyDetail = [
+    "Her fingers smelled faintly of dish soap, a ridiculous ordinary thing in the middle of betrayal.",
+    "He kept smoothing the same corner of the tablecloth until the fabric twisted under his thumb.",
+    "One chair was pushed back too far, leaving a pale square on the linoleum.",
+    "The neighbor's radio murmured through the wall, cheerful and completely out of place.",
+    "A child's mitten lay on the windowsill, drying beside the proof everyone feared.",
+    "The soup on the stove formed a skin because nobody had the sense to stir it.",
+    "Dust moved in the lamp light when the folder opened.",
+    "A bus ticket fell from her pocket and stuck to the damp floor.",
+    "His glasses fogged when he tried to speak, and that small helplessness made her angrier.",
+    "The family dog scratched once behind the closed door, then gave up."
+  ];
+  const dialogue = [
+    `"Say it without looking at the floor," she said.`,
+    `"Do not make me guess my own life," she said.`,
+    `"If this is nothing, why are your hands shaking?" she asked.`,
+    `"I am tired of being the last person in this family to know," she said.`,
+    `"You wanted peace," she said. "You built it out of my ignorance."`,
+    `"One honest sentence," she said. "That is all I am asking for."`,
+    `"Do not call it protection if I was the one paying for it," she said.`,
+    `"Look at me when you turn my past into an excuse," she said.`,
+    `"I can survive the truth," she said. "I am not sure I can survive another lie."`,
+    `"Start from the night everyone stopped answering my questions," she said.`
+  ];
+  const aftershock = [
+    "What hurt most was not the fact itself, but how carefully everyone had learned to step around it.",
+    "She realized then that a family can rehearse silence until it sounds like concern.",
+    "The room did not explode. It shrank, making every breath feel borrowed.",
+    "Nobody looked guilty in the same way, and that made choosing anger harder.",
+    "For the first time, the old story had seams, and every seam had a name.",
+    "The betrayal had not arrived as thunder. It had arrived as paperwork, pauses, and lowered eyes.",
+    "She felt the strange loneliness of being right after years of being called difficult.",
+    "All the small kindnesses from the past suddenly needed to be counted again.",
+    "The truth did not free her immediately. It simply opened the door she had been pushing for years.",
+    "By then she understood that the secret had raised everyone in the house except her."
+  ];
+  const titles = [
+    "{hero} Asked One Question, and {relation} Could Not Hide the Truth",
+    "The {object} on the Table Changed What {hero} Believed About Her Family",
+    "{hero} Thought It Was Betrayal Until the Last Detail Broke the Silence",
+    "When {hero} Found {object}, the Old Family Lie Finally Had a Name",
+    "{relation} Looked Away, and {hero} Understood the Secret Was Bigger",
+    "One Small {object} Made the Whole Family Stop Pretending"
+  ];
+  return {
+    detail_one: pick(detailOne, `${seed}:${frameId}:detail-one`),
+    body_detail: pick(bodyDetail, `${seed}:${frameId}:body-detail`),
+    dialogue: pick(dialogue, `${seed}:${frameId}:dialogue`),
+    aftershock: pick(aftershock, `${seed}:${frameId}:aftershock`),
+    title_template: pick(titles, `${seed}:${frameId}:title`)
+  };
+}
+
 function buildNarrativeDiversityProfile({ category, seed, baseProfile = {}, frame, batchMemory }) {
   const selected = frame || selectNarrativeFrame(0, "", batchMemory);
   return {
@@ -6896,6 +7000,7 @@ function buildNarrativeDiversityProfile({ category, seed, baseProfile = {}, fram
     setting: pickFresh(selected.settings, `${seed}:setting:${selected.id}`, null, ""),
     twist_device: pickFresh(selected.twist_devices, `${seed}:twist:${selected.id}`, batchMemory, "twist_devices"),
     moral_pattern: pickFresh(selected.moral_patterns, `${seed}:moral:${selected.id}`, batchMemory, "moral_patterns"),
+    texture: narrativeTexturePack(seed, selected.id),
     conflict: baseProfile.conflict || "a family betrayal comes into the open",
     turn: baseProfile.turn || "the person who looked guilty had been covering for someone weaker",
     moral: baseProfile.moral || "Truth does not make pain smaller, but it stops the lie from growing."
@@ -7029,21 +7134,30 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
   const setting = diversity.setting || profile.setting || "small kitchen";
   const turn = diversity.turn || profile.turn;
   const twistDevice = diversity.twist_device || "hidden document";
+  const texture = diversity.texture || narrativeTexturePack(`${hero}:${object}:${turn}`, diversity.frame_id);
   const opening = narrativeOpening({ diversity, hero, relation, object });
   const peakEmotion = emotionGuidance.peak_emotion || "shock";
+  const frameBeats = narrativeFrameBeats({
+    diversity,
+    hero,
+    relation,
+    object,
+    setting,
+    turn,
+    conflict: diversity.conflict,
+    twistDevice,
+    peakEmotion
+  });
   const paragraphs = [
     opening,
-    ...narrativeFrameBeats({
-      diversity,
-      hero,
-      relation,
-      object,
-      setting,
-      turn,
-      conflict: diversity.conflict,
-      twistDevice,
-      peakEmotion
-    }),
+    `${texture.detail_one} ${texture.body_detail}`,
+    frameBeats[0],
+    `${texture.dialogue}\n\nThat was when ${setting} stopped feeling like a home and started feeling like a room full of witnesses.`,
+    frameBeats[1],
+    frameBeats[2],
+    texture.aftershock,
+    frameBeats[3],
+    frameBeats[4],
     moralByPattern(diversity.moral_pattern, hero, object),
     `${profile.moral || "A family can survive a painful truth better than a comfortable lie."}`
   ];
@@ -7051,7 +7165,10 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
   if (!selected.some((paragraph) => paragraph.includes(profile.moral || ""))) {
     selected[selected.length - 1] = paragraphs[paragraphs.length - 2];
   }
-  const title = `${hero} found ${object}, and ${relation} finally told the part everyone hid`;
+  const title = String(texture.title_template || "{hero} found {object}, and {relation} finally told the part everyone hid")
+    .replaceAll("{hero}", hero)
+    .replaceAll("{object}", object)
+    .replaceAll("{relation}", relation);
   const keywordLine = keywords.length ? ` Research signals used only as inspiration: ${keywords.slice(0, 4).join(", ")}.` : "";
   return {
     title,
@@ -7520,19 +7637,70 @@ async function generateOriginalStoryV2(payload = {}) {
   const topEmotion = researchSignals.find((item) => item.emotion)?.emotion || "";
   const emotion = String(payload.emotion || topEmotion || "anxiety and hope").trim();
   const seed = `${category}:${emotion}:${length}:${payload.variant_index || 0}:${Date.now()}:${crypto.randomUUID()}`;
-  const profile = storyCategoryProfile(category, seed);
-  const diversityFrame = selectNarrativeFrame(payload.variant_index || 0, payload.narrative_frame || payload.frame_id || "", payload.batch_memory || null);
-  const diversity = buildNarrativeDiversityProfile({
-    category,
-    seed,
-    baseProfile: profile,
-    frame: diversityFrame,
-    batchMemory: payload.batch_memory || null
-  });
   const keywords = researchKeywordBlend(researchSignals);
   const styleGuidance = await styleBrainGuidanceForGenerator();
   const emotionGuidance = await emotionEngineGuidanceForGenerator();
-  const draft = buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance, emotionGuidance, diversity });
+  const sharedBatchMemory = payload.batch_memory || null;
+  const baseFrameIndex = Number(payload.frame_index ?? payload.variant_index ?? 0);
+  const requestedFrame = payload.narrative_frame || payload.frame_id || "";
+  const candidateOffsets = [0, 5, 3, 8, 1, 6, 4, 9, 2, 7];
+  let bestCandidate = null;
+  for (let attempt = 0; attempt < candidateOffsets.length; attempt += 1) {
+    const offset = candidateOffsets[attempt];
+    const candidateSeed = `${seed}:candidate:${attempt}:${offset}`;
+    const candidateMemory = sharedBatchMemory ? cloneNarrativeBatchMemory(sharedBatchMemory) : narrativeBatchMemory();
+    const profile = storyCategoryProfile(category, `${candidateSeed}:profile`);
+    const diversityFrame = selectNarrativeFrame(
+      baseFrameIndex + offset,
+      attempt === 0 ? requestedFrame : "",
+      candidateMemory
+    );
+    const diversity = buildNarrativeDiversityProfile({
+      category,
+      seed: candidateSeed,
+      baseProfile: profile,
+      frame: diversityFrame,
+      batchMemory: candidateMemory
+    });
+    const draft = buildGeneratedStoryText({
+      profile,
+      emotion,
+      length,
+      seed: candidateSeed,
+      keywords,
+      styleGuidance,
+      emotionGuidance,
+      diversity
+    });
+    const generationSimilarity = {
+      ...generatedStorySimilarityCheck({
+        title: draft.title,
+        hook: draft.hook,
+        full_story: draft.full_story,
+        moral: draft.moral
+      }),
+      attempts: attempt + 1,
+      candidate_offset: offset,
+      narrative_frame: diversity.frame_id
+    };
+    const candidate = { profile, diversity, draft, generationSimilarity, memory: candidateMemory };
+    if (!bestCandidate || generationSimilarity.similarity_score < bestCandidate.generationSimilarity.similarity_score) {
+      bestCandidate = candidate;
+    }
+    if (generationSimilarity.similarity_score < 38) break;
+  }
+  commitNarrativeBatchMemory(sharedBatchMemory, bestCandidate?.memory);
+  const profile = bestCandidate.profile;
+  const diversity = bestCandidate.diversity;
+  const draft = bestCandidate.draft;
+  const generationSimilarity = {
+    ...bestCandidate.generationSimilarity,
+    warning: bestCandidate.generationSimilarity.similarity_score >= 38
+      ? "generated_similarity_remains_high_after_retries"
+      : bestCandidate.generationSimilarity.attempts > 1
+        ? "generated_regenerated_for_originality"
+        : ""
+  };
   const score = viralPredictionScore(researchSignals, facebookSignals, length);
   const story = {
     id: crypto.randomUUID(),
@@ -7549,6 +7717,7 @@ async function generateOriginalStoryV2(payload = {}) {
       `Uses ${researchSignals.filter((item) => item.source_status === "live_search").length} live research signals from high-scoring public results.`,
       facebookSignals.length ? `Calibrated against ${facebookSignals.length} top Facebook posts from your loaded Page data.` : "Facebook Page data is not loaded enough yet, so scoring leans more on research signals.",
       `Built around ${category}, ${emotion}, frame ${diversity.frame_id}, object ${diversity.object}, twist ${diversity.twist_device}.`,
+      generationSimilarity.warning ? `Pre-safety similarity check: ${generationSimilarity.warning}, score ${generationSimilarity.similarity_score}.` : `Pre-safety similarity check passed, score ${generationSimilarity.similarity_score}.`,
       `Style Brain guidance: ${styleGuidance.opening_style}, ${styleGuidance.dialogue_density}, ${styleGuidance.paragraph_rhythm}.`,
       `Emotion Engine guidance: ${emotionGuidance.rhythm || "slow-build emotional escalation"}, peak near ${emotionGuidance.peak_position || 70}%, ending with ${emotionGuidance.ending_emotion || "relief"}.`,
       "Original draft: new characters, new setting, new ending, no copied text."
@@ -7559,6 +7728,7 @@ async function generateOriginalStoryV2(payload = {}) {
     emotion_engine_guidance: emotionGuidance,
     narrative_frame: diversity.frame_id,
     diversity_profile: diversity,
+    pre_safety_similarity: generationSimilarity,
     status: "needs_approval",
     approval_required: true,
     publish_allowed: false,
@@ -7608,11 +7778,13 @@ async function generateOriginalStoriesV2(payload = {}) {
   const emotionTimelines = [];
   const editorialReviews = [];
   const batchMemory = narrativeBatchMemory();
+  const batchFrameOffset = crypto.createHash("sha256").update(crypto.randomUUID()).digest()[0] % narrativeDiversityProfiles.length;
   for (let index = 0; index < count; index += 1) {
     const result = await generateOriginalStoryV2({
       ...payload,
       count: 1,
       variant_index: index,
+      frame_index: batchFrameOffset + index,
       batch_memory: batchMemory
     });
     generated.push({
