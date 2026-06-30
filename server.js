@@ -5284,8 +5284,9 @@ function editorialRewriteSimilarityCheck(candidate = {}, original = {}) {
 
 function editorialRewriteDiversityForCandidate({ original, category, seed, revisionNumber, candidateIndex }) {
   const memory = narrativeBatchMemory();
+  const hash = crypto.createHash("sha256").update(String(original.id || seed || "")).digest()[0];
   const frame = selectNarrativeFrame(
-    Number(revisionNumber || 0) + Number(candidateIndex || 0) + 1,
+    hash + Number(revisionNumber || 0) + Number(candidateIndex || 0) * 3 + 1,
     "",
     memory
   );
