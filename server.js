@@ -4491,9 +4491,14 @@ function contentSafetyFacebookRisk(text = "", draft = {}) {
   if (sensational) issues.push("В тексте есть слишком агрессивные или clickbait-фразы.");
   if (/\b(read more|link in comments|continue here|продолжение здесь|ссылка в комментар)/i.test(text)) issues.push("Facebook-пост/история не должны звучать как engagement bait.");
   if ((draft.title || "").length > 130) issues.push("Заголовок слишком длинный и может выглядеть как clickbait.");
-  const recentSameCategory = readGeneratedStories().slice(0, 12).filter((item) => item.id !== draft.id && item.category === draft.category).length;
-  if (recentSameCategory >= 5) issues.push("Тема слишком часто повторялась в последних черновиках.");
-  const riskScore = Math.min(100, sensational * 22 + issues.length * 16 + Math.max(0, recentSameCategory - 3) * 8);
+  const excludedDraftIds = contentSafetyExcludedDraftIds(draft.id || "", draft);
+  const recentSameCategory = readGeneratedStories().slice(0, 12).filter((item) => !excludedDraftIds.has(item.id) && item.category === draft.category).length;
+  const isEditorialRewrite = draft.revision_type === "editorial_rewrite";
+  if (recentSameCategory >= (isEditorialRewrite ? 8 : 5)) issues.push("Тема слишком часто повторялась в последних черновиках.");
+  const repetitionPenalty = isEditorialRewrite
+    ? Math.max(0, recentSameCategory - 5) * 4
+    : Math.max(0, recentSameCategory - 3) * 8;
+  const riskScore = Math.min(100, sensational * 22 + issues.length * 16 + repetitionPenalty);
   return { score: riskScore, risk: contentSafetyRiskLevel(riskScore, 25, 55), issues };
 }
 
