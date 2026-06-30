@@ -19,6 +19,7 @@ const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
 const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
 const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
+const PREPUBLISH_PREVIEWS_FILE = path.join(ROOT, "data", "prepublish_previews.json");
 const STYLE_BRAIN_PROFILES_FILE = path.join(ROOT, "data", "style_brain_profiles.json");
 const CONTENT_SAFETY_REVIEWS_FILE = path.join(ROOT, "data", "content_safety_reviews.json");
 const EMOTION_TIMELINE_FILE = path.join(ROOT, "data", "emotion_timeline.json");
@@ -394,6 +395,17 @@ async function writePublishingPackages(items) {
   return items;
 }
 
+function readPrepublishPreviews() {
+  return storageCache.prepublishPreviews || [];
+}
+
+async function writePrepublishPreviews(items) {
+  storageCache.prepublishPreviews = items;
+  writeJsonBackup(PREPUBLISH_PREVIEWS_FILE, items);
+  await persistPrepublishPreviews(items);
+  return items;
+}
+
 function readStyleBrainProfiles() {
   return storageCache.styleBrainProfiles || [];
 }
@@ -474,6 +486,7 @@ const storageCache = {
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
   scheduledPosts: readJsonArray(SCHEDULED_POSTS_FILE),
   publishingPackages: readJsonArray(PUBLISHING_PACKAGES_FILE),
+  prepublishPreviews: readJsonArray(PREPUBLISH_PREVIEWS_FILE),
   styleBrainProfiles: readJsonArray(STYLE_BRAIN_PROFILES_FILE),
   contentSafetyReviews: readJsonArray(CONTENT_SAFETY_REVIEWS_FILE),
   emotionTimelines: readJsonArray(EMOTION_TIMELINE_FILE),
@@ -552,6 +565,7 @@ async function initializeStorage() {
     await ensureImageQueueTable();
     await ensureScheduledPostsTable();
     await ensurePublishingPackagesTable();
+    await ensurePrepublishPreviewsTable();
     await ensureStyleBrainProfilesTable();
     await ensureContentSafetyReviewsTable();
     await ensureEditorialReviewsTable();
@@ -573,6 +587,7 @@ async function initializeStorage() {
     storageCache.imageQueue = (await pgPool.query("select * from image_queue order by created_at desc limit 300")).rows.map(normalizeImageQueueRow);
     storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
+    storageCache.prepublishPreviews = (await pgPool.query("select * from prepublish_previews order by created_at desc limit 300")).rows.map(normalizePrepublishPreviewRow);
     storageCache.styleBrainProfiles = (await pgPool.query("select * from style_brain_profiles order by created_at desc limit 1200")).rows.map(normalizeStyleBrainProfileRow);
     storageCache.contentSafetyReviews = (await pgPool.query("select * from content_safety_reviews order by created_at desc limit 1000")).rows.map(normalizeContentSafetyReviewRow);
     storageCache.editorialReviews = (await pgPool.query("select * from editorial_reviews order by created_at desc limit 1200")).rows.map(normalizeEditorialReviewRow);
@@ -794,6 +809,29 @@ async function ensurePublishingPackagesTable() {
     create index if not exists publishing_packages_status_idx on publishing_packages (status);
     create index if not exists publishing_packages_created_at_idx on publishing_packages (created_at desc);
     create index if not exists publishing_packages_draft_idx on publishing_packages (draft_id);
+  `);
+}
+
+async function ensurePrepublishPreviewsTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists prepublish_previews (
+      id text primary key,
+      package_id text not null,
+      post_text text not null,
+      image_prompt_id text,
+      scheduled_time timestamptz,
+      safety_score integer not null default 0,
+      editorial_score integer not null default 0,
+      readiness_score integer not null default 0,
+      expected_reaction text,
+      risk_warnings_json jsonb not null default '[]'::jsonb,
+      checklist_json jsonb not null default '[]'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists prepublish_previews_package_idx on prepublish_previews (package_id);
+    create index if not exists prepublish_previews_created_at_idx on prepublish_previews (created_at desc);
+    create index if not exists prepublish_previews_readiness_idx on prepublish_previews (readiness_score desc);
   `);
 }
 
@@ -1442,6 +1480,60 @@ async function persistPublishingPackages(items) {
     }
   } catch (error) {
     console.warn(`PostgreSQL publishing_packages persist failed: ${error.message}`);
+  }
+}
+
+function normalizePrepublishPreviewRow(row = {}) {
+  return {
+    ...row,
+    safety_score: Number(row.safety_score || 0),
+    editorial_score: Number(row.editorial_score || 0),
+    readiness_score: Number(row.readiness_score || 0),
+    risk_warnings_json: Array.isArray(row.risk_warnings_json) ? row.risk_warnings_json : [],
+    checklist_json: Array.isArray(row.checklist_json) ? row.checklist_json : []
+  };
+}
+
+async function persistPrepublishPreviews(items) {
+  if (!pgPool) return;
+  try {
+    await ensurePrepublishPreviewsTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into prepublish_previews (
+          id, package_id, post_text, image_prompt_id, scheduled_time, safety_score,
+          editorial_score, readiness_score, expected_reaction, risk_warnings_json,
+          checklist_json, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        on conflict (id) do update set
+          package_id = excluded.package_id,
+          post_text = excluded.post_text,
+          image_prompt_id = excluded.image_prompt_id,
+          scheduled_time = excluded.scheduled_time,
+          safety_score = excluded.safety_score,
+          editorial_score = excluded.editorial_score,
+          readiness_score = excluded.readiness_score,
+          expected_reaction = excluded.expected_reaction,
+          risk_warnings_json = excluded.risk_warnings_json,
+          checklist_json = excluded.checklist_json`,
+        [
+          item.id || crypto.randomUUID(),
+          item.package_id || "",
+          item.post_text || "",
+          item.image_prompt_id || "",
+          item.scheduled_time || null,
+          Number(item.safety_score || 0),
+          Number(item.editorial_score || 0),
+          Number(item.readiness_score || 0),
+          item.expected_reaction || "",
+          JSON.stringify(Array.isArray(item.risk_warnings_json) ? item.risk_warnings_json : []),
+          JSON.stringify(Array.isArray(item.checklist_json) ? item.checklist_json : []),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL prepublish_previews persist failed: ${error.message}`);
   }
 }
 
@@ -8914,6 +9006,158 @@ function buildReadinessGateDashboardData() {
   };
 }
 
+function latestPrepublishPreviews(limit = 20) {
+  return [...readPrepublishPreviews()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function prepublishPreviewByRef(ref = "1") {
+  const index = Number(ref);
+  if (Number.isInteger(index) && index >= 1) return latestPrepublishPreviews(20)[index - 1] || null;
+  return readPrepublishPreviews().find((item) => item.id === ref || item.package_id === ref) || null;
+}
+
+function prepublishFacebookPostText(draft = {}) {
+  const optimized = optimizeFacebookPost({
+    title: draft.title || "",
+    facebook_text: draft.hook || "",
+    website_text: draft.full_story || draft.moral || ""
+  });
+  const text = stripLinks(optimized.facebook_text || draft.hook || draft.title || "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return text || "Preview unavailable: draft text is missing.";
+}
+
+function prepublishExpectedReaction({ draft = {}, editorialScore = 0, readinessScore = 0, safetyScore = 0 }) {
+  const emotion = draft.emotion || "emotional curiosity";
+  const category = draft.category || "life story";
+  if (readinessScore >= 95 && editorialScore >= 78 && safetyScore >= 74) {
+    return `Likely strong curiosity and comments: ${category} with ${emotion} has enough hook strength, safety and editorial readiness for a manual test post.`;
+  }
+  if (readinessScore >= 75) {
+    return `Moderate reaction expected: the story is structurally ready, but manual review should watch the hook and first comments.`;
+  }
+  return "Weak or risky reaction expected: package is not fully ready and should not move toward publishing.";
+}
+
+function prepublishRiskWarnings(readiness = {}, details = {}) {
+  const warnings = [];
+  if (readiness.status !== "ready") warnings.push(`Readiness status is ${readiness.status}; preview is blocked from publishing.`);
+  if ((readiness.blockers_json || []).length) {
+    warnings.push(...readiness.blockers_json.slice(0, 4).map((item) => `${item.code}: ${item.message}`));
+  }
+  if (readiness.safety_review?.facebook_risk && readiness.safety_review.facebook_risk !== "low") warnings.push(`Facebook risk is ${readiness.safety_review.facebook_risk}.`);
+  if (readiness.safety_review?.policy_risk && readiness.safety_review.policy_risk !== "low") warnings.push(`Policy risk is ${readiness.safety_review.policy_risk}.`);
+  if (!details.image_prompt?.id) warnings.push("Approved image prompt reference is missing.");
+  if (!details.schedule?.scheduled_time) warnings.push("Scheduled time is missing.");
+  warnings.push("Simulation only: no Facebook post, no write permission, no autopublishing.");
+  return [...new Set(warnings)].map((message) => ({ message }));
+}
+
+function prepublishChecklist(readiness = {}, details = {}) {
+  return [
+    { item: "Package exists", passed: Boolean(readiness.package_id) },
+    { item: "Package approved", passed: readiness.details?.package_status === "approved" },
+    { item: "Content Safety passed", passed: Boolean(readiness.checks?.safety_passed) },
+    { item: "Editorial score >= 75", passed: Boolean(readiness.checks?.editorial_passed) },
+    { item: "Approved image prompt attached", passed: Boolean(readiness.checks?.image_approved) },
+    { item: "Schedule exists", passed: Boolean(readiness.checks?.schedule_exists) },
+    { item: "Readiness score 100", passed: Number(readiness.readiness_score || 0) >= 100 },
+    { item: "publish_allowed remains false", passed: readiness.package?.publish_allowed === false },
+    { item: "No Facebook write action", passed: true },
+    { item: "Manual human approval still required", passed: true }
+  ].map((row) => ({
+    ...row,
+    note: row.passed ? "ok" : "needs attention"
+  }));
+}
+
+async function createPrepublishPreviewForPackage(ref = "1") {
+  const readiness = await readinessGateCheckPackage(ref || "1");
+  if (readiness.status !== "ready") {
+    return {
+      ok: false,
+      module: "Pre-Publish Simulator v1",
+      code: "package_not_ready",
+      message: "Package must pass Final Readiness Gate before preview.",
+      readiness,
+      safety: { publishing_enabled: false, facebook_posting_enabled: false, write_permissions_required: false }
+    };
+  }
+  const details = publishingPackageDetails(readiness.package);
+  const draft = details?.draft || {};
+  const imagePrompt = details?.image_prompt || {};
+  const schedule = details?.schedule || {};
+  const preview = {
+    id: crypto.randomUUID(),
+    package_id: readiness.package_id,
+    post_text: prepublishFacebookPostText(draft),
+    image_prompt_id: imagePrompt.id || "",
+    scheduled_time: schedule.scheduled_time || readiness.details?.scheduled_time || null,
+    safety_score: Number(readiness.safety_review?.safety_score || 0),
+    editorial_score: Number(readiness.editorial?.final_editorial_score || 0),
+    readiness_score: Number(readiness.readiness_score || 0),
+    expected_reaction: prepublishExpectedReaction({
+      draft,
+      editorialScore: Number(readiness.editorial?.final_editorial_score || 0),
+      readinessScore: Number(readiness.readiness_score || 0),
+      safetyScore: Number(readiness.safety_review?.safety_score || 0)
+    }),
+    risk_warnings_json: prepublishRiskWarnings(readiness, details),
+    checklist_json: prepublishChecklist(readiness, details),
+    created_at: new Date().toISOString()
+  };
+  const next = [preview, ...readPrepublishPreviews()].slice(0, 300);
+  await writePrepublishPreviews(next);
+  return {
+    ok: true,
+    module: "Pre-Publish Simulator v1",
+    preview,
+    package: readiness.package,
+    draft: {
+      id: draft.id || "",
+      title: draft.title || "",
+      category: draft.category || "",
+      emotion: draft.emotion || ""
+    },
+    image_prompt: {
+      id: imagePrompt.id || "",
+      status: imagePrompt.status || "",
+      prompt: imagePrompt.prompt || "",
+      generated_image_url: imagePrompt.generated_image_url || ""
+    },
+    schedule: {
+      id: schedule.id || "",
+      scheduled_time: schedule.scheduled_time || ""
+    },
+    readiness,
+    safety: { publishing_enabled: false, facebook_posting_enabled: false, write_permissions_required: false }
+  };
+}
+
+function buildPrepublishDashboardData() {
+  const previews = latestPrepublishPreviews(20);
+  const previewedPackageIds = new Set(previews.map((item) => item.package_id));
+  const readyWithoutPreview = readyPublishingPackages()
+    .filter((pkg) => !previewedPackageIds.has(pkg.id))
+    .map((pkg) => readinessGateCheckPackageSync(pkg));
+  return {
+    ok: true,
+    module: "Pre-Publish Simulator v1",
+    latest_previews: previews,
+    ready_without_preview: readyWithoutPreview,
+    preview_status: {
+      previews_count: readPrepublishPreviews().length,
+      ready_without_preview_count: readyWithoutPreview.length,
+      publishing_enabled: false,
+      facebook_write_permissions_required: false
+    },
+    safety: { publishing_enabled: false, facebook_posting_enabled: false, autopublishing: false }
+  };
+}
+
 function buildAutopilotV1Status() {
   const page = buildAIPageAnalysis();
   const competitor = buildCompetitorAutopilotAnalysis();
@@ -9536,6 +9780,7 @@ function renderAutopilotV1Dashboard() {
   const reviewPackages = packages.filter((item) => item.status === "review");
   const contentSafety = buildContentSafetyDashboardData();
   const readinessGate = buildReadinessGateDashboardData();
+  const prepublish = buildPrepublishDashboardData();
   const emotionEngine = buildEmotionEngineRecommendations(readEmotionTimelines());
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
@@ -9572,6 +9817,7 @@ function renderAutopilotV1Dashboard() {
           ${card("Telegram", status.system.telegram, "Commands: /status /load_posts /analyze /research /ideas /plan /schedule /help")}
           ${card("Content Safety", `${contentSafety.average_safety_score}%`, `${contentSafety.reviews_count} reviews, ${contentSafety.needs_edit_drafts.length} need edit`)}
           ${card("Readiness Gate", `${readinessGate.average_readiness_score}%`, `${readinessGate.ready_count} ready, ${readinessGate.blocked_count} blocked`)}
+          ${card("Pre-Publish", prepublish.preview_status.previews_count, `${prepublish.preview_status.ready_without_preview_count} ready packages need preview`)}
           ${card("Emotion Engine", `${emotionEngine.statistics.average_ending_satisfaction}%`, `${emotionEngine.timelines_count} timelines, peak ${emotionEngine.ideal_peak_position}`)}
           ${card("Publishing", status.system.autopublishing, "Approval is required before any publishing step.")}
         </div>
@@ -9707,6 +9953,21 @@ function renderAutopilotV1Dashboard() {
           <table class="facebook-table">
             <thead><tr><th>Package</th><th>Status</th><th>Score</th><th>Top Blocker</th></tr></thead>
             <tbody>${rows([...readinessGate.ready_packages, ...readinessGate.blocked_packages].slice(0, 8), "No packages checked yet.", (item) => `<tr><td>${escapeHtml(item.title || item.package_id)}</td><td>${escapeHtml(item.status)}</td><td>${Number(item.readiness_score || 0)}</td><td>${escapeHtml(item.blockers_json?.[0]?.message || "No blockers")}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Pre-Publish Simulator v1</h2>
+        <div class="autopilot-status-grid">
+          ${card("Latest Previews", prepublish.preview_status.previews_count, "Exact post preview before any Facebook publishing exists")}
+          ${card("Ready Without Preview", prepublish.preview_status.ready_without_preview_count, "Ready packages still need simulation")}
+          ${card("Publishing", "disabled", "No Facebook write permissions or autopublishing")}
+        </div>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Package</th><th>Scheduled</th><th>Scores</th><th>Expected Reaction</th></tr></thead>
+            <tbody>${rows(prepublish.latest_previews.slice(0, 8), "No pre-publish previews yet.", (item) => `<tr><td>${escapeHtml(item.package_id)}</td><td>${item.scheduled_time ? escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU")) : "missing"}</td><td>safety ${Number(item.safety_score || 0)} / editorial ${Number(item.editorial_score || 0)} / ready ${Number(item.readiness_score || 0)}</td><td>${escapeHtml(shortText(item.expected_reaction || "", 180))}</td></tr>`)}</tbody>
           </table>
         </div>
       </section>
@@ -10611,6 +10872,69 @@ async function telegramReadinessBlockers(chatId, numberText = "1") {
   return sendTelegramLongMessage(chatId, `<b>Blockers for package ${escapeHtml(numberText)}</b>\n\n${text}`, mainTelegramKeyboard());
 }
 
+function telegramPrepublishPreviewText(result = {}) {
+  if (!result.ok) {
+    const readiness = result.readiness || {};
+    const blockers = (readiness.blockers_json || []).slice(0, 6).map((item) => `- ${item.code}: ${item.message}`).join("\n");
+    return [
+      "<b>Pre-Publish Simulator</b>",
+      "",
+      escapeHtml(result.message || "Package is not ready."),
+      `status: ${escapeHtml(readiness.status || "blocked")}`,
+      `readiness_score: ${Number(readiness.readiness_score || 0)}/100`,
+      "",
+      blockers ? `<b>Blockers</b>\n${escapeHtml(blockers)}` : "No blockers returned.",
+      "",
+      "Публикация не запускалась."
+    ].join("\n");
+  }
+  const preview = result.preview || {};
+  const checklist = (preview.checklist_json || []).map((item) => `${item.passed ? "OK" : "NO"} ${item.item}`).join("\n");
+  const warnings = (preview.risk_warnings_json || []).map((item) => `- ${item.message}`).join("\n");
+  return [
+    "<b>Pre-Publish Preview</b>",
+    "",
+    `<b>${escapeHtml(result.draft?.title || preview.package_id || "")}</b>`,
+    `package_id: ${escapeHtml(preview.package_id || "")}`,
+    `scheduled_time: ${escapeHtml(preview.scheduled_time || "")}`,
+    `safety_score: ${Number(preview.safety_score || 0)}/100`,
+    `editorial_score: ${Number(preview.editorial_score || 0)}/100`,
+    `readiness_score: ${Number(preview.readiness_score || 0)}/100`,
+    "",
+    "<b>Facebook post text</b>",
+    escapeHtml(shortText(preview.post_text || "", 1200)),
+    "",
+    "<b>Image prompt / reference</b>",
+    escapeHtml(shortText(result.image_prompt?.prompt || preview.image_prompt_id || "missing", 800)),
+    "",
+    "<b>Expected audience reaction</b>",
+    escapeHtml(preview.expected_reaction || ""),
+    "",
+    warnings ? `<b>Risk warnings</b>\n${escapeHtml(warnings)}` : "<b>Risk warnings</b>\nNone.",
+    "",
+    checklist ? `<b>Final checklist</b>\n${escapeHtml(checklist)}` : "",
+    "",
+    "No publishing. No Facebook posting. No write permissions."
+  ].join("\n");
+}
+
+async function telegramPrepublishPreview(chatId, numberText = "1") {
+  const result = await createPrepublishPreviewForPackage(numberText || "1");
+  return sendTelegramLongMessage(chatId, telegramPrepublishPreviewText(result), mainTelegramKeyboard());
+}
+
+async function telegramPrepublishPreviews(chatId) {
+  const previews = latestPrepublishPreviews(10);
+  if (!previews.length) return sendTelegramMessage(chatId, "Предпросмотров пока нет. Используйте /предпросмотр 1 для ready package.", mainTelegramKeyboard());
+  const text = previews.map((preview, index) => [
+    `${index + 1}. <b>${escapeHtml(preview.package_id)}</b>`,
+    `scheduled: ${escapeHtml(preview.scheduled_time || "missing")}`,
+    `scores: safety ${Number(preview.safety_score || 0)} / editorial ${Number(preview.editorial_score || 0)} / ready ${Number(preview.readiness_score || 0)}`,
+    `reaction: ${escapeHtml(shortText(preview.expected_reaction || "", 140))}`
+  ].join("\n")).join("\n\n");
+  return sendTelegramLongMessage(chatId, `<b>Pre-Publish Previews</b>\n\n${text}\n\nПубликация не включена.`, mainTelegramKeyboard());
+}
+
 async function telegramDrafts(chatId) {
   const drafts = latestGeneratedDrafts(10);
   if (!drafts.length) return sendTelegramMessage(chatId, "Черновиков пока нет. Сначала используйте /создать измена 3.", mainTelegramKeyboard());
@@ -11175,6 +11499,8 @@ async function telegramHelp(chatId) {
     "/проверить_готовность 1 — финальная проверка пакета",
     "/готовые — пакеты, прошедшие все ворота",
     "/блокеры 1 — что мешает пакету стать ready",
+    "/предпросмотр 1 — показать, что было бы опубликовано",
+    "/предпросмотры — последние предпросмотры",
     "/мозг — Project Brain v2",
     "/мозг обновить — импорт Facebook/generated/research в Story DNA",
     "/обновить_мозг — принудительная полная синхронизация Project Brain",
@@ -11200,7 +11526,7 @@ async function telegramHelp(chatId) {
     "/готовность 1 - editorial readiness status",
     "",
     "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /versions 1, /compare 1 2, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /preview 1, /previews, /versions 1, /compare 1 2, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -11257,6 +11583,8 @@ function telegramCommandList() {
     { command: "check_ready", description: "Run final package readiness gate" },
     { command: "ready_packages", description: "Show packages that passed final gate" },
     { command: "blockers", description: "Show package readiness blockers" },
+    { command: "preview", description: "Pre-publish package preview" },
+    { command: "previews", description: "Latest pre-publish previews" },
     { command: "versions", description: "Show draft revisions" },
     { command: "compare", description: "Compare two drafts" },
     { command: "approve", description: "Одобрить черновик" },
@@ -11368,6 +11696,8 @@ async function handleTelegramMessage(message) {
   if (command === "/check_ready" || command === "/проверить_готовность") return telegramCheckReadinessGate(chatId, args[0] || "1");
   if (command === "/ready_packages" || command === "/готовые") return telegramReadyGatePackages(chatId);
   if (command === "/blockers" || command === "/блокеры") return telegramReadinessBlockers(chatId, args[0] || "1");
+  if (command === "/preview" || command === "/предпросмотр") return telegramPrepublishPreview(chatId, args[0] || "1");
+  if (command === "/previews" || command === "/предпросмотры") return telegramPrepublishPreviews(chatId);
   if (command === "/update_brain" || command === "/обновить_мозг") return telegramForceBrainSync(chatId);
   if (command === "/brain" || command === "/мозг") return telegramBrain(chatId, args);
   if (command === "/recommendations" || command === "/рекомендации") return telegramBrainRecommendations(chatId);
@@ -11854,6 +12184,7 @@ const productionPersistenceTables = [
   "image_queue",
   "scheduled_posts",
   "publishing_packages",
+  "prepublish_previews",
   "style_brain_profiles",
   "content_safety_reviews",
   "editorial_reviews",
@@ -11898,6 +12229,7 @@ async function buildStorageStatus() {
       image_queue: readImageQueue().length,
       scheduled_posts: readScheduledPosts().length,
       publishing_packages: readPublishingPackages().length,
+      prepublish_previews: readPrepublishPreviews().length,
       style_brain_profiles: readStyleBrainProfiles().length,
       content_safety_reviews: readContentSafetyReviews().length,
       editorial_reviews: readEditorialReviews().length,
@@ -13837,6 +14169,28 @@ async function handleApi(req, res, pathname) {
       next_actions_json: result.next_actions_json,
       safety: { publish_allowed: false, facebook_publishing: false, approval_required: true }
     });
+  }
+
+  if (pathname === "/api/prepublish/v1/preview-package" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await createPrepublishPreviewForPackage(payload.package || payload.package_id || payload.index || "1"));
+  }
+
+  if (pathname === "/api/prepublish/v1/previews" && req.method === "GET") {
+    return sendJson(res, 200, buildPrepublishDashboardData());
+  }
+
+  if (pathname.startsWith("/api/prepublish/v1/preview/") && req.method === "GET") {
+    const ref = decodeURIComponent(pathname.replace("/api/prepublish/v1/preview/", ""));
+    const preview = prepublishPreviewByRef(ref || "1");
+    return sendJson(res, preview ? 200 : 404, preview
+      ? {
+          ok: true,
+          module: "Pre-Publish Simulator v1",
+          preview,
+          safety: { publishing_enabled: false, facebook_posting_enabled: false, write_permissions_required: false }
+        }
+      : { ok: false, code: "preview_not_found" });
   }
 
   if (pathname === "/api/autopilot/v1/packages" && req.method === "POST") {
