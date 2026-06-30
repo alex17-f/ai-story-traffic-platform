@@ -711,11 +711,15 @@ async function ensureGeneratedStoriesTable() {
     alter table generated_stories add column if not exists rewrite_reason text;
     alter table generated_stories add column if not exists previous_editorial_score integer not null default 0;
     alter table generated_stories add column if not exists expected_editorial_score integer not null default 0;
+    alter table generated_stories add column if not exists second_pass_used boolean not null default false;
+    alter table generated_stories add column if not exists final_editorial_score integer not null default 0;
+    alter table generated_stories add column if not exists final_safety_recommendation text;
     create index if not exists generated_stories_category_idx on generated_stories (category);
     create index if not exists generated_stories_score_idx on generated_stories (viral_prediction_score desc);
     create index if not exists generated_stories_created_at_idx on generated_stories (created_at desc);
     create index if not exists generated_stories_parent_draft_idx on generated_stories (parent_draft_id);
     create index if not exists generated_stories_revision_type_idx on generated_stories (revision_type);
+    create index if not exists generated_stories_second_pass_idx on generated_stories (second_pass_used);
   `);
 }
 
@@ -1204,8 +1208,8 @@ async function persistGeneratedStories(stories) {
           viral_prediction_score, why_it_should_work, research_signals, facebook_signals,
           status, approval_required, publish_allowed, parent_draft_id, revision_type,
           revision_number, rewrite_reason, previous_editorial_score, expected_editorial_score,
-          created_at, updated_at
-        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+          second_pass_used, final_editorial_score, final_safety_recommendation, created_at, updated_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
         on conflict (id) do update set
           title = excluded.title,
           category = excluded.category,
@@ -1228,6 +1232,9 @@ async function persistGeneratedStories(stories) {
           rewrite_reason = excluded.rewrite_reason,
           previous_editorial_score = excluded.previous_editorial_score,
           expected_editorial_score = excluded.expected_editorial_score,
+          second_pass_used = excluded.second_pass_used,
+          final_editorial_score = excluded.final_editorial_score,
+          final_safety_recommendation = excluded.final_safety_recommendation,
           updated_at = excluded.updated_at`,
         [
           story.id || crypto.randomUUID(),
@@ -1252,6 +1259,9 @@ async function persistGeneratedStories(stories) {
           story.rewrite_reason || "",
           Number(story.previous_editorial_score || 0),
           Number(story.expected_editorial_score || 0),
+          Boolean(story.second_pass_used),
+          Number(story.final_editorial_score || 0),
+          story.final_safety_recommendation || "",
           pgColumnDate(story.created_at),
           pgColumnDate(story.updated_at)
         ]
@@ -1270,6 +1280,9 @@ function normalizeGeneratedStoryRow(row = {}) {
     revision_number: Number(row.revision_number || 0),
     previous_editorial_score: Number(row.previous_editorial_score || 0),
     expected_editorial_score: Number(row.expected_editorial_score || 0),
+    second_pass_used: Boolean(row.second_pass_used),
+    final_editorial_score: Number(row.final_editorial_score || 0),
+    final_safety_recommendation: row.final_safety_recommendation || "",
     approval_required: row.approval_required !== false,
     publish_allowed: Boolean(row.publish_allowed)
   };
@@ -5345,6 +5358,16 @@ function editorialRewriteDiversityForCandidate({ original, category, seed, revis
   });
 }
 
+async function updateGeneratedDraftRecord(id = "", patch = {}) {
+  if (!id) return null;
+  const updatedAt = new Date().toISOString();
+  const updated = readGeneratedStories().map((item) => item.id === id
+    ? { ...item, ...patch, updated_at: updatedAt }
+    : item);
+  await writeGeneratedStories(updated);
+  return updated.find((item) => item.id === id) || null;
+}
+
 async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = "") {
   await refreshGeneratedStoriesFromDatabase();
   await refreshEditorialReviewsFromDatabase();
@@ -5445,15 +5468,19 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
     draft: improvedDraft,
     contentSafetyReview: contentSafety.review || null
   });
-  let finalDraft = improvedDraft;
+  let finalDraft = {
+    ...improvedDraft,
+    final_editorial_score: Number(editorial.review?.editorial_score || 0),
+    final_safety_recommendation: contentSafety.review?.recommendation || "pending"
+  };
   if (contentSafety.review?.recommendation === "reject") {
     finalDraft = {
-      ...improvedDraft,
+      ...finalDraft,
       status: "needs_more_work",
       updated_at: new Date().toISOString()
     };
-    await writeGeneratedStories(readGeneratedStories().map((item) => item.id === improvedDraft.id ? finalDraft : item));
   }
+  finalDraft = await updateGeneratedDraftRecord(improvedDraft.id, finalDraft) || finalDraft;
   return {
     ok: true,
     module: "Editorial Rewriter v1",
@@ -5477,6 +5504,117 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
   };
 }
 
+async function improveDraftToReady(ref = "1") {
+  const firstPass = await rewriteDraftFromEditorialReview(ref || "1");
+  if (!firstPass.ok) return firstPass;
+  let finalPass = firstPass;
+  let secondPass = null;
+  let secondPassUsed = false;
+  const firstScore = Number(firstPass.editorial_review?.editorial_score || 0);
+  const firstSafety = firstPass.content_safety_review?.recommendation || "pending";
+  if (firstScore < 75) {
+    secondPassUsed = true;
+    secondPass = await rewriteDraftFromEditorialReview(firstPass.improved_draft?.id || "1");
+    if (secondPass.ok) {
+      const finalScore = Number(secondPass.editorial_review?.editorial_score || 0);
+      const finalSafety = secondPass.content_safety_review?.recommendation || "pending";
+      const secondDraft = await updateGeneratedDraftRecord(secondPass.improved_draft.id, {
+        revision_type: "editorial_second_pass",
+        second_pass_used: true,
+        final_editorial_score: finalScore,
+        final_safety_recommendation: finalSafety,
+        rewrite_reason: [
+          "Editorial Auto-Pass v1 second pass.",
+          secondPass.improved_draft.rewrite_reason || ""
+        ].filter(Boolean).join(" ")
+      });
+      secondPass = {
+        ...secondPass,
+        improved_draft: secondDraft || secondPass.improved_draft
+      };
+      finalPass = secondPass;
+    }
+  } else {
+    const updatedFirst = await updateGeneratedDraftRecord(firstPass.improved_draft.id, {
+      second_pass_used: false,
+      final_editorial_score: firstScore,
+      final_safety_recommendation: firstSafety
+    });
+    finalPass = { ...firstPass, improved_draft: updatedFirst || firstPass.improved_draft };
+  }
+  const finalEditorialScore = Number(finalPass.editorial_review?.editorial_score || 0);
+  const finalSafetyRecommendation = finalPass.content_safety_review?.recommendation || "pending";
+  return {
+    ok: true,
+    module: "Editorial Auto-Pass v1",
+    original_draft: firstPass.original_draft,
+    first_pass: firstPass,
+    second_pass: secondPass,
+    second_pass_used: secondPassUsed,
+    final_draft: finalPass.improved_draft,
+    final_editorial_review: finalPass.editorial_review,
+    final_content_safety_review: finalPass.content_safety_review,
+    final_editorial_score: finalEditorialScore,
+    final_safety_recommendation: finalSafetyRecommendation,
+    reached_ready: finalEditorialScore >= 75 && finalSafetyRecommendation !== "reject",
+    safety: {
+      original_overwritten: false,
+      publishing_enabled: false,
+      facebook_posting_enabled: false,
+      content_safety_reused: true,
+      max_extra_passes: 1
+    }
+  };
+}
+
+async function editorialReadinessStatus(ref = "1") {
+  await refreshGeneratedStoriesFromDatabase();
+  await refreshEditorialReviewsFromDatabase();
+  const draft = generatedDraftByRef(ref || "1") || readGeneratedStories().find((item) => item.id === ref);
+  if (!draft) return { ok: false, code: "draft_not_found", message: "Generated draft not found." };
+  let versions = await editorialRevisionChainAsync(draft.id);
+  if (!versions.length) versions = [draft];
+  const details = [];
+  for (const item of versions) {
+    let review = latestEditorialReviewForDraft(item.id);
+    if (!review) {
+      const result = await createEditorialReviewForDraft(item.id, { draft: item });
+      review = result.review;
+    }
+    const safety = latestContentSafetyReviewForDraft(item.id) || (await checkContentSafetyDraft(item.id, { draft: item })).review;
+    details.push({
+      id: item.id,
+      title: item.title,
+      revision_type: item.revision_type || "original",
+      revision_number: Number(item.revision_number || 0),
+      second_pass_used: Boolean(item.second_pass_used || item.revision_type === "editorial_second_pass"),
+      editorial_score: Number(review?.editorial_score || 0),
+      safety_recommendation: safety?.recommendation || "pending",
+      readiness: review?.publication_readiness || "pending",
+      status: item.status || "needs_approval"
+    });
+  }
+  const final = details[details.length - 1] || null;
+  const best = [...details].sort((a, b) => b.editorial_score - a.editorial_score)[0] || final;
+  return {
+    ok: true,
+    module: "Editorial Auto-Pass v1",
+    root_draft_id: versions[0]?.id || draft.id,
+    current_ref: draft.id,
+    final,
+    best,
+    versions: details,
+    reached_ready: Boolean(best && best.editorial_score >= 75 && best.safety_recommendation !== "reject"),
+    second_pass_used: details.some((item) => item.second_pass_used),
+    publish_allowed: false,
+    safety: {
+      original_overwritten: false,
+      publishing_enabled: false,
+      facebook_posting_enabled: false
+    }
+  };
+}
+
 function buildEditorialRewriterDashboardData() {
   const rewrites = editorialLatestRewrites(100);
   const rewriteRows = rewrites.map((draft) => {
@@ -5495,11 +5633,49 @@ function buildEditorialRewriterDashboardData() {
     };
   });
   const parentIds = new Set(rewrites.map((item) => item.parent_draft_id).filter(Boolean));
+  const allDraftRows = readGeneratedStories().map((draft) => {
+    const review = latestEditorialReviewForDraft(draft.id);
+    const safety = latestContentSafetyReviewForDraft(draft.id);
+    return {
+      id: draft.id,
+      title: draft.title,
+      revision_type: draft.revision_type || "original",
+      second_pass_used: Boolean(draft.second_pass_used || draft.revision_type === "editorial_second_pass"),
+      editorial_score: Number(review?.editorial_score || draft.final_editorial_score || 0),
+      safety_recommendation: safety?.recommendation || draft.final_safety_recommendation || "pending",
+      status: draft.status || "needs_approval",
+      created_at: draft.created_at
+    };
+  });
+  const draftsBelow75 = allDraftRows
+    .filter((item) => item.editorial_score > 0 && item.editorial_score < 75)
+    .slice(0, 20);
+  const secondPassRows = allDraftRows
+    .filter((item) => item.second_pass_used)
+    .slice(0, 20);
+  const readyAfterSecondPass = secondPassRows
+    .filter((item) => item.editorial_score >= 75 && item.safety_recommendation !== "reject");
+  const stillNeedsWork = allDraftRows
+    .filter((item) => item.editorial_score > 0 && (item.editorial_score < 75 || item.safety_recommendation === "reject"))
+    .slice(0, 20);
   return {
     ok: true,
     module: "Editorial Rewriter v1",
     rewrites_count: rewrites.length,
     drafts_improved: parentIds.size,
+    auto_pass: {
+      module: "Editorial Auto-Pass v1",
+      drafts_below_75: draftsBelow75,
+      second_pass_used: secondPassRows,
+      ready_after_second_pass: readyAfterSecondPass,
+      still_needs_work: stillNeedsWork,
+      safety: {
+        max_extra_passes: 1,
+        publishing_enabled: false,
+        facebook_posting_enabled: false,
+        thresholds_lowered: false
+      }
+    },
     latest_rewrites: rewriteRows.slice(0, 20),
     revision_chains: [...parentIds].slice(0, 8).map((parentId) => ({
       parent_draft_id: parentId,
@@ -8770,6 +8946,15 @@ function renderEditorialBoardDashboard() {
       <td>${escapeHtml(item.status || "")}</td>
     </tr>`).join("")
     : `<tr><td colspan="6">No editorial rewrites yet.</td></tr>`;
+  const autoPassRows = (items = [], empty = "No drafts yet.") => items.length
+    ? items.slice(0, 10).map((item) => `<tr>
+      <td>${escapeHtml(shortText(item.title || item.id || "", 58))}</td>
+      <td>${escapeHtml(item.revision_type || "original")}</td>
+      <td>${Number(item.editorial_score || 0)}</td>
+      <td>${escapeHtml(item.safety_recommendation || "pending")}</td>
+      <td>${escapeHtml(item.status || "")}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="5">${escapeHtml(empty)}</td></tr>`;
   const chainRows = rewriter.revision_chains.length
     ? rewriter.revision_chains.slice(0, 5).map((chain) => `<li><strong>${escapeHtml(shortText(chain.parent_draft_id, 28))}</strong><span>${chain.revisions.length} versions</span></li>`).join("")
     : "<li><strong>No revision chains yet</strong></li>";
@@ -8843,6 +9028,25 @@ function renderEditorialBoardDashboard() {
         <div class="table-wrap"><table>
           <thead><tr><th>Draft</th><th>Revision</th><th>Before</th><th>After/Expected</th><th>Readiness</th><th>Status</th></tr></thead>
           <tbody>${rewriteRows}</tbody>
+        </table></div>
+      </section>
+
+      <section class="insight-card">
+        <div class="section-title">
+          <div>
+            <h2>Editorial Auto-Pass v1</h2>
+            <p class="helper-text">Runs one extra editorial pass only when a rewrite stays below 75. No loops, no publishing, no threshold changes.</p>
+          </div>
+        </div>
+        <div class="autopilot-status-grid">
+          <article><span>Below 75</span><strong>${rewriter.auto_pass.drafts_below_75.length}</strong><p>Drafts that still need quality work.</p></article>
+          <article><span>Second pass used</span><strong>${rewriter.auto_pass.second_pass_used.length}</strong><p>Drafts marked editorial_second_pass.</p></article>
+          <article><span>Ready after pass</span><strong>${rewriter.auto_pass.ready_after_second_pass.length}</strong><p>Second-pass drafts with 75+ and not rejected.</p></article>
+          <article><span>Still needs work</span><strong>${rewriter.auto_pass.still_needs_work.length}</strong><p>Score below 75 or safety reject.</p></article>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Draft</th><th>Type</th><th>Score</th><th>Safety</th><th>Status</th></tr></thead>
+          <tbody>${autoPassRows(rewriter.auto_pass.still_needs_work, "No drafts below 75 right now.")}</tbody>
         </table></div>
       </section>
 
@@ -10368,6 +10572,62 @@ async function telegramImproveDraft(chatId, numberText = "1") {
   return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
 }
 
+async function telegramImproveToReady(chatId, numberText = "1") {
+  const result = await improveDraftToReady(numberText || "1");
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Draft not found."), mainTelegramKeyboard());
+  const finalDraft = result.final_draft || {};
+  const firstScore = Number(result.first_pass?.editorial_review?.editorial_score || 0);
+  const finalScore = Number(result.final_editorial_score || 0);
+  const finalSafety = result.final_safety_recommendation || "pending";
+  const text = [
+    "<b>Editorial Auto-Pass v1</b>",
+    "",
+    `<b>${escapeHtml(finalDraft.title || "Improved draft")}</b>`,
+    `First pass: ${firstScore}/100`,
+    `Second pass used: ${result.second_pass_used ? "yes" : "no"}`,
+    `Final score: ${finalScore}/100`,
+    `Safety: ${escapeHtml(finalSafety)}`,
+    `Ready 75+: ${result.reached_ready ? "yes" : "needs edit"}`,
+    `Revision type: ${escapeHtml(finalDraft.revision_type || "editorial_rewrite")}`,
+    `Status: ${escapeHtml(finalDraft.status || "needs_approval")}`,
+    "",
+    "<b>Hook</b>",
+    escapeHtml(shortText(finalDraft.hook || "", 700)),
+    "",
+    "/готовность 1 - readiness status",
+    "/версии 1 - revision chain",
+    "",
+    "Original is preserved. Content Safety was not bypassed. Publishing is disabled."
+  ].join("\n");
+  return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
+}
+
+async function telegramDraftReadiness(chatId, numberText = "1") {
+  const result = await editorialReadinessStatus(numberText || "1");
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Draft not found."), mainTelegramKeyboard());
+  const rows = result.versions.slice(-5).map((item, index) => [
+    `${index + 1}. <b>${escapeHtml(shortText(item.title || item.id, 60))}</b>`,
+    `type: ${escapeHtml(item.revision_type || "original")}`,
+    `score: ${Number(item.editorial_score || 0)}/100`,
+    `safety: ${escapeHtml(item.safety_recommendation || "pending")}`,
+    `second pass: ${item.second_pass_used ? "yes" : "no"}`,
+    `status: ${escapeHtml(item.status || "")}`
+  ].join("\n")).join("\n\n");
+  const text = [
+    "<b>Draft Readiness</b>",
+    "",
+    `Ready 75+: ${result.reached_ready ? "yes" : "no"}`,
+    `Second pass used: ${result.second_pass_used ? "yes" : "no"}`,
+    `Best score: ${Number(result.best?.editorial_score || 0)}/100`,
+    `Best safety: ${escapeHtml(result.best?.safety_recommendation || "pending")}`,
+    "",
+    rows,
+    "",
+    "Publishing is disabled. This is editorial readiness only."
+  ].join("\n");
+  return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
+}
+
 async function telegramDraftVersions(chatId, numberText = "1") {
   await refreshGeneratedStoriesFromDatabase();
   const versions = await editorialRevisionChainAsync(numberText || "1");
@@ -10475,8 +10735,11 @@ async function telegramHelp(chatId) {
     "/сравнить 1 2 — сравнить два черновика",
     "/помощь — эта справка",
     "",
+    "/улучшить_до_готовности 1 - auto-pass to 75+ with one extra pass",
+    "/готовность 1 - editorial readiness status",
+    "",
     "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /versions 1, /compare 1 2, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /versions 1, /compare 1 2, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -10528,6 +10791,8 @@ function telegramCommandList() {
     { command: "review_story", description: "Run editorial review" },
     { command: "editorial_report", description: "Full editorial report" },
     { command: "improve", description: "Create editorial rewrite" },
+    { command: "improve_to_ready", description: "Rewrite once more if score is below 75" },
+    { command: "readiness", description: "Show editorial readiness" },
     { command: "versions", description: "Show draft revisions" },
     { command: "compare", description: "Compare two drafts" },
     { command: "approve", description: "Одобрить черновик" },
@@ -10654,6 +10919,8 @@ async function handleTelegramMessage(message) {
   if (command === "/editor" || command === "/редактор") return telegramLatestEditorialReview(chatId);
   if (command === "/review_story" || command === "/проверить_историю") return telegramRunEditorialReview(chatId, args[0] || "1");
   if (command === "/editorial_report" || command === "/отчет" || command === "/отчёт") return telegramEditorialReport(chatId, args[0] || "1");
+  if (command === "/improve_to_ready" || command === "/улучшить_до_готовности") return telegramImproveToReady(chatId, args[0] || "1");
+  if (command === "/readiness" || command === "/готовность") return telegramDraftReadiness(chatId, args[0] || "1");
   if (command === "/improve" || command === "/улучшить") return telegramImproveDraft(chatId, args[0] || "1");
   if (command === "/versions" || command === "/версии") return telegramDraftVersions(chatId, args[0] || "1");
   if (command === "/compare" || command === "/сравнить") return telegramCompareDrafts(chatId, args[0] || "1", args[1] || "2");
@@ -12915,10 +13182,25 @@ async function handleApi(req, res, pathname) {
     ));
   }
 
+  if (pathname === "/api/editorial-rewriter/improve-to-ready" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await improveDraftToReady(payload.draft || payload.draft_id || payload.index || "1"));
+  }
+
+  if (pathname === "/api/editorial-rewriter/readiness" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await editorialReadinessStatus(payload.draft || payload.draft_id || payload.index || "1"));
+  }
+
   if (pathname === "/api/editorial-rewriter/rewrites" && req.method === "GET") {
     await refreshGeneratedStoriesFromDatabase();
     await refreshEditorialReviewsFromDatabase();
     return sendJson(res, 200, buildEditorialRewriterDashboardData());
+  }
+
+  if (pathname.startsWith("/api/editorial-rewriter/readiness/") && req.method === "GET") {
+    const ref = decodeURIComponent(pathname.replace("/api/editorial-rewriter/readiness/", ""));
+    return sendJson(res, 200, await editorialReadinessStatus(ref || "1"));
   }
 
   if (pathname.startsWith("/api/editorial-rewriter/versions/") && req.method === "GET") {
