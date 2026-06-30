@@ -5505,6 +5505,47 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
 }
 
 async function improveDraftToReady(ref = "1") {
+  await refreshGeneratedStoriesFromDatabase();
+  await refreshEditorialReviewsFromDatabase();
+  const currentDraft = generatedDraftByRef(ref || "1") || readGeneratedStories().find((item) => item.id === ref);
+  if (!currentDraft) return { ok: false, code: "draft_not_found", message: "Generated draft not found." };
+  let currentReview = latestEditorialReviewForDraft(currentDraft.id);
+  if (!currentReview) {
+    const reviewResult = await createEditorialReviewForDraft(currentDraft.id, { draft: currentDraft });
+    currentReview = reviewResult.review;
+  }
+  const currentSafety = latestContentSafetyReviewForDraft(currentDraft.id) || (await checkContentSafetyDraft(currentDraft.id, { draft: currentDraft })).review;
+  const currentScore = Number(currentReview?.editorial_score || 0);
+  const currentSafetyRecommendation = currentSafety?.recommendation || "pending";
+  if (currentScore >= 75 && currentSafetyRecommendation !== "reject") {
+    const updatedCurrent = await updateGeneratedDraftRecord(currentDraft.id, {
+      second_pass_used: Boolean(currentDraft.second_pass_used),
+      final_editorial_score: currentScore,
+      final_safety_recommendation: currentSafetyRecommendation
+    });
+    return {
+      ok: true,
+      module: "Editorial Auto-Pass v1",
+      already_ready: true,
+      original_draft: currentDraft,
+      first_pass: null,
+      second_pass: null,
+      second_pass_used: false,
+      final_draft: updatedCurrent || currentDraft,
+      final_editorial_review: currentReview,
+      final_content_safety_review: currentSafety,
+      final_editorial_score: currentScore,
+      final_safety_recommendation: currentSafetyRecommendation,
+      reached_ready: true,
+      safety: {
+        original_overwritten: false,
+        publishing_enabled: false,
+        facebook_posting_enabled: false,
+        content_safety_reused: true,
+        max_extra_passes: 1
+      }
+    };
+  }
   const firstPass = await rewriteDraftFromEditorialReview(ref || "1");
   if (!firstPass.ok) return firstPass;
   let finalPass = firstPass;
@@ -10576,14 +10617,15 @@ async function telegramImproveToReady(chatId, numberText = "1") {
   const result = await improveDraftToReady(numberText || "1");
   if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Draft not found."), mainTelegramKeyboard());
   const finalDraft = result.final_draft || {};
-  const firstScore = Number(result.first_pass?.editorial_review?.editorial_score || 0);
+  const firstScore = result.first_pass ? Number(result.first_pass.editorial_review?.editorial_score || 0) : null;
   const finalScore = Number(result.final_editorial_score || 0);
   const finalSafety = result.final_safety_recommendation || "pending";
   const text = [
     "<b>Editorial Auto-Pass v1</b>",
     "",
     `<b>${escapeHtml(finalDraft.title || "Improved draft")}</b>`,
-    `First pass: ${firstScore}/100`,
+    `Already ready: ${result.already_ready ? "yes" : "no"}`,
+    `First pass: ${firstScore === null ? "not needed" : `${firstScore}/100`}`,
     `Second pass used: ${result.second_pass_used ? "yes" : "no"}`,
     `Final score: ${finalScore}/100`,
     `Safety: ${escapeHtml(finalSafety)}`,
