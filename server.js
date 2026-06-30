@@ -5583,6 +5583,51 @@ async function improveDraftToReady(ref = "1") {
     });
     finalPass = { ...firstPass, improved_draft: updatedFirst || firstPass.improved_draft };
   }
+  const candidates = [
+    {
+      label: "current",
+      draft: currentDraft,
+      review: currentReview,
+      safety: currentSafety,
+      score: currentScore,
+      safetyRecommendation: currentSafetyRecommendation
+    },
+    {
+      label: "first_pass",
+      draft: firstPass.improved_draft,
+      review: firstPass.editorial_review,
+      safety: firstPass.content_safety_review,
+      score: Number(firstPass.editorial_review?.editorial_score || 0),
+      safetyRecommendation: firstPass.content_safety_review?.recommendation || "pending"
+    },
+    ...(secondPass?.ok ? [{
+      label: "second_pass",
+      draft: secondPass.improved_draft,
+      review: secondPass.editorial_review,
+      safety: secondPass.content_safety_review,
+      score: Number(secondPass.editorial_review?.editorial_score || 0),
+      safetyRecommendation: secondPass.content_safety_review?.recommendation || "pending"
+    }] : [])
+  ].filter((item) => item.draft?.id);
+  const bestCandidate = [...candidates].sort((a, b) => {
+    const aSafe = a.safetyRecommendation !== "reject" ? 1 : 0;
+    const bSafe = b.safetyRecommendation !== "reject" ? 1 : 0;
+    return bSafe - aSafe || b.score - a.score;
+  })[0];
+  if (bestCandidate) {
+    const updatedBest = await updateGeneratedDraftRecord(bestCandidate.draft.id, {
+      second_pass_used: secondPassUsed && bestCandidate.label === "second_pass",
+      final_editorial_score: bestCandidate.score,
+      final_safety_recommendation: bestCandidate.safetyRecommendation
+    });
+    finalPass = {
+      ...finalPass,
+      improved_draft: updatedBest || bestCandidate.draft,
+      editorial_review: bestCandidate.review,
+      content_safety_review: bestCandidate.safety,
+      best_candidate_label: bestCandidate.label
+    };
+  }
   const finalEditorialScore = Number(finalPass.editorial_review?.editorial_score || 0);
   const finalSafetyRecommendation = finalPass.content_safety_review?.recommendation || "pending";
   return {
@@ -5597,6 +5642,7 @@ async function improveDraftToReady(ref = "1") {
     final_content_safety_review: finalPass.content_safety_review,
     final_editorial_score: finalEditorialScore,
     final_safety_recommendation: finalSafetyRecommendation,
+    best_candidate_label: finalPass.best_candidate_label || "first_pass",
     reached_ready: finalEditorialScore >= 75 && finalSafetyRecommendation !== "reject",
     safety: {
       original_overwritten: false,
