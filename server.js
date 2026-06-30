@@ -7239,7 +7239,7 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
     `${texture.dialogue}\n\nThat was when ${setting} stopped feeling like a home and started feeling like a room full of witnesses.`,
     frameBeats[1],
     frameBeats[2],
-    texture.aftershock,
+    `${texture.aftershock} Shock came first, then anger, then the sadness of seeing the old family story without its disguise. Only after the truth was named did a thin line of hope and relief become possible.`,
     frameBeats[3],
     frameBeats[4],
     frameBeats[5],
