@@ -5055,6 +5055,64 @@ function editorialRevisionChain(ref = "1") {
     .sort((a, b) => Number(a.revision_number || 0) - Number(b.revision_number || 0) || new Date(a.created_at || 0) - new Date(b.created_at || 0));
 }
 
+async function generatedStoryById(id = "") {
+  const found = readGeneratedStories().find((item) => item.id === id);
+  if (found || !pgPool || !id) return found || null;
+  try {
+    await ensureGeneratedStoriesTable();
+    const row = (await pgPool.query("select * from generated_stories where id = $1 limit 1", [id])).rows[0];
+    if (!row) return null;
+    const story = normalizeGeneratedStoryRow(row);
+    storageCache.generatedStories = [story, ...readGeneratedStories().filter((item) => item.id !== story.id)].slice(0, 300);
+    return story;
+  } catch (error) {
+    console.warn(`PostgreSQL generated story lookup failed: ${error.message}`);
+    return null;
+  }
+}
+
+async function editorialRewriteRootIdAsync(draft = {}) {
+  let current = draft;
+  const seen = new Set();
+  while (current?.parent_draft_id && !seen.has(current.parent_draft_id)) {
+    seen.add(current.id);
+    const parent = await generatedStoryById(current.parent_draft_id);
+    if (!parent) break;
+    current = parent;
+  }
+  return current?.id || draft.id || "";
+}
+
+async function editorialRevisionChainAsync(ref = "1") {
+  await refreshGeneratedStoriesFromDatabase();
+  const value = String(ref || "").trim();
+  let draft = /^\d+$/.test(value) ? generatedDraftByRef(value) : await generatedStoryById(value);
+  if (!draft) draft = readGeneratedStories().find((item) => item.id === value) || null;
+  if (!draft) return [];
+  const rootId = await editorialRewriteRootIdAsync(draft);
+  if (pgPool) {
+    try {
+      const rows = (await pgPool.query(
+        "select * from generated_stories where id = $1 or parent_draft_id = $1 order by revision_number asc, created_at asc",
+        [rootId]
+      )).rows.map(normalizeGeneratedStoryRow);
+      if (rows.length) {
+        const byId = new Map(readGeneratedStories().map((item) => [item.id, item]));
+        rows.forEach((item) => byId.set(item.id, item));
+        storageCache.generatedStories = [...byId.values()]
+          .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+          .slice(0, 300);
+        return rows;
+      }
+    } catch (error) {
+      console.warn(`PostgreSQL revision chain lookup failed: ${error.message}`);
+    }
+  }
+  return readGeneratedStories()
+    .filter((item) => item.id === rootId || item.parent_draft_id === rootId)
+    .sort((a, b) => Number(a.revision_number || 0) - Number(b.revision_number || 0) || new Date(a.created_at || 0) - new Date(b.created_at || 0));
+}
+
 function editorialLatestRewrites(limit = 20) {
   return [...readGeneratedStories()]
     .filter((item) => item.revision_type === "editorial_rewrite")
@@ -5113,7 +5171,38 @@ function editorialRewriteOpening({ hero, object, relation }) {
   ].join("\n\n");
 }
 
-function buildEditorialRewriteText({ draft, review, styleGuidance, emotionGuidance, safetyReview }) {
+function buildEditorialRewriteText({ draft, review, styleGuidance, emotionGuidance, safetyReview, diversity = null }) {
+  if (diversity?.frame_id) {
+    const profile = {
+      object: diversity.object || editorialRewriteExtractObject(draft),
+      setting: diversity.setting || "small apartment kitchen",
+      conflict: diversity.conflict || "the family betrayal finally becomes visible",
+      turn: editorialRewriteExtractTurn(draft),
+      moral: "A painful truth is still safer than a familiar lie."
+    };
+    const rewritten = buildDiverseGeneratedStoryText({
+      profile,
+      diversity,
+      emotion: draft.emotion || "betrayal and shock",
+      length: draft.length || "medium",
+      keywords: [],
+      emotionGuidance
+    });
+    const improvementPlan = (review?.improvement_plan_json || []).slice(0, 6).join(" ");
+    const safetyIssues = (safetyReview?.issues_json || []).slice(0, 4).map((item) => item.message || item).join(" ");
+    return {
+      ...rewritten,
+      title: rewritten.title,
+      rewrite_reason: [
+        `Deep editorial rewrite with narrative frame ${diversity.frame_id}.`,
+        "Opening scene, object, dialogue pattern, escalation and twist device were changed while preserving the core betrayal meaning.",
+        improvementPlan ? `Plan: ${improvementPlan}` : "",
+        styleGuidance?.opening_style ? `Style guidance: ${styleGuidance.opening_style}, ${styleGuidance.paragraph_rhythm}.` : "",
+        emotionGuidance?.recommended_story_rhythm || emotionGuidance?.rhythm ? `Emotion guidance: ${emotionGuidance.recommended_story_rhythm || emotionGuidance.rhythm}.` : "",
+        safetyIssues ? `Safety issues considered: ${safetyIssues}` : ""
+      ].filter(Boolean).join(" ")
+    };
+  }
   const hero = editorialRewriteExtractHero(draft);
   const object = editorialRewriteExtractObject(draft);
   const relation = editorialRewriteExtractRelation(draft);
@@ -5162,6 +5251,51 @@ function buildEditorialRewriteText({ draft, review, styleGuidance, emotionGuidan
   };
 }
 
+function editorialRewriteCandidateText(candidate = {}) {
+  return [candidate.title, candidate.hook, candidate.full_story, candidate.moral].filter(Boolean).join("\n\n");
+}
+
+function editorialRewriteSimilarityCheck(candidate = {}, original = {}) {
+  const rootId = editorialRewriteRootId(original);
+  const candidateText = editorialRewriteCandidateText(candidate);
+  const sources = readGeneratedStories()
+    .filter((item) => item.id !== original.id && item.id !== rootId && item.parent_draft_id !== rootId)
+    .slice(0, 80)
+    .map((item) => ({
+      source_type: item.revision_type || "generated",
+      source_reference: item.id,
+      text: contentSafetyTextFromDraft(item)
+    }));
+  const best = contentSafetyMaxSimilarity(candidateText, sources);
+  return {
+    similarity_score: best.score,
+    source_type: best.source_type,
+    source_reference: best.source_reference,
+    warning: best.score >= 38 ? "high_similarity_regenerated_once" : ""
+  };
+}
+
+function editorialRewriteDiversityForCandidate({ original, category, seed, revisionNumber, candidateIndex }) {
+  const memory = narrativeBatchMemory();
+  const frame = selectNarrativeFrame(
+    Number(revisionNumber || 0) + Number(candidateIndex || 0) + 1,
+    "",
+    memory
+  );
+  const baseProfile = storyCategoryProfile(category, `${seed}:rewrite:${candidateIndex}`);
+  return buildNarrativeDiversityProfile({
+    category,
+    seed: `${seed}:rewrite:${candidateIndex}`,
+    baseProfile: {
+      ...baseProfile,
+      turn: editorialRewriteExtractTurn(original),
+      conflict: baseProfile.conflict || original.category || "a family betrayal comes into the open"
+    },
+    frame,
+    batchMemory: memory
+  });
+}
+
 async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = "") {
   await refreshGeneratedStoriesFromDatabase();
   await refreshEditorialReviewsFromDatabase();
@@ -5180,13 +5314,50 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
   const revisionNumber = existingRevisions.length + 1;
   const previousScore = Number(editorialReview?.editorial_score || 0);
   const expectedScore = Math.min(100, Math.max(previousScore + 8, previousScore ? previousScore + 18 : 76));
-  const rewritten = buildEditorialRewriteText({
+  const candidateSeed = `${original.id}:${revisionNumber}:${Date.now()}`;
+  const diversityOne = editorialRewriteDiversityForCandidate({
+    original,
+    category: original.category || "betrayal",
+    seed: candidateSeed,
+    revisionNumber,
+    candidateIndex: 0
+  });
+  const firstCandidate = buildEditorialRewriteText({
     draft: original,
     review: editorialReview,
     styleGuidance,
     emotionGuidance,
-    safetyReview: originalSafety
+    safetyReview: originalSafety,
+    diversity: diversityOne
   });
+  const firstSimilarity = editorialRewriteSimilarityCheck(firstCandidate, original);
+  let rewritten = firstCandidate;
+  let similarityCheck = firstSimilarity;
+  if (firstSimilarity.similarity_score >= 38) {
+    const diversityTwo = editorialRewriteDiversityForCandidate({
+      original,
+      category: original.category || "betrayal",
+      seed: `${candidateSeed}:regenerate`,
+      revisionNumber,
+      candidateIndex: 1
+    });
+    const secondCandidate = buildEditorialRewriteText({
+      draft: original,
+      review: editorialReview,
+      styleGuidance,
+      emotionGuidance,
+      safetyReview: originalSafety,
+      diversity: diversityTwo
+    });
+    const secondSimilarity = editorialRewriteSimilarityCheck(secondCandidate, original);
+    if (secondSimilarity.similarity_score <= firstSimilarity.similarity_score) {
+      rewritten = secondCandidate;
+      similarityCheck = {
+        ...secondSimilarity,
+        warning: secondSimilarity.warning || "regenerated_for_originality"
+      };
+    }
+  }
   const now = new Date().toISOString();
   const improvedDraft = {
     ...original,
@@ -5205,6 +5376,8 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
     revision_type: "editorial_rewrite",
     revision_number: revisionNumber,
     rewrite_reason: rewritten.rewrite_reason,
+    similarity_warning: similarityCheck.warning || "",
+    pre_safety_similarity_score: similarityCheck.similarity_score,
     previous_editorial_score: previousScore,
     expected_editorial_score: expectedScore,
     status: "needs_approval",
@@ -5236,7 +5409,7 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
     module: "Editorial Rewriter v1",
     original_draft: original,
     improved_draft: finalDraft,
-    revision_chain: editorialRevisionChain(finalDraft.id),
+    revision_chain: await editorialRevisionChainAsync(finalDraft.id),
     style_profile: styleProfile || null,
     emotion_timeline: emotionTimeline || null,
     content_safety_review: contentSafety.review || null,
@@ -5244,6 +5417,7 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
     score_before: previousScore,
     expected_editorial_score: expectedScore,
     score_after: editorial.review?.editorial_score || null,
+    pre_safety_similarity: similarityCheck,
     safety: {
       original_overwritten: false,
       publishing_enabled: false,
@@ -6552,6 +6726,257 @@ function storyLengthPlan(length) {
   return plans[normalizeGeneratedLength(length)] || plans.medium;
 }
 
+const narrativeDiversityProfiles = [
+  {
+    id: "first_person_confession",
+    opening_type: "direct_dialogue",
+    heroes: ["Larisa", "Nina", "Vera", "Irina"],
+    relations: ["my husband", "my sister", "my adult son", "my best friend"],
+    objects: ["voice message", "hotel receipt", "hidden transfer", "old scarf"],
+    settings: ["late evening in a small kitchen", "bus stop after work", "quiet bedroom doorway"],
+    twist_devices: ["voice message", "bank transfer", "witness confession"],
+    moral_patterns: ["truth_before_forgiveness", "dignity_over_revenge"]
+  },
+  {
+    id: "family_secret_dialogue",
+    opening_type: "direct_dialogue",
+    heroes: ["Tamara", "Galina", "Mara", "Elena"],
+    relations: ["her daughter-in-law", "her younger sister", "her husband", "her neighbor"],
+    objects: ["unsigned paper", "second SIM card", "marked calendar", "broken cup"],
+    settings: ["family dinner table", "cramped hallway", "old apartment kitchen"],
+    twist_devices: ["interrupted confession", "changed date", "hidden witness"],
+    moral_patterns: ["silence_cost", "late_truth"]
+  },
+  {
+    id: "object_reveal",
+    opening_type: "shocking_object",
+    heroes: ["Sofia", "Raisa", "Mila", "Anya"],
+    relations: ["her mother-in-law", "her husband", "her cousin", "her adult daughter"],
+    objects: ["hotel key card", "pawn shop ticket", "child's birth certificate", "sealed envelope"],
+    settings: ["laundry basket near the door", "kitchen windowsill", "closet shelf"],
+    twist_devices: ["document date", "wrong surname", "hidden payment"],
+    moral_patterns: ["proof_changes_memory", "truth_has_edges"]
+  },
+  {
+    id: "courtroom_memory",
+    opening_type: "immediate_conflict",
+    heroes: ["Olga", "Marina", "Katerina", "Zoya"],
+    relations: ["her brother", "her ex-husband", "her stepdaughter", "the family lawyer"],
+    objects: ["court notice", "witness statement", "old notary stamp", "thin folder"],
+    settings: ["courthouse corridor", "notary office", "bench outside the courtroom"],
+    twist_devices: ["forgotten witness", "reversed testimony", "old legal copy"],
+    moral_patterns: ["calm_proof", "justice_without_shouting"]
+  },
+  {
+    id: "hospital_or_letter_reveal",
+    opening_type: "discovered_document",
+    heroes: ["Valentina", "Daria", "Lidia", "Nadezhda"],
+    relations: ["her son", "her late mother's friend", "the nurse", "her husband"],
+    objects: ["hospital discharge note", "letter with a torn corner", "medicine receipt", "old diagnosis"],
+    settings: ["hospital corridor", "quiet pharmacy line", "bedside table"],
+    twist_devices: ["medical bill", "late letter", "hidden visit"],
+    moral_patterns: ["care_hidden_as_betrayal", "mercy_after_truth"]
+  },
+  {
+    id: "neighbor_witness",
+    opening_type: "unexpected_question",
+    heroes: ["Tanya", "Lena", "Rimma", "Alla"],
+    relations: ["the old neighbor", "her husband", "her daughter", "the woman upstairs"],
+    objects: ["neighbor's notebook", "doorbell camera clip", "parcel slip", "old key"],
+    settings: ["stairwell landing", "yard bench", "elevator doorway"],
+    twist_devices: ["neighbor testimony", "camera clip", "delivered parcel"],
+    moral_patterns: ["ordinary_witness", "truth_from_side"]
+  },
+  {
+    id: "child_question_hook",
+    opening_type: "unexpected_question",
+    heroes: ["Yulia", "Oksana", "Polina", "Marta"],
+    relations: ["her grandson", "her teenage daughter", "her son", "her husband"],
+    objects: ["child's drawing", "school notebook", "small toy car", "folded photo"],
+    settings: ["children's room doorway", "school hallway", "breakfast table"],
+    twist_devices: ["child question", "drawing clue", "teacher note"],
+    moral_patterns: ["child_sees_truth", "small_voice_big_truth"]
+  },
+  {
+    id: "inheritance_document_twist",
+    opening_type: "discovered_document",
+    heroes: ["Kristina", "Natalia", "Inga", "Rita"],
+    relations: ["her brother", "her aunt", "her mother-in-law", "the notary"],
+    objects: ["will page", "house deed", "old savings book", "notary copy"],
+    settings: ["notary office", "old family house", "kitchen after the funeral"],
+    twist_devices: ["changed will", "crossed-out name", "hidden deed"],
+    moral_patterns: ["inheritance_reveals_values", "house_remembers"]
+  },
+  {
+    id: "old_photo_reveal",
+    opening_type: "discovered_photo",
+    heroes: ["Margarita", "Nina", "Alina", "Zina"],
+    relations: ["her father", "her husband", "her mother", "her older sister"],
+    objects: ["old photograph", "photo album page", "negative strip", "frame with a cracked corner"],
+    settings: ["old wardrobe", "dusty living room", "attic staircase"],
+    twist_devices: ["photo date", "unknown face", "hidden place"],
+    moral_patterns: ["picture_breaks_lie", "memory_rewritten"]
+  },
+  {
+    id: "missed_call_or_voice_message",
+    opening_type: "message_reveal",
+    heroes: ["Elena", "Sveta", "Masha", "Dina"],
+    relations: ["her husband", "her sister", "her son", "her old friend"],
+    objects: ["missed call", "voice message", "deleted chat", "unknown number"],
+    settings: ["night kitchen", "taxi back seat", "empty balcony"],
+    twist_devices: ["voice recording", "wrong recipient", "deleted message"],
+    moral_patterns: ["message_arrives_late", "truth_has_a_voice"]
+  }
+];
+
+function narrativeBatchMemory() {
+  return {
+    objects: new Set(),
+    first_structures: new Set(),
+    names: new Set(),
+    relations: new Set(),
+    twist_devices: new Set(),
+    moral_patterns: new Set(),
+    frames: new Set()
+  };
+}
+
+function pickFresh(list = [], seed = "", memory, key = "") {
+  if (!list.length) return "";
+  const used = memory?.[key];
+  const start = crypto.createHash("sha256").update(seed).digest()[0] % list.length;
+  for (let offset = 0; offset < list.length; offset += 1) {
+    const candidate = list[(start + offset) % list.length];
+    if (!used || !used.has(candidate)) {
+      if (used) used.add(candidate);
+      return candidate;
+    }
+  }
+  const fallback = list[start];
+  if (used) used.add(fallback);
+  return fallback;
+}
+
+function narrativeFrameById(frameId = "") {
+  return narrativeDiversityProfiles.find((item) => item.id === frameId) || null;
+}
+
+function selectNarrativeFrame(index = 0, requestedFrame = "", memory = null) {
+  const requested = narrativeFrameById(requestedFrame);
+  if (requested && !memory?.frames?.has(requested.id)) {
+    memory?.frames?.add(requested.id);
+    return requested;
+  }
+  for (let offset = 0; offset < narrativeDiversityProfiles.length; offset += 1) {
+    const frame = narrativeDiversityProfiles[(Number(index || 0) + offset) % narrativeDiversityProfiles.length];
+    if (!memory?.frames?.has(frame.id)) {
+      memory?.frames?.add(frame.id);
+      return frame;
+    }
+  }
+  return narrativeDiversityProfiles[Number(index || 0) % narrativeDiversityProfiles.length];
+}
+
+function buildNarrativeDiversityProfile({ category, seed, baseProfile = {}, frame, batchMemory }) {
+  const selected = frame || selectNarrativeFrame(0, "", batchMemory);
+  return {
+    frame_id: selected.id,
+    opening_type: selected.opening_type,
+    hero: pickFresh(selected.heroes, `${seed}:hero:${selected.id}`, batchMemory, "names"),
+    relation: pickFresh(selected.relations, `${seed}:relation:${selected.id}`, batchMemory, "relations"),
+    object: pickFresh(selected.objects, `${seed}:object:${selected.id}`, batchMemory, "objects") || baseProfile.object,
+    setting: pickFresh(selected.settings, `${seed}:setting:${selected.id}`, null, ""),
+    twist_device: pickFresh(selected.twist_devices, `${seed}:twist:${selected.id}`, batchMemory, "twist_devices"),
+    moral_pattern: pickFresh(selected.moral_patterns, `${seed}:moral:${selected.id}`, batchMemory, "moral_patterns"),
+    conflict: baseProfile.conflict || "a family betrayal comes into the open",
+    turn: baseProfile.turn || "the person who looked guilty had been covering for someone weaker",
+    moral: baseProfile.moral || "Truth does not make pain smaller, but it stops the lie from growing."
+  };
+}
+
+function narrativeOpening({ diversity, hero, relation, object }) {
+  const openers = {
+    first_person_confession: `"I lied because I was afraid you would leave," ${hero} said before anyone had even taken off their coat, and ${object} lay between them like proof nobody could push aside.\n\nThe words landed harder than a slap.\n\n${relation} suddenly stopped breathing like a person waiting for a sentence.`,
+    family_secret_dialogue: `"Do not touch that," ${relation} said, but ${hero} already had ${object} in her hand and saw the mark that made the whole room go silent.\n\n"Why?" she asked. "Because it belongs to you, or because it proves what you did?"\n\nNo one moved.`,
+    object_reveal: `${hero} found ${object} inside a place where it had no reason to be, hidden badly enough to look rushed and guilty.\n\nWhen ${relation} saw it, the first thing they said was not an explanation.\n\nIt was, "How much do you know?"`,
+    courtroom_memory: `"Your name is on this statement," ${hero} said in the courthouse corridor, holding ${object} high enough for ${relation} to stop reaching for it.\n\nOne line on the page had just turned a family quarrel into betrayal.\n\nThe corridor went quiet.`,
+    hospital_or_letter_reveal: `${hero} opened ${object} under the white hospital light and saw a date that was wrong by three years.\n\n"Tell me who paid for this," she said.\n\n${relation} sat down as if the floor had moved.`,
+    neighbor_witness: `"Ask the neighbor what she saw," ${relation} said, trying to sound brave, so ${hero} did and came back ten minutes later holding ${object}.\n\nThe whole family understood the lie had a witness.\n\nNobody asked her to sit down.`,
+    child_question_hook: `"Why does Dad have two families in my drawing?" the child asked, and ${hero} looked down at ${object} while every adult at the table became busy with silence.\n\nNo one laughed.\n\nSomeone dropped a spoon.`,
+    inheritance_document_twist: `${hero} saw her name crossed out on ${object}, and the ink was fresh enough to shine under the kitchen lamp.\n\n"Who changed this after the funeral?" she asked.\n\n${relation} looked at the door instead of her face.`,
+    old_photo_reveal: `${hero} turned over ${object} and saw a date that should have been impossible, written in the same careful hand as her mother's letters.\n\n${relation} whispered, "You were never supposed to find that picture."\n\nThat was answer enough.`,
+    missed_call_or_voice_message: `${hero} pressed play on ${object} before ${relation} could stop her, and a tired familiar voice filled the room with the sentence everyone had avoided.\n\nBy the third sentence, everyone knew the betrayal had not started today.\n\nIt had only reached her today.`
+  };
+  return openers[diversity.frame_id] || openers.object_reveal;
+}
+
+function moralByPattern(pattern = "", hero = "She", object = "the proof") {
+  const endings = {
+    truth_before_forgiveness: `${hero} did not forgive anyone that night. She only put ${object} back on the table and said, "Tomorrow we start with the truth."`,
+    dignity_over_revenge: `${hero} could have shouted. Instead, she folded the proof once and left them with the silence they had earned.`,
+    silence_cost: `Silence had protected the wrong people for too long. That evening, it finally lost its place at the table.`,
+    late_truth: `The truth arrived late, but it still arrived in time to stop one more lie.`,
+    proof_changes_memory: `One small proof changed every memory ${hero} had been forced to carry alone.`,
+    truth_has_edges: `The truth did not heal them at once. It only stopped the wound from being called peace.`,
+    calm_proof: `No one won by shouting. The quiet proof on the table did all the speaking.`,
+    justice_without_shouting: `Justice came without a raised voice, and that made it harder to deny.`,
+    care_hidden_as_betrayal: `What looked like betrayal had been a frightened kind of care, but fear had still done damage.`,
+    mercy_after_truth: `Mercy became possible only after the lie stopped asking to be protected.`,
+    ordinary_witness: `Sometimes the truth does not come from family. Sometimes it comes from the person who saw everything and stayed quiet too long.`,
+    truth_from_side: `The side witness changed the center of the story.`,
+    child_sees_truth: `The adults had hidden the truth badly; the child had simply named it first.`,
+    small_voice_big_truth: `One small question broke what years of adult silence had built.`,
+    inheritance_reveals_values: `The inheritance did not show who owned the house. It showed who had already abandoned it.`,
+    house_remembers: `The old house remembered what the family tried to forget.`,
+    picture_breaks_lie: `A picture did what arguments could not: it made the lie stand still.`,
+    memory_rewritten: `The past did not change, but the story they had told about it finally did.`,
+    message_arrives_late: `The message arrived too late to prevent pain, but not too late to end the lie.`,
+    truth_has_a_voice: `The truth had a voice, and for once nobody could interrupt it.`
+  };
+  return endings[pattern] || endings.truth_before_forgiveness;
+}
+
+function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, keywords, emotionGuidance = {} }) {
+  const plan = storyLengthPlan(length);
+  const hero = diversity.hero || "Nina";
+  const relation = diversity.relation || "her husband";
+  const object = diversity.object || profile.object || "old envelope";
+  const setting = diversity.setting || profile.setting || "small kitchen";
+  const turn = diversity.turn || profile.turn;
+  const twistDevice = diversity.twist_device || "hidden document";
+  const opening = narrativeOpening({ diversity, hero, relation, object });
+  const peakEmotion = emotionGuidance.peak_emotion || "shock";
+  const paragraphs = [
+    opening,
+    `${setting.charAt(0).toUpperCase() + setting.slice(1)} suddenly felt too small for three people and one secret. ${hero} noticed ordinary things first: a chair pushed back too far, a wet sleeve, the way ${relation} kept looking at ${object} instead of at her.`,
+    `"Say it plainly," ${hero} said.\n\n${relation} swallowed. "If I say it plainly, you will hate me."\n\n"I already hate guessing."`,
+    `The conflict had looked simple from the outside: ${diversity.conflict}. But simple stories are usually the ones someone has trimmed until the sharp parts are hidden.`,
+    `${hero} picked up ${object}. The detail that changed everything was small: ${twistDevice}. It turned suspicion into proof and proof into a question nobody wanted to answer.`,
+    `${relation} finally admitted the part that had been missing: ${turn}. The room did not explode. It went quiet in a worse way, the way a person goes quiet when the truth has taken away their last excuse.`,
+    `${hero} felt ${peakEmotion} first, then anger, then something more painful: the realization that she had been pushed toward the wrong conclusion on purpose.`,
+    `"You let me blame myself," she said.\n\n"No," ${relation} answered. "I let you blame the safest person."`,
+    `That sentence changed the betrayal. It was no longer only about what had happened. It was about who had been chosen to carry the shame.`,
+    `By the time the kettle clicked off, nobody was pretending anymore. ${hero} did not ask for promises. She asked for dates, names, and the parts of the story that had been left out.`,
+    moralByPattern(diversity.moral_pattern, hero, object),
+    `${profile.moral || "A family can survive a painful truth better than a comfortable lie."}`
+  ];
+  let selected = paragraphs.slice(0, Math.min(plan.paragraphs, paragraphs.length));
+  if (!selected.some((paragraph) => paragraph.includes(profile.moral || ""))) {
+    selected[selected.length - 1] = paragraphs[paragraphs.length - 2];
+  }
+  const title = `${hero} found ${object}, and ${relation} finally told the part everyone hid`;
+  const keywordLine = keywords.length ? ` Research signals used only as inspiration: ${keywords.slice(0, 4).join(", ")}.` : "";
+  return {
+    title,
+    hook: opening,
+    full_story: selected.join("\n\n"),
+    moral: moralByPattern(diversity.moral_pattern, hero, object),
+    target_length: plan.target,
+    keyword_note: keywordLine,
+    emotion
+  };
+}
+
 function storyCategoryProfile(category, seed) {
   const normalized = normalizeResearchCategory(category);
   const profiles = {
@@ -6659,7 +7084,10 @@ function researchKeywordBlend(signals) {
   return words.slice(0, 10);
 }
 
-function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance = {}, emotionGuidance = {} }) {
+function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance = {}, emotionGuidance = {}, diversity = null }) {
+  if (diversity?.frame_id) {
+    return buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, keywords, styleGuidance, emotionGuidance });
+  }
   const plan = storyLengthPlan(length);
   const hero = pick(["Mara", "Helen", "Nina", "Galina", "Elena", "Tamara"], `${seed}:hero`);
   const relation = pick(["her adult son", "her husband", "her daughter-in-law", "her younger sister", "her late mother's neighbor"], `${seed}:relation`);
@@ -7006,10 +7434,18 @@ async function generateOriginalStoryV2(payload = {}) {
   const emotion = String(payload.emotion || topEmotion || "anxiety and hope").trim();
   const seed = `${category}:${emotion}:${length}:${payload.variant_index || 0}:${Date.now()}:${crypto.randomUUID()}`;
   const profile = storyCategoryProfile(category, seed);
+  const diversityFrame = selectNarrativeFrame(payload.variant_index || 0, payload.narrative_frame || payload.frame_id || "", payload.batch_memory || null);
+  const diversity = buildNarrativeDiversityProfile({
+    category,
+    seed,
+    baseProfile: profile,
+    frame: diversityFrame,
+    batchMemory: payload.batch_memory || null
+  });
   const keywords = researchKeywordBlend(researchSignals);
   const styleGuidance = await styleBrainGuidanceForGenerator();
   const emotionGuidance = await emotionEngineGuidanceForGenerator();
-  const draft = buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance, emotionGuidance });
+  const draft = buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance, emotionGuidance, diversity });
   const score = viralPredictionScore(researchSignals, facebookSignals, length);
   const story = {
     id: crypto.randomUUID(),
@@ -7025,7 +7461,7 @@ async function generateOriginalStoryV2(payload = {}) {
     why_it_should_work: [
       `Uses ${researchSignals.filter((item) => item.source_status === "live_search").length} live research signals from high-scoring public results.`,
       facebookSignals.length ? `Calibrated against ${facebookSignals.length} top Facebook posts from your loaded Page data.` : "Facebook Page data is not loaded enough yet, so scoring leans more on research signals.",
-      `Built around ${category}, ${emotion}, a concrete object, family tension and a late reveal.`,
+      `Built around ${category}, ${emotion}, frame ${diversity.frame_id}, object ${diversity.object}, twist ${diversity.twist_device}.`,
       `Style Brain guidance: ${styleGuidance.opening_style}, ${styleGuidance.dialogue_density}, ${styleGuidance.paragraph_rhythm}.`,
       `Emotion Engine guidance: ${emotionGuidance.rhythm || "slow-build emotional escalation"}, peak near ${emotionGuidance.peak_position || 70}%, ending with ${emotionGuidance.ending_emotion || "relief"}.`,
       "Original draft: new characters, new setting, new ending, no copied text."
@@ -7034,6 +7470,8 @@ async function generateOriginalStoryV2(payload = {}) {
     facebook_signals: facebookSignals,
     style_brain_guidance: styleGuidance,
     emotion_engine_guidance: emotionGuidance,
+    narrative_frame: diversity.frame_id,
+    diversity_profile: diversity,
     status: "needs_approval",
     approval_required: true,
     publish_allowed: false,
@@ -7082,11 +7520,13 @@ async function generateOriginalStoriesV2(payload = {}) {
   const contentSafetyReviews = [];
   const emotionTimelines = [];
   const editorialReviews = [];
+  const batchMemory = narrativeBatchMemory();
   for (let index = 0; index < count; index += 1) {
     const result = await generateOriginalStoryV2({
       ...payload,
       count: 1,
-      variant_index: index
+      variant_index: index,
+      batch_memory: batchMemory
     });
     generated.push({
       ...result.story,
@@ -9585,7 +10025,7 @@ async function telegramImproveDraft(chatId, numberText = "1") {
 
 async function telegramDraftVersions(chatId, numberText = "1") {
   await refreshGeneratedStoriesFromDatabase();
-  const versions = editorialRevisionChain(numberText || "1");
+  const versions = await editorialRevisionChainAsync(numberText || "1");
   if (!versions.length) return sendTelegramMessage(chatId, "Версии не найдены. Используй /черновики, чтобы увидеть номера.", mainTelegramKeyboard());
   const text = versions.map((draft, index) => {
     const review = latestEditorialReviewForDraft(draft.id);
@@ -12139,7 +12579,7 @@ async function handleApi(req, res, pathname) {
   if (pathname.startsWith("/api/editorial-rewriter/versions/") && req.method === "GET") {
     await refreshGeneratedStoriesFromDatabase();
     const ref = decodeURIComponent(pathname.replace("/api/editorial-rewriter/versions/", ""));
-    const versions = editorialRevisionChain(ref);
+    const versions = await editorialRevisionChainAsync(ref);
     return sendJson(res, versions.length ? 200 : 404, versions.length
       ? { ok: true, versions }
       : { ok: false, code: "versions_not_found" });
