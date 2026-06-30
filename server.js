@@ -5291,6 +5291,20 @@ function editorialRewriteSimilarityCheck(candidate = {}, original = {}) {
   };
 }
 
+function editorialRewriteCandidateQuality(candidate = {}, similarity = {}) {
+  const text = editorialRewriteCandidateText(candidate);
+  const paragraphs = editorialParagraphs(text);
+  const first = paragraphs[0] || "";
+  const dialogueCount = (text.match(/"/g) || []).length;
+  const emotionSignals = editorialCountPatterns(text, [/truth/i, /secret/i, /family/i, /betrayal/i, /shock/i, /hope/i, /relief/i, /forgive/i]);
+  const hookSignals = editorialCountPatterns(first, [/\?/i, /"/i, /truth/i, /secret/i, /family/i, /name/i, /document/i]);
+  const lengthScore = first.length >= 80 && first.length <= 360 ? 12 : first.length <= 520 ? 6 : 0;
+  const paragraphScore = Math.min(18, paragraphs.length * 2);
+  const dialogueScore = Math.min(16, dialogueCount * 2);
+  const similarityPenalty = Math.max(0, Number(similarity.similarity_score || 0) - 32) * 1.8;
+  return clampStyleScore(45 + hookSignals * 5 + emotionSignals * 2 + lengthScore + paragraphScore + dialogueScore - similarityPenalty);
+}
+
 function generatedStorySimilarityCheck(candidate = {}) {
   const candidateText = contentSafetyTextFromDraft(candidate);
   const sources = readGeneratedStories()
@@ -5372,11 +5386,18 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
       attempts: candidateIndex + 1,
       narrative_frame: diversity.frame_id
     };
-    const packed = { rewritten: candidate, similarity };
-    if (!bestRewriteCandidate || similarity.similarity_score < bestRewriteCandidate.similarity.similarity_score) {
+    const candidateQuality = editorialRewriteCandidateQuality(candidate, similarity);
+    const rank = similarity.similarity_score < 38
+      ? candidateQuality
+      : candidateQuality - 30 - Math.max(0, similarity.similarity_score - 38) * 2;
+    const packed = { rewritten: candidate, similarity: { ...similarity, candidate_quality: candidateQuality, rank }, rank };
+    if (
+      !bestRewriteCandidate
+      || rank > bestRewriteCandidate.rank
+      || (rank === bestRewriteCandidate.rank && similarity.similarity_score < bestRewriteCandidate.similarity.similarity_score)
+    ) {
       bestRewriteCandidate = packed;
     }
-    if (similarity.similarity_score < 38) break;
   }
   const rewritten = bestRewriteCandidate.rewritten;
   const similarityCheck = {
@@ -7026,6 +7047,17 @@ function narrativeOpening({ diversity, hero, relation, object }) {
   return openers[diversity.frame_id] || openers.object_reveal;
 }
 
+function narrativeHookLead({ hero, relation, object, seed }) {
+  return pick([
+    `"Tell me which part of my life was true," ${hero} said, placing ${object} where the whole family could see it.`,
+    `"Before anyone explains, answer one question," ${hero} said. "How long has this family been hiding this from me?"`,
+    `"If this is a mistake, why does it have your name on it?" ${hero} asked, holding up ${object}.`,
+    `"Do not ask me to calm down," ${hero} said. "First tell me why this secret was safer than the truth."`,
+    `"One honest sentence," ${hero} said to ${relation}. "After that, I will decide what kind of family we still are."`,
+    `"Look at this and say I imagined it," ${hero} said, and nobody in the room reached for ${object}.`
+  ], `${seed}:hook-lead`);
+}
+
 function moralByPattern(pattern = "", hero = "She", object = "the proof") {
   const endings = {
     truth_before_forgiveness: `${hero} did not forgive anyone that night. She only put ${object} back on the table and said, "Tomorrow we start with the truth."`,
@@ -7186,7 +7218,8 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
   const turn = diversity.turn || profile.turn;
   const twistDevice = diversity.twist_device || "hidden document";
   const texture = diversity.texture || narrativeTexturePack(`${hero}:${object}:${turn}`, diversity.frame_id);
-  const opening = narrativeOpening({ diversity, hero, relation, object });
+  const hookLead = narrativeHookLead({ hero, relation, object, seed: `${diversity.frame_id}:${hero}:${object}:${turn}` });
+  const opening = `${hookLead}\n\n${narrativeOpening({ diversity, hero, relation, object })}`;
   const peakEmotion = emotionGuidance.peak_emotion || "shock";
   const frameBeats = narrativeFlexibleBeats({
     profile,
