@@ -1582,6 +1582,20 @@ async function persistEditorialReviews(items) {
   }
 }
 
+async function refreshEditorialReviewsFromDatabase(limit = 1200) {
+  if (!pgPool) return readEditorialReviews();
+  try {
+    await ensureEditorialReviewsTable();
+    storageCache.editorialReviews = (await pgPool.query(
+      "select * from editorial_reviews order by created_at desc limit $1",
+      [Math.max(1, Math.min(Number(limit || 1200), 5000))]
+    )).rows.map(normalizeEditorialReviewRow);
+  } catch (error) {
+    console.warn(`PostgreSQL editorial_reviews refresh failed: ${error.message}`);
+  }
+  return readEditorialReviews();
+}
+
 function normalizeEmotionTimelineRow(row = {}) {
   return {
     ...row,
@@ -9147,6 +9161,7 @@ function telegramEditorialReviewText(resultOrReview = {}, full = false) {
 }
 
 async function telegramLatestEditorialReview(chatId) {
+  await refreshEditorialReviewsFromDatabase();
   const review = latestEditorialReviews(1)[0];
   if (!review) {
     return sendTelegramMessage(chatId, "Редакторских отчётов пока нет. Запусти /проверить_историю 1 или создай новый черновик.", mainTelegramKeyboard());
@@ -9161,6 +9176,7 @@ async function telegramRunEditorialReview(chatId, numberText = "1") {
 }
 
 async function telegramEditorialReport(chatId, numberText = "1") {
+  await refreshEditorialReviewsFromDatabase();
   const draft = generatedDraftByRef(numberText || "1");
   let review = draft ? latestEditorialReviewForDraft(draft.id) : editorialReviewByNumber(numberText || "1");
   let result = null;
@@ -11638,10 +11654,12 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === "/api/editorial-board/reviews" && req.method === "GET") {
+    await refreshEditorialReviewsFromDatabase();
     return sendJson(res, 200, buildEditorialBoardDashboardData());
   }
 
   if (pathname.startsWith("/api/editorial-board/review/") && req.method === "GET") {
+    await refreshEditorialReviewsFromDatabase();
     const id = decodeURIComponent(pathname.replace("/api/editorial-board/review/", ""));
     const review = readEditorialReviews().find((item) => item.id === id);
     return sendJson(res, review ? 200 : 404, review ? { ok: true, review } : { ok: false, code: "editorial_review_not_found" });
@@ -11883,7 +11901,10 @@ async function router(req, res) {
     if (pathname === "/style-brain") return send(res, 200, renderStyleBrainDashboard());
     if (pathname === "/emotion-engine") return send(res, 200, renderEmotionEngineDashboard());
     if (pathname === "/content-safety") return send(res, 200, renderContentSafetyDashboard());
-    if (pathname === "/editorial-board") return send(res, 200, renderEditorialBoardDashboard());
+    if (pathname === "/editorial-board") {
+      await refreshEditorialReviewsFromDatabase();
+      return send(res, 200, renderEditorialBoardDashboard());
+    }
     if (pathname === "/ai-autopilot") return send(res, 200, renderAutopilotDashboard());
     if (pathname === "/ai-autopilot-v1") return send(res, 200, renderAutopilotV1Dashboard());
     if (pathname === "/production-status") return send(res, 200, renderProductionStatus());
