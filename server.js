@@ -4420,7 +4420,20 @@ function contentSafetyMaxSimilarity(text = "", sources = []) {
   return best;
 }
 
-function contentSafetyReferenceSources(currentDraftId = "") {
+function contentSafetyExcludedDraftIds(currentDraftId = "", currentDraft = {}) {
+  const excluded = new Set([currentDraftId].filter(Boolean));
+  if (currentDraft?.parent_draft_id || currentDraft?.revision_type === "editorial_rewrite") {
+    const rootId = editorialRewriteRootId(currentDraft);
+    if (rootId) excluded.add(rootId);
+    for (const item of readGeneratedStories()) {
+      if (item.id === rootId || item.parent_draft_id === rootId) excluded.add(item.id);
+    }
+  }
+  return excluded;
+}
+
+function contentSafetyReferenceSources(currentDraftId = "", currentDraft = {}) {
+  const excludedDraftIds = contentSafetyExcludedDraftIds(currentDraftId, currentDraft);
   const research = readResearchStories().map((item) => ({
     source_type: "research",
     source_reference: item.url || item.source_url || item.title || item.id,
@@ -4432,7 +4445,7 @@ function contentSafetyReferenceSources(currentDraftId = "") {
     text: [item.name, item.notes, item.popular_topics, item.popular_image_types, item.posting_frequency].filter(Boolean).join(" ")
   }));
   const drafts = readGeneratedStories()
-    .filter((item) => item.id !== currentDraftId)
+    .filter((item) => !excludedDraftIds.has(item.id))
     .map((item) => ({
       source_type: "generated",
       source_reference: item.id,
@@ -4547,7 +4560,7 @@ function contentSafetyPolicyRisk(text = "") {
 }
 
 function contentSafetyOriginalityRisk(text = "", draft = {}) {
-  const sources = contentSafetyReferenceSources(draft.id || "");
+  const sources = contentSafetyReferenceSources(draft.id || "", draft);
   const research = contentSafetyMaxSimilarity(text, sources.research);
   const competitors = contentSafetyMaxSimilarity(text, sources.competitors);
   const drafts = contentSafetyMaxSimilarity(text, sources.drafts);
