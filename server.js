@@ -7012,16 +7012,16 @@ function buildNarrativeDiversityProfile({ category, seed, baseProfile = {}, fram
 
 function narrativeOpening({ diversity, hero, relation, object }) {
   const openers = {
-    first_person_confession: `"I lied because I was afraid you would leave," ${hero} said before anyone had even taken off their coat, and ${object} lay between them like proof nobody could push aside.\n\nThe words landed harder than a slap.\n\n${relation} suddenly stopped breathing like a person waiting for a sentence.`,
+    first_person_confession: `"I lied because I was afraid you would leave," ${hero} said before anyone had even taken off their coat, and ${object} lay between them like proof nobody could push aside.\n\nThe room did not become loud. It became careful.\n\n${relation} reached for a chair and missed the back of it by two inches.`,
     family_secret_dialogue: `"Do not touch that," ${relation} said, but ${hero} already had ${object} in her hand and saw the mark that made the whole room go silent.\n\n"Why?" she asked. "Because it belongs to you, or because it proves what you did?"\n\nNo one moved.`,
     object_reveal: `${hero} found ${object} inside a place where it had no reason to be, hidden badly enough to look rushed and guilty.\n\nWhen ${relation} saw it, the first thing they said was not an explanation.\n\nIt was, "How much do you know?"`,
     courtroom_memory: `"Your name is on this statement," ${hero} said in the courthouse corridor, holding ${object} high enough for ${relation} to stop reaching for it.\n\nOne line on the page had just turned a family quarrel into betrayal.\n\nThe corridor went quiet.`,
-    hospital_or_letter_reveal: `${hero} opened ${object} under the white hospital light and saw a date that was wrong by three years.\n\n"Tell me who paid for this," she said.\n\n${relation} sat down as if the floor had moved.`,
-    neighbor_witness: `"Ask the neighbor what she saw," ${relation} said, trying to sound brave, so ${hero} did and came back ten minutes later holding ${object}.\n\nThe whole family understood the lie had a witness.\n\nNobody asked her to sit down.`,
-    child_question_hook: `"Why does Dad have two families in my drawing?" the child asked, and ${hero} looked down at ${object} while every adult at the table became busy with silence.\n\nNo one laughed.\n\nSomeone dropped a spoon.`,
-    inheritance_document_twist: `${hero} saw her name crossed out on ${object}, and the ink was fresh enough to shine under the kitchen lamp.\n\n"Who changed this after the funeral?" she asked.\n\n${relation} looked at the door instead of her face.`,
+    hospital_or_letter_reveal: `${hero} opened ${object} under the white hospital light and saw a date that was wrong by three years.\n\n"Tell me who paid for this," she said.\n\n${relation} folded both hands together, then unfolded them because even that looked like an answer.`,
+    neighbor_witness: `"Ask the neighbor what she saw," ${relation} said, trying to sound brave, so ${hero} did and came back ten minutes later holding ${object}.\n\nThe bravado disappeared before she reached the table.\n\nNobody offered her the chair they had been saving.`,
+    child_question_hook: `"Why does Dad have two families in my drawing?" the child asked, and ${hero} looked down at ${object} while every adult at the table became busy with silence.\n\nThe spoon in her hand stayed halfway to the cup.\n\nSomeone whispered the child's name too late.`,
+    inheritance_document_twist: `${hero} saw her name crossed out on ${object}, and the ink was fresh enough to shine under the kitchen lamp.\n\n"Who changed this after the funeral?" she asked.\n\n${relation} started to answer with grief and stopped when grief sounded too convenient.`,
     old_photo_reveal: `${hero} turned over ${object} and saw a date that should have been impossible, written in the same careful hand as her mother's letters.\n\n${relation} whispered, "You were never supposed to find that picture."\n\nThat was answer enough.`,
-    missed_call_or_voice_message: `${hero} pressed play on ${object} before ${relation} could stop her, and a tired familiar voice filled the room with the sentence everyone had avoided.\n\nBy the third sentence, everyone knew the betrayal had not started today.\n\nIt had only reached her today.`
+    missed_call_or_voice_message: `${hero} pressed play on ${object} before ${relation} could stop her, and a tired familiar voice filled the room with the sentence everyone had avoided.\n\nHalfway through the recording, ${hero} heard her own name and forgot to breathe.\n\nThe betrayal had not arrived today. It had finally found a speaker.`
   };
   return openers[diversity.frame_id] || openers.object_reveal;
 }
@@ -7050,6 +7050,54 @@ function moralByPattern(pattern = "", hero = "She", object = "the proof") {
     truth_has_a_voice: `The truth had a voice, and for once nobody could interrupt it.`
   };
   return endings[pattern] || endings.truth_before_forgiveness;
+}
+
+function narrativeFlexibleBeats({ profile, diversity, hero, relation, object, setting, twistDevice, peakEmotion, seed }) {
+  const truth = diversity.turn || profile.turn || "the old accusation had protected the wrong person";
+  const conflict = diversity.conflict || profile.conflict || "a family betrayal comes into the open";
+  const pressure = pick([
+    `${hero} had expected excuses, maybe anger, maybe the usual tired speech about family peace. Instead, ${relation} asked everyone else to leave the room, and that frightened her more than shouting.`,
+    `For years, ${conflict} had been explained with shrugs and half-sentences. Now ${object} made every shrug look planned.`,
+    `${hero} noticed who reached for the door and who reached for the chair. Small movements tell the truth before people do.`,
+    `Nobody in ${setting} seemed surprised enough. That was the detail that made ${hero} cold.`,
+    `${relation} tried to make the moment smaller, but the silence around ${object} kept getting larger.`
+  ], `${seed}:pressure`);
+  const dialogueTurn = pick([
+    `"I want the first version," ${hero} said. "Not the version you practiced."`,
+    `"If you loved me, you should have trusted me with the ugly part," ${hero} said.`,
+    `"Stop protecting the person who created the wound," ${hero} said.`,
+    `"I am not asking who suffered," ${hero} said. "I am asking who lied."`,
+    `"You do not get to call me dramatic after hiding this in my own house," ${hero} said.`
+  ], `${seed}:dialogue-turn`);
+  const evidence = pick([
+    `${twistDevice} did not explain everything, but it moved the story out of rumor and into proof.`,
+    `The important part was not the object itself. It was the date, the name, and the nervous correction written in the margin.`,
+    `A smaller secret fell out first, almost by accident, and then the larger one followed because nobody could close the drawer fast enough.`,
+    `The proof was ordinary enough to be missed by a stranger and devastating enough to split a family dinner in two.`,
+    `${hero} read the line twice. The second time, she understood why everyone had been so careful with her anger.`
+  ], `${seed}:evidence`);
+  const reveal = pick([
+    `Then the hidden part came out: ${truth}.`,
+    `Only after the second silence did ${relation} admit the sentence everyone had been walking around: ${truth}.`,
+    `The turn was not theatrical. It was worse because it sounded tired: ${truth}.`,
+    `What finally broke the room was not a scream, but the plain explanation: ${truth}.`,
+    `${relation} said it almost gently, and that made it harder to bear: ${truth}.`
+  ], `${seed}:reveal`);
+  const escalation = pick([
+    `${hero} felt ${peakEmotion}, then shame for having trusted the wrong memory, then anger again because shame was not hers to carry.`,
+    `The old version of the family did not collapse all at once. It lost one beam, then another, until ${hero} could see daylight through it.`,
+    `Someone began to cry, but ${hero} could not comfort them. Comfort had been used too many times to delay the truth.`,
+    `The room waited for her to become either cruel or forgiving. She chose neither. She chose to keep asking.`,
+    `It was the first honest conversation they had ever had, and nobody knew where to put their hands.`
+  ], `${seed}:escalation`);
+  const choice = pick([
+    `${hero} did not decide the future that night. She only decided that the past would no longer be edited for her convenience.`,
+    `Before leaving, ${hero} took a picture of ${object}. Not for revenge. For the days when they would try to make her doubt herself again.`,
+    `${hero} pushed her chair back slowly. "Tomorrow," she said, "we talk about what this cost. Tonight, nobody rewrites it."`,
+    `The apology came late and imperfect. ${hero} accepted neither the excuse nor the performance, only the first clean fact.`,
+    `${hero} left ${object} in the middle of the table, where everyone had to walk around it like a truth with weight.`
+  ], `${seed}:choice`);
+  return [pressure, dialogueTurn, evidence, reveal, escalation, choice];
 }
 
 function narrativeFrameBeats({ diversity, hero, relation, object, setting, turn, conflict, twistDevice, peakEmotion }) {
@@ -7140,16 +7188,16 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
   const texture = diversity.texture || narrativeTexturePack(`${hero}:${object}:${turn}`, diversity.frame_id);
   const opening = narrativeOpening({ diversity, hero, relation, object });
   const peakEmotion = emotionGuidance.peak_emotion || "shock";
-  const frameBeats = narrativeFrameBeats({
+  const frameBeats = narrativeFlexibleBeats({
+    profile,
     diversity,
     hero,
     relation,
     object,
     setting,
-    turn,
-    conflict: diversity.conflict,
     twistDevice,
-    peakEmotion
+    peakEmotion,
+    seed: `${diversity.frame_id}:${hero}:${object}:${turn}:${texture.title_template || ""}`
   });
   const paragraphs = [
     opening,
@@ -7161,6 +7209,7 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
     texture.aftershock,
     frameBeats[3],
     frameBeats[4],
+    frameBeats[5],
     moralByPattern(diversity.moral_pattern, hero, object),
     `${profile.moral || "A family can survive a painful truth better than a comfortable lie."}`
   ];
@@ -7168,10 +7217,11 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
   if (!selected.some((paragraph) => paragraph.includes(profile.moral || ""))) {
     selected[selected.length - 1] = paragraphs[paragraphs.length - 2];
   }
+  const titleRelation = String(relation || "").replace(/^./, (letter) => letter.toUpperCase());
   const title = String(texture.title_template || "{hero} found {object}, and {relation} finally told the part everyone hid")
     .replaceAll("{hero}", hero)
     .replaceAll("{object}", object)
-    .replaceAll("{relation}", relation);
+    .replaceAll("{relation}", titleRelation);
   const keywordLine = keywords.length ? ` Research signals used only as inspiration: ${keywords.slice(0, 4).join(", ")}.` : "";
   return {
     title,
