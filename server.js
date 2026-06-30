@@ -22,6 +22,7 @@ const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.js
 const STYLE_BRAIN_PROFILES_FILE = path.join(ROOT, "data", "style_brain_profiles.json");
 const CONTENT_SAFETY_REVIEWS_FILE = path.join(ROOT, "data", "content_safety_reviews.json");
 const EMOTION_TIMELINE_FILE = path.join(ROOT, "data", "emotion_timeline.json");
+const EDITORIAL_REVIEWS_FILE = path.join(ROOT, "data", "editorial_reviews.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
@@ -415,6 +416,17 @@ async function writeContentSafetyReviews(items) {
   return items;
 }
 
+function readEditorialReviews() {
+  return storageCache.editorialReviews || [];
+}
+
+async function writeEditorialReviews(items) {
+  storageCache.editorialReviews = items;
+  writeJsonBackup(EDITORIAL_REVIEWS_FILE, items);
+  await persistEditorialReviews(items);
+  return items;
+}
+
 function readEmotionTimelines() {
   return storageCache.emotionTimelines || [];
 }
@@ -465,6 +477,7 @@ const storageCache = {
   styleBrainProfiles: readJsonArray(STYLE_BRAIN_PROFILES_FILE),
   contentSafetyReviews: readJsonArray(CONTENT_SAFETY_REVIEWS_FILE),
   emotionTimelines: readJsonArray(EMOTION_TIMELINE_FILE),
+  editorialReviews: readJsonArray(EDITORIAL_REVIEWS_FILE),
   projectBrain: fs.existsSync(PROJECT_BRAIN_FILE)
     ? JSON.parse(fs.readFileSync(PROJECT_BRAIN_FILE, "utf8"))
     : {
@@ -541,6 +554,7 @@ async function initializeStorage() {
     await ensurePublishingPackagesTable();
     await ensureStyleBrainProfilesTable();
     await ensureContentSafetyReviewsTable();
+    await ensureEditorialReviewsTable();
     await ensureEmotionTimelineTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
@@ -565,6 +579,7 @@ async function initializeStorage() {
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
     storageCache.styleBrainProfiles = (await pgPool.query("select * from style_brain_profiles order by created_at desc limit 1200")).rows.map(normalizeStyleBrainProfileRow);
     storageCache.contentSafetyReviews = (await pgPool.query("select * from content_safety_reviews order by created_at desc limit 1000")).rows.map(normalizeContentSafetyReviewRow);
+    storageCache.editorialReviews = (await pgPool.query("select * from editorial_reviews order by created_at desc limit 1200")).rows.map(normalizeEditorialReviewRow);
     storageCache.emotionTimelines = (await pgPool.query("select * from emotion_timeline order by created_at desc limit 1500")).rows.map(normalizeEmotionTimelineRow);
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
@@ -826,6 +841,39 @@ async function ensureContentSafetyReviewsTable() {
     create index if not exists content_safety_reviews_recommendation_idx on content_safety_reviews (recommendation);
     create index if not exists content_safety_reviews_safety_score_idx on content_safety_reviews (safety_score desc);
     create index if not exists content_safety_reviews_created_at_idx on content_safety_reviews (created_at desc);
+  `);
+}
+
+async function ensureEditorialReviewsTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists editorial_reviews (
+      id text primary key,
+      draft_id text not null,
+      hook_score integer not null default 0,
+      opening_score integer not null default 0,
+      emotion_score integer not null default 0,
+      dialogue_score integer not null default 0,
+      rhythm_score integer not null default 0,
+      twist_score integer not null default 0,
+      ending_score integer not null default 0,
+      human_score integer not null default 0,
+      facebook_score integer not null default 0,
+      originality_score integer not null default 0,
+      editorial_score integer not null default 0,
+      reader_retention_prediction integer not null default 0,
+      comment_prediction integer not null default 0,
+      share_prediction integer not null default 0,
+      publication_readiness text not null default 'needs_edit',
+      strengths_json jsonb not null default '[]'::jsonb,
+      weaknesses_json jsonb not null default '[]'::jsonb,
+      improvement_plan_json jsonb not null default '[]'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists editorial_reviews_draft_idx on editorial_reviews (draft_id);
+    create index if not exists editorial_reviews_score_idx on editorial_reviews (editorial_score desc);
+    create index if not exists editorial_reviews_readiness_idx on editorial_reviews (publication_readiness);
+    create index if not exists editorial_reviews_created_at_idx on editorial_reviews (created_at desc);
   `);
 }
 
@@ -1448,6 +1496,92 @@ async function persistContentSafetyReviews(items) {
   }
 }
 
+function normalizeEditorialReviewRow(row = {}) {
+  return {
+    ...row,
+    hook_score: Number(row.hook_score || 0),
+    opening_score: Number(row.opening_score || 0),
+    emotion_score: Number(row.emotion_score || 0),
+    dialogue_score: Number(row.dialogue_score || 0),
+    rhythm_score: Number(row.rhythm_score || 0),
+    twist_score: Number(row.twist_score || 0),
+    ending_score: Number(row.ending_score || 0),
+    human_score: Number(row.human_score || 0),
+    facebook_score: Number(row.facebook_score || 0),
+    originality_score: Number(row.originality_score || 0),
+    editorial_score: Number(row.editorial_score || 0),
+    reader_retention_prediction: Number(row.reader_retention_prediction || 0),
+    comment_prediction: Number(row.comment_prediction || 0),
+    share_prediction: Number(row.share_prediction || 0),
+    strengths_json: Array.isArray(row.strengths_json) ? row.strengths_json : [],
+    weaknesses_json: Array.isArray(row.weaknesses_json) ? row.weaknesses_json : [],
+    improvement_plan_json: Array.isArray(row.improvement_plan_json) ? row.improvement_plan_json : []
+  };
+}
+
+async function persistEditorialReviews(items) {
+  if (!pgPool) return;
+  try {
+    await ensureEditorialReviewsTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into editorial_reviews (
+          id, draft_id, hook_score, opening_score, emotion_score, dialogue_score,
+          rhythm_score, twist_score, ending_score, human_score, facebook_score,
+          originality_score, editorial_score, reader_retention_prediction,
+          comment_prediction, share_prediction, publication_readiness,
+          strengths_json, weaknesses_json, improvement_plan_json, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+        on conflict (id) do update set
+          draft_id = excluded.draft_id,
+          hook_score = excluded.hook_score,
+          opening_score = excluded.opening_score,
+          emotion_score = excluded.emotion_score,
+          dialogue_score = excluded.dialogue_score,
+          rhythm_score = excluded.rhythm_score,
+          twist_score = excluded.twist_score,
+          ending_score = excluded.ending_score,
+          human_score = excluded.human_score,
+          facebook_score = excluded.facebook_score,
+          originality_score = excluded.originality_score,
+          editorial_score = excluded.editorial_score,
+          reader_retention_prediction = excluded.reader_retention_prediction,
+          comment_prediction = excluded.comment_prediction,
+          share_prediction = excluded.share_prediction,
+          publication_readiness = excluded.publication_readiness,
+          strengths_json = excluded.strengths_json,
+          weaknesses_json = excluded.weaknesses_json,
+          improvement_plan_json = excluded.improvement_plan_json`,
+        [
+          item.id || crypto.randomUUID(),
+          item.draft_id || "",
+          Number(item.hook_score || 0),
+          Number(item.opening_score || 0),
+          Number(item.emotion_score || 0),
+          Number(item.dialogue_score || 0),
+          Number(item.rhythm_score || 0),
+          Number(item.twist_score || 0),
+          Number(item.ending_score || 0),
+          Number(item.human_score || 0),
+          Number(item.facebook_score || 0),
+          Number(item.originality_score || 0),
+          Number(item.editorial_score || 0),
+          Number(item.reader_retention_prediction || 0),
+          Number(item.comment_prediction || 0),
+          Number(item.share_prediction || 0),
+          item.publication_readiness || "needs_edit",
+          JSON.stringify(Array.isArray(item.strengths_json) ? item.strengths_json : []),
+          JSON.stringify(Array.isArray(item.weaknesses_json) ? item.weaknesses_json : []),
+          JSON.stringify(Array.isArray(item.improvement_plan_json) ? item.improvement_plan_json : []),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL editorial_reviews persist failed: ${error.message}`);
+  }
+}
+
 function normalizeEmotionTimelineRow(row = {}) {
   return {
     ...row,
@@ -1695,6 +1829,7 @@ function renderHeader() {
       <a href="/style-brain">Style Brain</a>
       <a href="/emotion-engine">Emotion Engine</a>
       <a href="/content-safety">Content Safety</a>
+      <a href="/editorial-board">Editorial Board</a>
       <a href="/ai-autopilot">AI Autopilot</a>
       <a href="/ai-autopilot-v1">Autopilot v1</a>
       <a href="/production-status">Production Status</a>
@@ -4509,6 +4644,319 @@ function buildContentSafetyDashboardData() {
   };
 }
 
+function editorialParagraphs(text = "") {
+  return String(text || "").split(/\n{2,}|\r?\n/).map((item) => item.trim()).filter(Boolean);
+}
+
+function editorialSentences(text = "") {
+  return String(text || "").split(/[.!?]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function editorialAverage(numbers = []) {
+  const values = numbers.map(Number).filter((value) => Number.isFinite(value));
+  return values.length ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length) : 0;
+}
+
+function editorialWeightedAverage(items = []) {
+  const totalWeight = items.reduce((sum, item) => sum + Number(item.weight || 1), 0);
+  if (!totalWeight) return 0;
+  const weighted = items.reduce((sum, item) => sum + Number(item.score || 0) * Number(item.weight || 1), 0);
+  return clampStyleScore(weighted / totalWeight);
+}
+
+function editorialCountPatterns(text = "", patterns = []) {
+  const lower = String(text || "").toLowerCase();
+  return patterns.reduce((sum, pattern) => sum + (pattern.test(lower) ? 1 : 0), 0);
+}
+
+function editorialWeakestParagraph(paragraphs = []) {
+  if (!paragraphs.length) return { index: 0, text: "", reason: "No paragraphs were available." };
+  const scored = paragraphs.map((paragraph, index) => {
+    const lengthPenalty = paragraph.length > 520 ? 28 : paragraph.length < 80 ? 18 : 0;
+    const dialogueBoost = /["“”]/.test(paragraph) ? 12 : 0;
+    const detailBoost = editorialCountPatterns(paragraph, [/kitchen/i, /table/i, /letter/i, /cup/i, /door/i, /hands/i, /tea/i, /room/i]) * 4;
+    const tensionBoost = editorialCountPatterns(paragraph, [/secret/i, /silent/i, /truth/i, /afraid/i, /blamed/i, /confession/i, /шок/i, /тайн/i, /молч/i]) * 5;
+    return {
+      index,
+      text: paragraph,
+      score: clampStyleScore(55 - lengthPenalty + dialogueBoost + detailBoost + tensionBoost)
+    };
+  });
+  const weakest = scored.sort((a, b) => a.score - b.score)[0];
+  const reason = weakest.text.length > 520
+    ? "Too dense for mobile reading."
+    : /["“”]/.test(weakest.text)
+      ? "Dialogue is present, but the paragraph can carry more consequence."
+      : "Needs a sharper concrete detail, dialogue beat or emotional turn.";
+  return { index: weakest.index + 1, text: weakest.text, reason };
+}
+
+function latestEmotionTimelineForDraft(draftId = "") {
+  return readEmotionTimelines()
+    .filter((item) => item.draft_id === draftId || item.source_reference === `generated:${draftId}`)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0] || null;
+}
+
+function latestEditorialReviewForDraft(draftId = "") {
+  return readEditorialReviews()
+    .filter((item) => item.draft_id === draftId)
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0] || null;
+}
+
+function latestEditorialReviews(limit = 20) {
+  return [...readEditorialReviews()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function editorialReviewByNumber(numberText = "1") {
+  const index = Number(numberText);
+  if (!Number.isInteger(index) || index < 1) return null;
+  return latestEditorialReviews(20)[index - 1] || null;
+}
+
+async function saveEditorialReview(review) {
+  const next = [review, ...readEditorialReviews()].slice(0, 1200);
+  await writeEditorialReviews(next);
+  return review;
+}
+
+function editorialFeedbackFromScores({ draft, paragraphs, weakest, scores, safetyReview }) {
+  const strengths = [];
+  const weaknesses = [];
+  const improvement = [];
+  const firstParagraph = paragraphs[0] || draft.hook || "";
+  if (scores.hook_score >= 78) strengths.push("Good: the first lines create a clear question and a reason to keep reading.");
+  if (scores.emotion_score >= 76) strengths.push("Good: the emotional curve has a visible rise instead of staying flat.");
+  if (scores.dialogue_score >= 70) strengths.push("Good: dialogue gives the story a more human voice.");
+  if (scores.human_score >= 76) strengths.push("Good: ordinary details make the scene feel believable.");
+  if (!strengths.length) strengths.push("Good: the draft has a clear family conflict and can be improved without changing the core idea.");
+
+  if (scores.hook_score < 72) weaknesses.push("Weak: the first paragraph should create a stronger unanswered question in the first 1-2 lines.");
+  if (scores.dialogue_score < 62) weaknesses.push("Weak: readers may feel too much summary and not enough real conversation.");
+  if (scores.rhythm_score < 66) weaknesses.push("Weak: paragraph rhythm may feel heavy on a phone.");
+  if (scores.twist_score < 62) weaknesses.push("Weak: the twist needs a clearer reveal or a more specific hidden fact.");
+  if (scores.ending_score < 68) weaknesses.push("Weak: the ending may feel generic; it needs one memorable final action or sentence.");
+  if (safetyReview?.recommendation && safetyReview.recommendation !== "safe") weaknesses.push(`Safety: Content Safety recommends ${safetyReview.recommendation}. Fix those issues before publishing.`);
+  weaknesses.push(`Where readers may stop reading: paragraph ${weakest.index}, because ${weakest.reason}`);
+  weaknesses.push(`Weakest paragraph: ${shortText(weakest.text || firstParagraph, 260)}`);
+  weaknesses.push(`Why this recommendation: editorial score is ${scores.editorial_score}/100 and readiness is ${scores.publication_readiness}.`);
+
+  if (scores.hook_score < 80) improvement.push("Strengthen the first paragraph with a concrete object, a short question and immediate family silence.");
+  if (scores.dialogue_score < 70) improvement.push("Add 2-4 short dialogue lines after paragraph 2 so the conflict feels lived, not summarized.");
+  if (scores.emotion_score < 78) improvement.push("Increase emotional tension before the climax: curiosity -> tension -> shock -> quiet relief.");
+  if (scores.rhythm_score < 72) improvement.push("Split long paragraphs and keep most mobile paragraphs under 350 characters.");
+  if (scores.twist_score < 72) improvement.push("Make the plot twist depend on a specific date, object, payment, letter or family promise.");
+  if (scores.ending_score < 75) improvement.push("Replace generic moralizing with one emotional final sentence or a small action at the table.");
+  if (scores.human_score < 76) improvement.push("Add ordinary human details: tired hands, cold tea, a chair moving, someone avoiding eye contact.");
+  if (safetyReview?.recommendation !== "safe") improvement.push("Apply Content Safety suggestions before moving the package toward ready status.");
+  if (!improvement.length) improvement.push("Keep the original structure; only polish the last paragraph and verify the final Facebook post manually.");
+
+  return { strengths, weaknesses, improvement };
+}
+
+async function createEditorialReviewForDraft(ref = "1", options = {}) {
+  const draft = options.draft || generatedDraftByRef(ref) || readGeneratedStories().find((item) => item.id === ref);
+  if (!draft) return { ok: false, code: "draft_not_found", message: "Generated draft not found." };
+  const text = contentSafetyTextFromDraft(draft);
+  const paragraphs = editorialParagraphs(text);
+  const sentences = editorialSentences(text);
+  const styleProfile = styleBrainProfileFromGeneratedStory(draft) || styleBrainProfileFromText({
+    source_type: "editorial_draft",
+    source_reference: `editorial:${draft.id}`,
+    text
+  });
+  const emotionTimeline = latestEmotionTimelineForDraft(draft.id);
+  const safetyResult = options.contentSafetyReview
+    ? { ok: true, review: options.contentSafetyReview }
+    : await checkContentSafetyDraft(draft.id, { draft });
+  const safetyReview = safetyResult.review || latestContentSafetyReviewForDraft(draft.id) || {};
+  const weakest = editorialWeakestParagraph(paragraphs);
+  const dialogueDensity = Number(styleProfile.dialogue_density || storyDnaDialogueDensity(text));
+  const averageSentenceWords = styleBrainAverageSentenceWords(sentences);
+  const firstParagraph = paragraphs[0] || draft.hook || "";
+  const endingParagraph = paragraphs[paragraphs.length - 1] || "";
+  const hookScore = clampStyleScore(
+    Number(styleProfile.hook_strength || 0) * 0.55
+    + (firstParagraph.length >= 80 && firstParagraph.length <= 420 ? 18 : 6)
+    + (/[?"“”]/.test(firstParagraph) ? 10 : 0)
+    + editorialCountPatterns(firstParagraph, [/secret/i, /silent/i, /truth/i, /letter/i, /money/i, /family/i, /тайн/i, /молч/i]) * 4
+  );
+  const openingScore = clampStyleScore(
+    hookScore * 0.55
+    + (paragraphs.length >= 4 ? 14 : 6)
+    + (firstParagraph.length <= 420 ? 12 : 2)
+    + (/[A-ZА-ЯЁ][a-zа-яё]+/.test(firstParagraph) ? 8 : 0)
+  );
+  const emotionScore = clampStyleScore(
+    Number(styleProfile.emotional_intensity || 0) * 0.55
+    + Number(emotionTimeline?.ending_satisfaction || 0) * 0.2
+    + Number(emotionTimeline?.emotion_volatility || 0) * 0.15
+    + editorialCountPatterns(text, [/shock/i, /betrayal/i, /hope/i, /relief/i, /anger/i, /sadness/i, /truth/i, /боль/i, /надеж/i, /правд/i]) * 3
+  );
+  const dialogueScore = clampStyleScore(dialogueDensity * 1.2 + (/["“”]/.test(text) ? 18 : 0));
+  const rhythmScore = clampStyleScore(
+    (paragraphs.length >= 5 ? 28 : paragraphs.length * 5)
+    + (averageSentenceWords >= 7 && averageSentenceWords <= 19 ? 28 : 14)
+    + (styleProfile.paragraph_rhythm === "short mobile paragraphs" ? 24 : styleProfile.paragraph_rhythm === "balanced story paragraphs" ? 18 : 6)
+    + Math.max(0, 20 - Math.abs(12 - averageSentenceWords))
+  );
+  const twistScore = clampStyleScore(
+    Number(styleProfile.twist_strength || 0) * 0.5
+    + editorialCountPatterns(text, [/then/i, /finally/i, /suddenly/i, /secret/i, /truth/i, /confession/i, /nobody expected/i, /оказалось/i, /вдруг/i, /тайн/i]) * 7
+    + (paragraphs.length >= 6 ? 12 : 5)
+  );
+  const endingScore = clampStyleScore(
+    Number(styleProfile.ending_strength || 0) * 0.5
+    + Number(emotionTimeline?.reader_recovery || 0) * 0.2
+    + (endingParagraph.length >= 80 && endingParagraph.length <= 420 ? 18 : 8)
+    + (editorialCountPatterns(endingParagraph, [/relief/i, /hope/i, /truth/i, /stayed/i, /forgive/i, /надеж/i, /прост/i, /правд/i]) * 5)
+  );
+  const humanScore = clampStyleScore(
+    Number(styleProfile.human_realism_score || 0) * 0.65
+    + dialogueScore * 0.15
+    + editorialCountPatterns(text, [/tea/i, /table/i, /cup/i, /hands/i, /kitchen/i, /chair/i, /rain/i, /door/i, /чай/i, /стол/i, /рук/i, /кухн/i]) * 3
+  );
+  const facebookScore = clampStyleScore(
+    Number(styleProfile.facebook_readability_score || 0) * 0.6
+    + hookScore * 0.2
+    + rhythmScore * 0.2
+  );
+  const originalityScore = clampStyleScore(Number(safetyReview.originality_score || 0) || 82);
+  let editorialScore = editorialWeightedAverage([
+    { score: hookScore, weight: 1.25 },
+    { score: openingScore, weight: 1 },
+    { score: emotionScore, weight: 1.15 },
+    { score: dialogueScore, weight: 0.8 },
+    { score: rhythmScore, weight: 0.9 },
+    { score: twistScore, weight: 1 },
+    { score: endingScore, weight: 0.95 },
+    { score: humanScore, weight: 1.1 },
+    { score: facebookScore, weight: 1 },
+    { score: originalityScore, weight: 1 }
+  ]);
+  if (safetyReview.recommendation === "needs_edit") editorialScore = Math.min(editorialScore, 76);
+  if (safetyReview.recommendation === "reject") editorialScore = Math.min(editorialScore, 48);
+  const readerRetention = editorialWeightedAverage([
+    { score: hookScore, weight: 1.4 },
+    { score: openingScore, weight: 1.1 },
+    { score: emotionScore, weight: 1 },
+    { score: rhythmScore, weight: 0.9 },
+    { score: facebookScore, weight: 1 }
+  ]);
+  const commentPrediction = editorialWeightedAverage([
+    { score: emotionScore, weight: 1.2 },
+    { score: twistScore, weight: 1 },
+    { score: endingScore, weight: 0.9 },
+    { score: humanScore, weight: 0.7 }
+  ]);
+  const sharePrediction = editorialWeightedAverage([
+    { score: hookScore, weight: 1.1 },
+    { score: twistScore, weight: 1.1 },
+    { score: humanScore, weight: 0.8 },
+    { score: originalityScore, weight: 0.8 }
+  ]);
+  const publicationReadiness = safetyReview.recommendation === "reject" || editorialScore < 55
+    ? "reject"
+    : safetyReview.recommendation === "needs_edit" || editorialScore < 78
+      ? "needs_edit"
+      : editorialScore >= 86
+        ? "ready"
+        : "review";
+  const scores = {
+    hook_score: hookScore,
+    opening_score: openingScore,
+    emotion_score: emotionScore,
+    dialogue_score: dialogueScore,
+    rhythm_score: rhythmScore,
+    twist_score: twistScore,
+    ending_score: endingScore,
+    human_score: humanScore,
+    facebook_score: facebookScore,
+    originality_score: originalityScore,
+    editorial_score: editorialScore,
+    reader_retention_prediction: readerRetention,
+    comment_prediction: commentPrediction,
+    share_prediction: sharePrediction,
+    publication_readiness: publicationReadiness
+  };
+  const feedback = editorialFeedbackFromScores({ draft, paragraphs, weakest, scores, safetyReview });
+  const review = {
+    id: crypto.randomUUID(),
+    draft_id: draft.id,
+    ...scores,
+    strengths_json: feedback.strengths,
+    weaknesses_json: feedback.weaknesses,
+    improvement_plan_json: feedback.improvement,
+    content_safety_review_id: safetyReview.id || "",
+    safety_recommendation: safetyReview.recommendation || "pending",
+    diagnostics: {
+      weakest_paragraph_index: weakest.index,
+      paragraph_count: paragraphs.length,
+      sentence_count: sentences.length,
+      average_sentence_words: Math.round(averageSentenceWords),
+      original_draft_unchanged: true,
+      publishing_enabled: false
+    },
+    created_at: new Date().toISOString()
+  };
+  await saveEditorialReview(review);
+  return {
+    ok: true,
+    module: "AI Editorial Board v1",
+    draft,
+    review,
+    content_safety_review: safetyReview,
+    safety: {
+      original_draft_overwritten: false,
+      publishing_enabled: false,
+      facebook_posting_enabled: false,
+      content_safety_reused: true
+    }
+  };
+}
+
+async function ensureEditorialReviewForDraft(draft = {}) {
+  if (!draft?.id) return { ok: false, code: "draft_missing" };
+  const existing = latestEditorialReviewForDraft(draft.id);
+  if (existing) return { ok: true, review: existing, reused: true };
+  return createEditorialReviewForDraft(draft.id, { draft });
+}
+
+function buildEditorialBoardDashboardData() {
+  const reviews = latestEditorialReviews(1000);
+  const averageScore = reviews.length ? editorialAverage(reviews.map((item) => item.editorial_score)) : 0;
+  const bestStories = [...reviews].sort((a, b) => Number(b.editorial_score || 0) - Number(a.editorial_score || 0)).slice(0, 12);
+  const needsImprovement = reviews
+    .filter((item) => ["needs_edit", "review", "reject"].includes(item.publication_readiness))
+    .slice(0, 20);
+  const strengthCounts = countBy(
+    reviews.flatMap((item) => item.strengths_json || []),
+    (item) => String(item || "").split(":")[0] || "strength"
+  ).slice(0, 8);
+  const weaknessCounts = countBy(
+    reviews.flatMap((item) => item.weaknesses_json || []),
+    (item) => String(item || "").split(":")[0] || "weakness"
+  ).slice(0, 8);
+  return {
+    ok: true,
+    module: "AI Editorial Board v1",
+    reviews_count: reviews.length,
+    average_editorial_score: averageScore,
+    latest_reviews: reviews.slice(0, 20),
+    best_stories: bestStories,
+    stories_needing_improvement: needsImprovement,
+    top_strengths: strengthCounts,
+    top_weaknesses: weaknessCounts,
+    safety: {
+      original_drafts_overwritten: false,
+      publishing_enabled: false,
+      facebook_posting_enabled: false,
+      content_safety_required: true
+    }
+  };
+}
+
 function mergeStoryDna(existing = [], incoming = []) {
   const byReference = new Map();
   for (const item of existing) {
@@ -6257,6 +6705,10 @@ async function generateOriginalStoryV2(payload = {}) {
   await learnStyleBrainFromGeneratedStory(story);
   const emotionTimeline = await learnEmotionTimelineFromGeneratedStory(story);
   const contentSafety = await checkContentSafetyDraft(story.id, { draft: story });
+  const editorialReview = await createEditorialReviewForDraft(story.id, {
+    draft: story,
+    contentSafetyReview: contentSafety.review || null
+  });
   return {
     ok: true,
     module: "Story Generator v2",
@@ -6273,6 +6725,7 @@ async function generateOriginalStoryV2(payload = {}) {
     generated_stories_count: saved.length,
     emotion_timeline: emotionTimeline || null,
     content_safety_review: contentSafety.review || null,
+    editorial_review: editorialReview.review || null,
     safety: {
       copied_research_text: false,
       source_links_only_for_inspiration: true,
@@ -6287,6 +6740,7 @@ async function generateOriginalStoriesV2(payload = {}) {
   const generated = [];
   const contentSafetyReviews = [];
   const emotionTimelines = [];
+  const editorialReviews = [];
   for (let index = 0; index < count; index += 1) {
     const result = await generateOriginalStoryV2({
       ...payload,
@@ -6296,13 +6750,17 @@ async function generateOriginalStoriesV2(payload = {}) {
     generated.push({
       ...result.story,
       emotion_timeline: result.emotion_timeline || null,
-      content_safety_review: result.content_safety_review || null
+      content_safety_review: result.content_safety_review || null,
+      editorial_review: result.editorial_review || null
     });
     if (result.emotion_timeline) {
       emotionTimelines.push(result.emotion_timeline);
     }
     if (result.content_safety_review) {
       contentSafetyReviews.push(result.content_safety_review);
+    }
+    if (result.editorial_review) {
+      editorialReviews.push(result.editorial_review);
     }
   }
   return {
@@ -6321,11 +6779,14 @@ async function generateOriginalStoriesV2(payload = {}) {
       peak_emotion: story.emotion_timeline?.peak_emotion || null,
       ending_satisfaction: story.emotion_timeline?.ending_satisfaction || null,
       safety_score: story.content_safety_review?.safety_score || null,
-      safety_recommendation: story.content_safety_review?.recommendation || "pending"
+      safety_recommendation: story.content_safety_review?.recommendation || "pending",
+      editorial_score: story.editorial_review?.editorial_score || null,
+      publication_readiness: story.editorial_review?.publication_readiness || "pending"
     })),
     generated_stories_count: readGeneratedStories().length,
     emotion_timelines: emotionTimelines,
     content_safety_reviews: contentSafetyReviews,
+    editorial_reviews: editorialReviews,
     safety: {
       copied_research_text: false,
       source_links_only_for_inspiration: true,
@@ -6680,6 +7141,7 @@ async function createPublishingPackageFromDraft(ref = "1") {
       message: "Generated draft not found. Use /drafts to see draft numbers."
     };
   }
+  const editorialReview = await ensureEditorialReviewForDraft(draft);
   const imagePrompt = approvedImageForDraft(draft.id);
   const schedule = scheduleForDraft(draft.id);
   const now = new Date().toISOString();
@@ -6701,7 +7163,11 @@ async function createPublishingPackageFromDraft(ref = "1") {
     module: "Approval Pipeline v2",
     package: pkg,
     details: publishingPackageDetails(pkg),
+    editorial_review: editorialReview.review || null,
     warnings: [
+      ...(!editorialReview.ok ? ["Editorial review was not created for this draft."] : []),
+      ...(editorialReview.review?.publication_readiness === "needs_edit" ? ["Editorial Board recommends editing before final approval."] : []),
+      ...(editorialReview.review?.publication_readiness === "reject" ? ["Editorial Board marks this draft as reject. Review it before packaging further."] : []),
       ...(!imagePrompt ? ["No approved image prompt attached yet. Use /image 1 and /approve_image 1."] : []),
       ...(!schedule ? ["No scheduled slot attached yet. Use /schedule or /schedule week."] : [])
     ],
@@ -7147,6 +7613,79 @@ function renderContentSafetyDashboard() {
           <thead><tr><th>Package</th><th>Draft</th><th>Safety</th><th>Recommendation</th></tr></thead>
           <tbody>${packageRows(data.safe_packages)}</tbody>
         </table></div>
+      </section>
+    </main>`);
+}
+
+function renderEditorialBoardDashboard() {
+  const data = buildEditorialBoardDashboardData();
+  const reviewRows = (items = [], empty = "No editorial reviews yet.") => items.length
+    ? items.slice(0, 12).map((item) => `<tr>
+      <td>${escapeHtml(shortText(item.draft_id || "", 42))}</td>
+      <td>${Number(item.editorial_score || 0)}</td>
+      <td>${Number(item.reader_retention_prediction || 0)}</td>
+      <td>${Number(item.comment_prediction || 0)}</td>
+      <td>${Number(item.share_prediction || 0)}</td>
+      <td>${escapeHtml(item.publication_readiness || "")}</td>
+      <td>${escapeHtml((item.improvement_plan_json || []).slice(0, 2).join("; "))}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="7">${escapeHtml(empty)}</td></tr>`;
+  const signalList = (items = [], empty = "No data yet.") => items.length
+    ? items.map((item) => `<li><strong>${escapeHtml(item.name)}</strong><span>${Number(item.count || 0)}</span></li>`).join("")
+    : `<li><strong>${escapeHtml(empty)}</strong></li>`;
+  return layout("AI Editorial Board", `${renderHeader()}
+    <main class="insights-page">
+      <section class="insights-hero">
+        <p class="kicker">AI Editorial Board v1</p>
+        <h1>AI Editorial Board</h1>
+        <p>Reviews generated stories before Approval Pipeline. It scores hook, opening, emotion, dialogue, rhythm, twist, ending, realism, Facebook readability, originality and Content Safety. Draft text is never overwritten.</p>
+      </section>
+
+      <section class="insight-card">
+        <div class="section-title">
+          <div>
+            <h2>Editorial Status</h2>
+            <p class="helper-text">No publishing. No Facebook posting. Reviews are advice and safety signals only.</p>
+          </div>
+        </div>
+        <div class="autopilot-status-grid">
+          <article><span>Reviews</span><strong>${data.reviews_count}</strong><p>Total saved editorial reviews.</p></article>
+          <article><span>Average score</span><strong>${data.average_editorial_score}%</strong><p>Average editorial quality.</p></article>
+          <article><span>Best stories</span><strong>${data.best_stories.length}</strong><p>Highest editorial scores.</p></article>
+          <article><span>Need work</span><strong>${data.stories_needing_improvement.length}</strong><p>Review / needs edit / reject.</p></article>
+          <article><span>Content Safety</span><strong>required</strong><p>Safety AI is reused by every review.</p></article>
+          <article><span>Publishing</span><strong>disabled</strong><p>Manual approval only, no autoposting.</p></article>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Latest Reviews</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Draft</th><th>Editorial</th><th>Retention</th><th>Comments</th><th>Shares</th><th>Readiness</th><th>Improvement Plan</th></tr></thead>
+          <tbody>${reviewRows(data.latest_reviews)}</tbody>
+        </table></div>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Best Stories</h2>
+          <div class="table-wrap"><table><tbody>${reviewRows(data.best_stories, "No best stories yet.")}</tbody></table></div>
+        </article>
+        <article class="insight-card">
+          <h2>Stories Needing Improvement</h2>
+          <div class="table-wrap"><table><tbody>${reviewRows(data.stories_needing_improvement, "No stories need improvement.")}</tbody></table></div>
+        </article>
+      </section>
+
+      <section class="insight-grid">
+        <article class="insight-card">
+          <h2>Top Strengths</h2>
+          <ol class="insight-list">${signalList(data.top_strengths)}</ol>
+        </article>
+        <article class="insight-card">
+          <h2>Top Weaknesses</h2>
+          <ol class="insight-list">${signalList(data.top_weaknesses)}</ol>
+        </article>
       </section>
     </main>`);
 }
@@ -8078,6 +8617,8 @@ async function telegramGenerateStory(chatId, args = []) {
     `${index + 1}. ${story.title}`,
     `эмоция: ${story.emotion}`,
     `viral_prediction_score: ${story.viral_prediction_score}/100`,
+    `editorial_score: ${story.editorial_review?.editorial_score || "pending"}/100`,
+    `readiness: ${story.editorial_review?.publication_readiness || "pending"}`,
     `крючок: ${story.hook}`
   ].join("\n")).join("\n\n");
   const text = [
@@ -8091,6 +8632,7 @@ async function telegramGenerateStory(chatId, args = []) {
     "",
     "/черновики — очередь черновиков",
     "/черновик 1 — прочитать полностью",
+    "/проверить_историю 1 — редакторский отчёт",
     "/approve 1 или /reject 1 — проверить черновик",
     "",
     "Ничего не опубликовано."
@@ -8560,6 +9102,78 @@ async function telegramContentSafetyStatus(chatId) {
   ].join("\n"), mainTelegramKeyboard());
 }
 
+function telegramEditorialReviewText(resultOrReview = {}, full = false) {
+  const review = resultOrReview.review || resultOrReview;
+  const draft = resultOrReview.draft || readGeneratedStories().find((item) => item.id === review.draft_id) || {};
+  const strengths = (review.strengths_json || []).slice(0, full ? 10 : 4).map((item) => `- ${item}`).join("\n") || "- No strengths saved yet.";
+  const weaknesses = (review.weaknesses_json || []).slice(0, full ? 10 : 4).map((item) => `- ${item}`).join("\n") || "- No weaknesses saved yet.";
+  const plan = (review.improvement_plan_json || []).slice(0, full ? 10 : 5).map((item) => `- ${item}`).join("\n") || "- No improvement plan saved yet.";
+  const metrics = [
+    `Hook: ${Number(review.hook_score || 0)}/100`,
+    `Opening: ${Number(review.opening_score || 0)}/100`,
+    `Emotion: ${Number(review.emotion_score || 0)}/100`,
+    `Dialogue: ${Number(review.dialogue_score || 0)}/100`,
+    `Rhythm: ${Number(review.rhythm_score || 0)}/100`,
+    `Twist: ${Number(review.twist_score || 0)}/100`,
+    `Ending: ${Number(review.ending_score || 0)}/100`,
+    `Human realism: ${Number(review.human_score || 0)}/100`,
+    `Facebook readability: ${Number(review.facebook_score || 0)}/100`,
+    `Originality: ${Number(review.originality_score || 0)}/100`
+  ].join("\n");
+  return [
+    "<b>AI Editorial Board v1</b>",
+    "",
+    `<b>${escapeHtml(draft.title || "Generated story")}</b>`,
+    `Editorial Score: ${Number(review.editorial_score || 0)}/100`,
+    `Reader Retention: ${Number(review.reader_retention_prediction || 0)}/100`,
+    `Comment Prediction: ${Number(review.comment_prediction || 0)}/100`,
+    `Share Prediction: ${Number(review.share_prediction || 0)}/100`,
+    `Publication Readiness: ${escapeHtml(review.publication_readiness || "needs_edit")}`,
+    "",
+    "<b>Scores</b>",
+    escapeHtml(metrics),
+    "",
+    "<b>What is good</b>",
+    escapeHtml(strengths),
+    "",
+    "<b>What is weak</b>",
+    escapeHtml(weaknesses),
+    "",
+    "<b>Improvement Plan</b>",
+    escapeHtml(plan),
+    "",
+    "Оригинальный черновик не изменён. Публикация отключена. Content Safety используется обязательно."
+  ].join("\n");
+}
+
+async function telegramLatestEditorialReview(chatId) {
+  const review = latestEditorialReviews(1)[0];
+  if (!review) {
+    return sendTelegramMessage(chatId, "Редакторских отчётов пока нет. Запусти /проверить_историю 1 или создай новый черновик.", mainTelegramKeyboard());
+  }
+  return sendTelegramLongMessage(chatId, telegramEditorialReviewText(review, false), mainTelegramKeyboard());
+}
+
+async function telegramRunEditorialReview(chatId, numberText = "1") {
+  const result = await createEditorialReviewForDraft(numberText || "1");
+  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Черновик не найден."), mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, telegramEditorialReviewText(result, true), mainTelegramKeyboard());
+}
+
+async function telegramEditorialReport(chatId, numberText = "1") {
+  const draft = generatedDraftByRef(numberText || "1");
+  let review = draft ? latestEditorialReviewForDraft(draft.id) : editorialReviewByNumber(numberText || "1");
+  let result = null;
+  if (!review && draft) {
+    result = await createEditorialReviewForDraft(draft.id, { draft });
+    review = result.review;
+  }
+  if (!review) {
+    return sendTelegramMessage(chatId, "Редакторский отчёт не найден. Используй /проверить_историю 1.", mainTelegramKeyboard());
+  }
+  return sendTelegramLongMessage(chatId, telegramEditorialReviewText(result || review, true), mainTelegramKeyboard());
+}
+
 async function telegramForceBrainSync(chatId) {
   return telegramBrain(chatId, ["обновить"]);
 }
@@ -8604,10 +9218,13 @@ async function telegramHelp(chatId) {
     "/безопасность — статус Content Safety AI",
     "/проверить_черновик 1 — safety/originality check черновика",
     "/проверить_пакет 1 — safety/originality check пакета",
+    "/редактор — последний редакторский отчёт",
+    "/проверить_историю 1 — запустить Editorial Board для черновика",
+    "/отчет 1 — полный редакторский отчёт по черновику",
     "/помощь — эта справка",
     "",
     "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -8655,6 +9272,9 @@ function telegramCommandList() {
     { command: "safety", description: "Content Safety status" },
     { command: "check_draft", description: "Check draft safety" },
     { command: "check_package", description: "Check package safety" },
+    { command: "editor", description: "Latest editorial review" },
+    { command: "review_story", description: "Run editorial review" },
+    { command: "editorial_report", description: "Full editorial report" },
     { command: "approve", description: "Одобрить черновик" },
     { command: "reject", description: "Отклонить черновик" },
     { command: "help", description: "Помощь" }
@@ -8776,6 +9396,9 @@ async function handleTelegramMessage(message) {
   if (command === "/safety" || command === "/безопасность") return telegramContentSafetyStatus(chatId);
   if (command === "/check_draft" || command === "/проверить_черновик") return telegramCheckDraftSafety(chatId, args[0] || "1");
   if (command === "/check_package" || command === "/проверить_пакет") return telegramCheckPackageSafety(chatId, args[0] || "1");
+  if (command === "/editor" || command === "/редактор") return telegramLatestEditorialReview(chatId);
+  if (command === "/review_story" || command === "/проверить_историю") return telegramRunEditorialReview(chatId, args[0] || "1");
+  if (command === "/editorial_report" || command === "/отчет" || command === "/отчёт") return telegramEditorialReport(chatId, args[0] || "1");
   if (command === "/stats") return telegramStats(chatId);
   if (command === "/drafts" || command === "/черновики") return telegramDrafts(chatId);
   if (command === "/draft" || command === "/черновик") return telegramDraftDetails(chatId, args[0]);
@@ -9241,6 +9864,7 @@ const productionPersistenceTables = [
   "publishing_packages",
   "style_brain_profiles",
   "content_safety_reviews",
+  "editorial_reviews",
   "emotion_timeline"
 ];
 
@@ -9284,6 +9908,7 @@ async function buildStorageStatus() {
       publishing_packages: readPublishingPackages().length,
       style_brain_profiles: readStyleBrainProfiles().length,
       content_safety_reviews: readContentSafetyReviews().length,
+      editorial_reviews: readEditorialReviews().length,
       emotion_timeline: readEmotionTimelines().length
     },
     safety: {
@@ -11007,6 +11632,21 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, review ? 200 : 404, review ? { ok: true, review } : { ok: false, code: "review_not_found" });
   }
 
+  if (pathname === "/api/editorial-board/review" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await createEditorialReviewForDraft(payload.draft || payload.draft_id || payload.index || "1"));
+  }
+
+  if (pathname === "/api/editorial-board/reviews" && req.method === "GET") {
+    return sendJson(res, 200, buildEditorialBoardDashboardData());
+  }
+
+  if (pathname.startsWith("/api/editorial-board/review/") && req.method === "GET") {
+    const id = decodeURIComponent(pathname.replace("/api/editorial-board/review/", ""));
+    const review = readEditorialReviews().find((item) => item.id === id);
+    return sendJson(res, review ? 200 : 404, review ? { ok: true, review } : { ok: false, code: "editorial_review_not_found" });
+  }
+
   if (pathname === "/api/project-brain-v2" && req.method === "GET") {
     const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
     const brain = readProjectBrain();
@@ -11243,6 +11883,7 @@ async function router(req, res) {
     if (pathname === "/style-brain") return send(res, 200, renderStyleBrainDashboard());
     if (pathname === "/emotion-engine") return send(res, 200, renderEmotionEngineDashboard());
     if (pathname === "/content-safety") return send(res, 200, renderContentSafetyDashboard());
+    if (pathname === "/editorial-board") return send(res, 200, renderEditorialBoardDashboard());
     if (pathname === "/ai-autopilot") return send(res, 200, renderAutopilotDashboard());
     if (pathname === "/ai-autopilot-v1") return send(res, 200, renderAutopilotV1Dashboard());
     if (pathname === "/production-status") return send(res, 200, renderProductionStatus());
