@@ -16,6 +16,7 @@ const STORY_DNA_FILE = path.join(ROOT, "data", "story_dna.json");
 const GENERATED_STORIES_FILE = path.join(ROOT, "data", "generated_stories.json");
 const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
 const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
+const GENERATED_IMAGES_FILE = path.join(ROOT, "data", "generated_images.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
 const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
 const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
@@ -337,6 +338,17 @@ async function writeImageQueue(items) {
   return items;
 }
 
+function readGeneratedImages() {
+  return storageCache.generatedImages || [];
+}
+
+async function writeGeneratedImages(items) {
+  storageCache.generatedImages = items;
+  writeJsonBackup(GENERATED_IMAGES_FILE, items);
+  await persistGeneratedImages(items);
+  return items;
+}
+
 function readContentPlan() {
   return readAutopilotV1Collection("contentPlan", "content_plan");
 }
@@ -483,6 +495,7 @@ const storageCache = {
   generatedStories: readJsonArray(GENERATED_STORIES_FILE),
   storyIdeas: readJsonArray(STORY_IDEAS_FILE),
   imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
+  generatedImages: readJsonArray(GENERATED_IMAGES_FILE),
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
   scheduledPosts: readJsonArray(SCHEDULED_POSTS_FILE),
   publishingPackages: readJsonArray(PUBLISHING_PACKAGES_FILE),
@@ -563,6 +576,7 @@ async function initializeStorage() {
     await ensureStoryDnaTable();
     await ensureGeneratedStoriesTable();
     await ensureImageQueueTable();
+    await ensureGeneratedImagesTable();
     await ensureScheduledPostsTable();
     await ensurePublishingPackagesTable();
     await ensurePrepublishPreviewsTable();
@@ -585,6 +599,7 @@ async function initializeStorage() {
     storageCache.storyDna = (await pgPool.query("select * from story_dna order by viral_score desc, engagement_score desc, created_at desc limit 1000")).rows.map(normalizeStoryDnaRow);
     storageCache.generatedStories = (await pgPool.query("select * from generated_stories order by created_at desc limit 300")).rows.map(normalizeGeneratedStoryRow);
     storageCache.imageQueue = (await pgPool.query("select * from image_queue order by created_at desc limit 300")).rows.map(normalizeImageQueueRow);
+    storageCache.generatedImages = (await pgPool.query("select * from generated_images order by created_at desc limit 300")).rows.map(normalizeGeneratedImageRow);
     storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
     storageCache.prepublishPreviews = (await pgPool.query("select * from prepublish_previews order by created_at desc limit 300")).rows.map(normalizePrepublishPreviewRow);
@@ -766,6 +781,29 @@ async function ensureImageQueueTable() {
     create index if not exists image_queue_generated_story_idx on image_queue (generated_story_id);
     create index if not exists image_queue_status_idx on image_queue (status);
     create index if not exists image_queue_created_at_idx on image_queue (created_at desc);
+  `);
+}
+
+async function ensureGeneratedImagesTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists generated_images (
+      id text primary key,
+      image_prompt_id text not null,
+      draft_id text,
+      package_id text,
+      provider text not null default 'openai_images',
+      prompt text not null,
+      image_url text,
+      status text not null default 'needs_review',
+      quality_score integer not null default 0,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists generated_images_prompt_idx on generated_images (image_prompt_id);
+    create index if not exists generated_images_draft_idx on generated_images (draft_id);
+    create index if not exists generated_images_package_idx on generated_images (package_id);
+    create index if not exists generated_images_status_idx on generated_images (status);
+    create index if not exists generated_images_created_at_idx on generated_images (created_at desc);
   `);
 }
 
@@ -1392,6 +1430,51 @@ async function persistImageQueue(items) {
     }
   } catch (error) {
     console.warn(`PostgreSQL image_queue persist failed: ${error.message}`);
+  }
+}
+
+function normalizeGeneratedImageRow(row = {}) {
+  return {
+    ...row,
+    quality_score: Number(row.quality_score || 0)
+  };
+}
+
+async function persistGeneratedImages(items) {
+  if (!pgPool) return;
+  try {
+    await ensureGeneratedImagesTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into generated_images (
+          id, image_prompt_id, draft_id, package_id, provider, prompt, image_url,
+          status, quality_score, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        on conflict (id) do update set
+          image_prompt_id = excluded.image_prompt_id,
+          draft_id = excluded.draft_id,
+          package_id = excluded.package_id,
+          provider = excluded.provider,
+          prompt = excluded.prompt,
+          image_url = excluded.image_url,
+          status = excluded.status,
+          quality_score = excluded.quality_score`,
+        [
+          item.id || crypto.randomUUID(),
+          item.image_prompt_id || "",
+          item.draft_id || "",
+          item.package_id || "",
+          item.provider || "openai_images",
+          item.prompt || "",
+          item.image_url || "",
+          item.status || "needs_review",
+          Number(item.quality_score || 0),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL generated_images persist failed: ${error.message}`);
   }
 }
 
@@ -8125,6 +8208,231 @@ async function updateImageQueueStatusByNumber(numberText, status) {
   return updateImageQueueStatusByRef(numberText, status);
 }
 
+function imageGenerationConfigStatus() {
+  return {
+    configured: Boolean(process.env.OPENAI_API_KEY),
+    has_openai_api_key: Boolean(process.env.OPENAI_API_KEY),
+    provider: process.env.OPENAI_API_KEY ? "OpenAI Images" : "",
+    model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1",
+    size: process.env.OPENAI_IMAGE_SIZE || "1536x1024",
+    output_format: process.env.OPENAI_IMAGE_FORMAT || "jpeg",
+    quality: process.env.OPENAI_IMAGE_QUALITY || "medium"
+  };
+}
+
+function latestGeneratedImages(limit = 20) {
+  return [...readGeneratedImages()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function generatedImageByRef(ref = "1") {
+  const index = Number(ref);
+  if (Number.isInteger(index) && index >= 1) return latestGeneratedImages(20)[index - 1] || null;
+  return readGeneratedImages().find((item) => item.id === ref || item.image_prompt_id === ref) || null;
+}
+
+function packageForImagePrompt(imagePromptId = "") {
+  return readPublishingPackages().find((pkg) => pkg.image_prompt_id === imagePromptId) || null;
+}
+
+function generatedImageQualityScore(prompt = "", provider = "OpenAI Images") {
+  const text = String(prompt || "").toLowerCase();
+  let score = 64;
+  if (/photorealistic|realistic|documentary|natural/.test(text)) score += 10;
+  if (/emotion|tense|conflict|family/.test(text)) score += 8;
+  if (/no text|no logo|no watermark|no cartoon/.test(text)) score += 8;
+  if (/ordinary|modest|believable|natural faces/.test(text)) score += 6;
+  if (provider) score += 4;
+  return Math.max(1, Math.min(100, score));
+}
+
+async function callOpenAIImageGeneration(prompt = "") {
+  const config = imageGenerationConfigStatus();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.OPENAI_IMAGE_TIMEOUT_MS || 120000));
+  try {
+    const response = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        model: config.model,
+        prompt,
+        n: 1,
+        size: config.size,
+        quality: config.quality,
+        output_format: config.output_format,
+        moderation: "auto"
+      }),
+      signal: controller.signal
+    });
+    const text = await response.text();
+    let data = {};
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
+    }
+    if (!response.ok) {
+      const message = data.error?.message || data.message || `OpenAI Images returned HTTP ${response.status}.`;
+      return {
+        ok: false,
+        status: response.status,
+        error: {
+          message,
+          type: data.error?.type || "",
+          code: data.error?.code || "",
+          param: data.error?.param || ""
+        }
+      };
+    }
+    const image = data.data?.[0] || {};
+    const format = config.output_format || "jpeg";
+    const imageUrl = image.b64_json
+      ? `data:image/${format};base64,${image.b64_json}`
+      : (image.url || "");
+    if (!imageUrl) {
+      return {
+        ok: false,
+        status: response.status,
+        error: { message: "OpenAI Images response did not include image data.", type: "missing_image_data", code: "", param: "" }
+      };
+    }
+    return {
+      ok: true,
+      provider: "OpenAI Images",
+      model: config.model,
+      image_url: imageUrl,
+      revised_prompt: image.revised_prompt || "",
+      status: response.status
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      error: {
+        message: error.name === "AbortError" ? "OpenAI Images request timeout." : error.message,
+        type: error.name || "request_error",
+        code: "",
+        param: ""
+      }
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function generateImageV3(ref = "1") {
+  const config = imageGenerationConfigStatus();
+  if (!config.configured) {
+    return {
+      ok: false,
+      module: "Image Generator v3",
+      code: "image_generation_config_missing",
+      message: "OPENAI_API_KEY is not configured. Add it to Vercel/local environment variables to generate real images.",
+      provider: "",
+      status: "failed",
+      has_openai_api_key: false,
+      safety: { facebook_posting_enabled: false, autopublishing: false, tokens_exposed: false }
+    };
+  }
+  const promptItem = imageQueueItemByRef(ref);
+  if (!promptItem) {
+    return {
+      ok: false,
+      module: "Image Generator v3",
+      code: "image_prompt_not_found",
+      message: "Image prompt was not found.",
+      provider: "OpenAI Images",
+      status: "failed",
+      safety: { facebook_posting_enabled: false, autopublishing: false, tokens_exposed: false }
+    };
+  }
+  if (promptItem.status !== "approved") {
+    return {
+      ok: false,
+      module: "Image Generator v3",
+      code: "image_prompt_not_approved",
+      message: "Only approved image_queue prompts can be generated.",
+      image_prompt_id: promptItem.id,
+      prompt_status: promptItem.status || "needs_approval",
+      provider: "OpenAI Images",
+      status: "failed",
+      safety: { facebook_posting_enabled: false, autopublishing: false, tokens_exposed: false }
+    };
+  }
+  const pkg = packageForImagePrompt(promptItem.id);
+  const generation = await callOpenAIImageGeneration(promptItem.prompt || "");
+  const record = {
+    id: crypto.randomUUID(),
+    image_prompt_id: promptItem.id,
+    draft_id: promptItem.draft_id || promptItem.generated_story_id || "",
+    package_id: pkg?.id || "",
+    provider: generation.provider || "OpenAI Images",
+    prompt: promptItem.prompt || "",
+    image_url: generation.image_url || "",
+    status: generation.ok ? "needs_review" : "failed",
+    quality_score: generation.ok ? generatedImageQualityScore(promptItem.prompt, generation.provider) : 0,
+    created_at: new Date().toISOString()
+  };
+  const next = [record, ...readGeneratedImages()].slice(0, 300);
+  await writeGeneratedImages(next);
+  return {
+    ok: generation.ok,
+    module: "Image Generator v3",
+    provider: record.provider,
+    model: generation.model || config.model,
+    status: record.status,
+    generated_image: record,
+    image_prompt: {
+      id: promptItem.id,
+      draft_id: record.draft_id,
+      package_id: record.package_id,
+      status: promptItem.status,
+      prompt: promptItem.prompt
+    },
+    image_url: record.image_url,
+    error: generation.ok ? null : generation.error,
+    safety: { facebook_posting_enabled: false, autopublishing: false, tokens_exposed: false }
+  };
+}
+
+async function updateGeneratedImageStatus(ref = "1", status = "approved") {
+  const allowed = new Set(["needs_review", "approved", "rejected"]);
+  if (!allowed.has(status)) return null;
+  const image = generatedImageByRef(ref);
+  if (!image) return null;
+  const updated = readGeneratedImages().map((item) => item.id === image.id
+    ? { ...item, status }
+    : item);
+  await writeGeneratedImages(updated);
+  return updated.find((item) => item.id === image.id);
+}
+
+function buildImageGeneratorV3DashboardData() {
+  const images = readGeneratedImages();
+  return {
+    ok: true,
+    module: "Image Generator v3",
+    config: {
+      configured: imageGenerationConfigStatus().configured,
+      provider: imageGenerationConfigStatus().provider || "not configured",
+      model: imageGenerationConfigStatus().model,
+      has_openai_api_key: imageGenerationConfigStatus().has_openai_api_key
+    },
+    generated_images: images.length,
+    failed_generations: images.filter((item) => item.status === "failed").length,
+    needs_review: images.filter((item) => item.status === "needs_review" || item.status === "generated").length,
+    approved_images: images.filter((item) => item.status === "approved").length,
+    rejected_images: images.filter((item) => item.status === "rejected").length,
+    latest_images: latestGeneratedImages(12),
+    safety: { facebook_posting_enabled: false, autopublishing: false, tokens_exposed: false }
+  };
+}
+
 function viralPredictionScore(researchSignals, facebookSignals, length) {
   const researchBase = researchSignals.length
     ? Math.round(researchSignals.reduce((sum, item) => sum + ((Number(item.viral_score || 0) + Number(item.similarity_score || 0)) / 2), 0) / researchSignals.length)
@@ -9770,6 +10078,7 @@ function renderAutopilotV1Dashboard() {
   const ideas = readStoryIdeas().slice(0, 6);
   const generatedStories = readGeneratedStories().slice(0, 6);
   const queue = readImageQueue().slice(0, 6);
+  const imageV3 = buildImageGeneratorV3DashboardData();
   const scheduledPosts = scheduledQueueItems(20);
   const tomorrowSchedule = scheduleItemsForTomorrow();
   const approvedSchedule = scheduledPosts.filter((item) => item.status === "approved").slice(0, 6);
@@ -9818,6 +10127,7 @@ function renderAutopilotV1Dashboard() {
           ${card("Content Safety", `${contentSafety.average_safety_score}%`, `${contentSafety.reviews_count} reviews, ${contentSafety.needs_edit_drafts.length} need edit`)}
           ${card("Readiness Gate", `${readinessGate.average_readiness_score}%`, `${readinessGate.ready_count} ready, ${readinessGate.blocked_count} blocked`)}
           ${card("Pre-Publish", prepublish.preview_status.previews_count, `${prepublish.preview_status.ready_without_preview_count} ready packages need preview`)}
+          ${card("Image Generator v3", imageV3.generated_images, `${imageV3.needs_review} needs review, ${imageV3.approved_images} approved`)}
           ${card("Emotion Engine", `${emotionEngine.statistics.average_ending_satisfaction}%`, `${emotionEngine.timelines_count} timelines, peak ${emotionEngine.ideal_peak_position}`)}
           ${card("Publishing", status.system.autopublishing, "Approval is required before any publishing step.")}
         </div>
@@ -9900,6 +10210,22 @@ function renderAutopilotV1Dashboard() {
           <table class="facebook-table">
             <thead><tr><th>Draft</th><th>Style</th><th>Status</th><th>Prompt</th></tr></thead>
             <tbody>${rows(queue, "No queued image prompts yet.", (item) => `<tr><td>${escapeHtml(item.story_title)}</td><td>${escapeHtml(item.style || "story_idea_prompt")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(shortText(item.prompt, 220))}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Image Generator v3</h2>
+        <div class="autopilot-status-grid">
+          ${card("Generated Images", imageV3.generated_images, imageV3.config.configured ? `Provider: ${imageV3.config.provider}` : "OPENAI_API_KEY missing")}
+          ${card("Failed Generations", imageV3.failed_generations, "Provider/API failures")}
+          ${card("Needs Review", imageV3.needs_review, "Generated but not approved")}
+          ${card("Approved Images", imageV3.approved_images, "Approved by human review")}
+        </div>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Status</th><th>Provider</th><th>Quality</th><th>Image</th></tr></thead>
+            <tbody>${rows(imageV3.latest_images.slice(0, 8), "No real images generated yet.", (item) => `<tr><td>${escapeHtml(item.status || "")}</td><td>${escapeHtml(item.provider || "")}</td><td>${Number(item.quality_score || 0)}</td><td>${String(item.image_url || "").startsWith("http") ? `<a href="${escapeHtml(item.image_url)}" target="_blank" rel="noreferrer">open</a>` : "stored in PostgreSQL"}</td></tr>`)}</tbody>
           </table>
         </div>
       </section>
@@ -10514,6 +10840,69 @@ async function telegramApproveImageCommand(chatId, numberText = "1") {
 async function telegramRejectImageCommand(chatId, numberText = "1") {
   const item = await updateImageQueueStatusByNumber(numberText, "rejected");
   return sendTelegramMessage(chatId, item ? `Промпт картинки ${numberText} отклонён.\nСтиль: ${escapeHtml(item.style || "")}\nСтатус: ${escapeHtml(item.status)}\n\nНичего не создано и не опубликовано.` : "Промпт не найден. Используйте /картинки.", mainTelegramKeyboard());
+}
+
+async function telegramGenerateImageV3(chatId, numberText = "1") {
+  const result = await generateImageV3(numberText || "1");
+  if (!result.ok) {
+    return sendTelegramLongMessage(chatId, [
+      "<b>Image Generator v3</b>",
+      "",
+      `status: ${escapeHtml(result.status || "failed")}`,
+      `code: ${escapeHtml(result.code || "")}`,
+      escapeHtml(result.message || result.error?.message || "Image generation failed."),
+      "",
+      "No Facebook posting. No autopublishing."
+    ].join("\n"), mainTelegramKeyboard());
+  }
+  const image = result.generated_image || {};
+  const imageRef = String(image.image_url || "").startsWith("http")
+    ? image.image_url
+    : "stored safely in PostgreSQL as a persistent data URL";
+  return sendTelegramLongMessage(chatId, [
+    "<b>Image Generator v3</b>",
+    "",
+    `provider: ${escapeHtml(result.provider || "OpenAI Images")}`,
+    `status: ${escapeHtml(image.status || "needs_review")}`,
+    `quality_score: ${Number(image.quality_score || 0)}/100`,
+    `image_prompt_id: ${escapeHtml(image.image_prompt_id || "")}`,
+    `generated_image_id: ${escapeHtml(image.id || "")}`,
+    `image: ${escapeHtml(imageRef)}`,
+    "",
+    "/картинки_готовые - список",
+    "/одобрить_готовую_картинку 1 - одобрить",
+    "/отклонить_готовую_картинку 1 - отклонить",
+    "",
+    "No Facebook posting. No autopublishing."
+  ].join("\n"), mainTelegramKeyboard());
+}
+
+async function telegramGeneratedImages(chatId) {
+  const images = latestGeneratedImages(10);
+  if (!images.length) return sendTelegramMessage(chatId, "Готовых сгенерированных картинок пока нет. Используйте /сгенерировать_картинку 1 для approved prompt.", mainTelegramKeyboard());
+  const text = images.map((image, index) => [
+    `${index + 1}. <b>${escapeHtml(shortText(image.image_prompt_id || image.id, 80))}</b>`,
+    `status: ${escapeHtml(image.status || "needs_review")}`,
+    `provider: ${escapeHtml(image.provider || "OpenAI Images")}`,
+    `quality: ${Number(image.quality_score || 0)}/100`,
+    `draft: ${escapeHtml(shortText(image.draft_id || "", 32))}`,
+    `image: ${String(image.image_url || "").startsWith("http") ? escapeHtml(image.image_url) : "stored in PostgreSQL"}`
+  ].join("\n")).join("\n\n");
+  return sendTelegramLongMessage(chatId, `<b>Generated Images</b>\n\n${text}\n\n/одобрить_готовую_картинку 1\n/отклонить_готовую_картинку 1\n\nПубликация отключена.`, mainTelegramKeyboard());
+}
+
+async function telegramApproveGeneratedImage(chatId, numberText = "1") {
+  const image = await updateGeneratedImageStatus(numberText || "1", "approved");
+  return sendTelegramMessage(chatId, image
+    ? `Generated image ${escapeHtml(numberText)} approved.\nstatus: ${escapeHtml(image.status)}\nquality_score: ${Number(image.quality_score || 0)}/100\n\nNo Facebook posting.`
+    : "Generated image not found. Use /картинки_готовые.", mainTelegramKeyboard());
+}
+
+async function telegramRejectGeneratedImage(chatId, numberText = "1") {
+  const image = await updateGeneratedImageStatus(numberText || "1", "rejected");
+  return sendTelegramMessage(chatId, image
+    ? `Generated image ${escapeHtml(numberText)} rejected.\nstatus: ${escapeHtml(image.status)}\n\nNo Facebook posting.`
+    : "Generated image not found. Use /картинки_готовые.", mainTelegramKeyboard());
 }
 
 async function telegramAudience(chatId) {
@@ -11487,6 +11876,10 @@ async function telegramHelp(chatId) {
     "/картинка 1 — создать 3 промпта картинки",
     "/картинки — очередь промптов",
     "/одобрить_картинку 1 — одобрить промпт",
+    "/сгенерировать_картинку 1 — создать реальную картинку из approved prompt",
+    "/картинки_готовые — готовые сгенерированные картинки",
+    "/одобрить_готовую_картинку 1 — одобрить готовую картинку",
+    "/отклонить_готовую_картинку 1 — отклонить готовую картинку",
     "/план — план на завтра",
     "/план неделя — план на 7 дней",
     "/очередь — очередь расписания",
@@ -11526,7 +11919,7 @@ async function telegramHelp(chatId) {
     "/готовность 1 - editorial readiness status",
     "",
     "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /preview 1, /previews, /versions 1, /compare 1 2, /image 1, /images, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /preview 1, /previews, /versions 1, /compare 1 2, /image 1, /images, /generate_image 1, /generated_images, /approve_generated_image 1, /reject_generated_image 1, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -11550,6 +11943,10 @@ function telegramCommandList() {
     { command: "image_prompt", description: "Полный промпт" },
     { command: "approve_image", description: "Одобрить промпт" },
     { command: "reject_image", description: "Отклонить промпт" },
+    { command: "generate_image", description: "Generate real image from approved prompt" },
+    { command: "generated_images", description: "Latest generated images" },
+    { command: "approve_generated_image", description: "Approve generated image" },
+    { command: "reject_generated_image", description: "Reject generated image" },
     { command: "schedule", description: "План публикаций" },
     { command: "queue", description: "Очередь расписания" },
     { command: "packages", description: "Пакеты публикаций" },
@@ -11732,6 +12129,10 @@ async function handleTelegramMessage(message) {
   if (command === "/image_prompt") return telegramImagePromptDetailsV2(chatId, args[0] || "1");
   if (command === "/approve_image" || command === "/одобрить_картинку") return telegramApproveImageCommand(chatId, args[0] || "1");
   if (command === "/reject_image" || command === "/отклонить_картинку") return telegramRejectImageCommand(chatId, args[0] || "1");
+  if (command === "/generate_image" || command === "/сгенерировать_картинку") return telegramGenerateImageV3(chatId, args[0] || "1");
+  if (command === "/generated_images" || command === "/картинки_готовые") return telegramGeneratedImages(chatId);
+  if (command === "/approve_generated_image" || command === "/одобрить_готовую_картинку") return telegramApproveGeneratedImage(chatId, args[0] || "1");
+  if (command === "/reject_generated_image" || command === "/отклонить_готовую_картинку") return telegramRejectGeneratedImage(chatId, args[0] || "1");
   if (command === "/audience") return telegramAudience(chatId);
   if (command === "/competitors") return telegramCompetitors(chatId);
   if (command === "/autopilot") return telegramAutopilot(chatId);
@@ -12154,6 +12555,7 @@ function securityAudit() {
     facebook_connection_file_gitignored: /data\/facebook_connection\.local\.json/.test(gitignore),
     telegram_bot_token_present: tg.has_bot_token,
     telegram_chat_id_present: tg.has_chat_id,
+    openai_api_key_present: Boolean(process.env.OPENAI_API_KEY),
     autopublish_enabled: false,
     facebook_write_permissions_requested: false
   };
@@ -12182,6 +12584,7 @@ const productionPersistenceTables = [
   "story_dna",
   "generated_stories",
   "image_queue",
+  "generated_images",
   "scheduled_posts",
   "publishing_packages",
   "prepublish_previews",
@@ -12227,6 +12630,7 @@ async function buildStorageStatus() {
       story_dna: readStoryDna().length,
       generated_stories: readGeneratedStories().length,
       image_queue: readImageQueue().length,
+      generated_images: readGeneratedImages().length,
       scheduled_posts: readScheduledPosts().length,
       publishing_packages: readPublishingPackages().length,
       prepublish_previews: readPrepublishPreviews().length,
@@ -14110,6 +14514,26 @@ async function handleApi(req, res, pathname) {
       module: "Image Generator v2",
       image_prompt: updated,
       safety: { prompt_only: true, image_generation_enabled: false, publish_allowed: false }
+    });
+  }
+
+  if (pathname === "/api/images/v3/generate" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await generateImageV3(payload.image_prompt_id || payload.image || payload.index || "1"));
+  }
+
+  if (pathname === "/api/images/v3/generated" && req.method === "GET") {
+    return sendJson(res, 200, buildImageGeneratorV3DashboardData());
+  }
+
+  if (pathname === "/api/images/v3/status" && req.method === "POST") {
+    const payload = await parseBody(req);
+    const updated = await updateGeneratedImageStatus(payload.generated_image_id || payload.image || payload.index || "1", payload.status || "approved");
+    return sendJson(res, 200, {
+      ok: Boolean(updated),
+      module: "Image Generator v3",
+      generated_image: updated,
+      safety: { facebook_posting_enabled: false, autopublishing: false, tokens_exposed: false }
     });
   }
 
