@@ -17,6 +17,7 @@ const GENERATED_STORIES_FILE = path.join(ROOT, "data", "generated_stories.json")
 const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
 const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
 const GENERATED_IMAGES_FILE = path.join(ROOT, "data", "generated_images.json");
+const VISUAL_CONCEPTS_FILE = path.join(ROOT, "data", "visual_concepts.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
 const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
 const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
@@ -349,6 +350,17 @@ async function writeGeneratedImages(items) {
   return items;
 }
 
+function readVisualConcepts() {
+  return storageCache.visualConcepts || [];
+}
+
+async function writeVisualConcepts(items) {
+  storageCache.visualConcepts = items;
+  writeJsonBackup(VISUAL_CONCEPTS_FILE, items);
+  await persistVisualConcepts(items);
+  return items;
+}
+
 function readContentPlan() {
   return readAutopilotV1Collection("contentPlan", "content_plan");
 }
@@ -496,6 +508,7 @@ const storageCache = {
   storyIdeas: readJsonArray(STORY_IDEAS_FILE),
   imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
   generatedImages: readJsonArray(GENERATED_IMAGES_FILE),
+  visualConcepts: readJsonArray(VISUAL_CONCEPTS_FILE),
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
   scheduledPosts: readJsonArray(SCHEDULED_POSTS_FILE),
   publishingPackages: readJsonArray(PUBLISHING_PACKAGES_FILE),
@@ -577,6 +590,7 @@ async function initializeStorage() {
     await ensureGeneratedStoriesTable();
     await ensureImageQueueTable();
     await ensureGeneratedImagesTable();
+    await ensureVisualConceptsTable();
     await ensureScheduledPostsTable();
     await ensurePublishingPackagesTable();
     await ensurePrepublishPreviewsTable();
@@ -600,6 +614,7 @@ async function initializeStorage() {
     storageCache.generatedStories = (await pgPool.query("select * from generated_stories order by created_at desc limit 300")).rows.map(normalizeGeneratedStoryRow);
     storageCache.imageQueue = (await pgPool.query("select * from image_queue order by created_at desc limit 300")).rows.map(normalizeImageQueueRow);
     storageCache.generatedImages = (await pgPool.query("select * from generated_images order by created_at desc limit 300")).rows.map(normalizeGeneratedImageRow);
+    storageCache.visualConcepts = (await pgPool.query("select * from visual_concepts order by created_at desc limit 500")).rows.map(normalizeVisualConceptRow);
     storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
     storageCache.prepublishPreviews = (await pgPool.query("select * from prepublish_previews order by created_at desc limit 300")).rows.map(normalizePrepublishPreviewRow);
@@ -807,6 +822,35 @@ async function ensureGeneratedImagesTable() {
   `);
 }
 
+async function ensureVisualConceptsTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists visual_concepts (
+      id text primary key,
+      draft_id text,
+      package_id text,
+      concept_type text not null,
+      title text not null,
+      description text,
+      prompt text not null,
+      ctr_score integer not null default 0,
+      emotion_score integer not null default 0,
+      realism_score integer not null default 0,
+      risk_score integer not null default 0,
+      rank integer not null default 0,
+      status text not null default 'draft',
+      critic_notes jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    alter table visual_concepts add column if not exists critic_notes jsonb not null default '{}'::jsonb;
+    create index if not exists visual_concepts_draft_idx on visual_concepts (draft_id);
+    create index if not exists visual_concepts_package_idx on visual_concepts (package_id);
+    create index if not exists visual_concepts_status_idx on visual_concepts (status);
+    create index if not exists visual_concepts_rank_idx on visual_concepts (rank);
+    create index if not exists visual_concepts_created_at_idx on visual_concepts (created_at desc);
+  `);
+}
+
 async function ensureScheduledPostsTable() {
   if (!pgPool) return;
   await pgPool.query(`
@@ -858,6 +902,8 @@ async function ensurePrepublishPreviewsTable() {
       package_id text not null,
       post_text text not null,
       image_prompt_id text,
+      visual_concept_id text,
+      preferred_image_prompt text,
       scheduled_time timestamptz,
       safety_score integer not null default 0,
       editorial_score integer not null default 0,
@@ -867,7 +913,10 @@ async function ensurePrepublishPreviewsTable() {
       checklist_json jsonb not null default '[]'::jsonb,
       created_at timestamptz not null default now()
     );
+    alter table prepublish_previews add column if not exists visual_concept_id text;
+    alter table prepublish_previews add column if not exists preferred_image_prompt text;
     create index if not exists prepublish_previews_package_idx on prepublish_previews (package_id);
+    create index if not exists prepublish_previews_visual_concept_idx on prepublish_previews (visual_concept_id);
     create index if not exists prepublish_previews_created_at_idx on prepublish_previews (created_at desc);
     create index if not exists prepublish_previews_readiness_idx on prepublish_previews (readiness_score desc);
   `);
@@ -1478,6 +1527,67 @@ async function persistGeneratedImages(items) {
   }
 }
 
+function normalizeVisualConceptRow(row = {}) {
+  return {
+    ...row,
+    ctr_score: Number(row.ctr_score || 0),
+    emotion_score: Number(row.emotion_score || 0),
+    realism_score: Number(row.realism_score || 0),
+    risk_score: Number(row.risk_score || 0),
+    rank: Number(row.rank || 0),
+    critic_notes: row.critic_notes && typeof row.critic_notes === "object" ? row.critic_notes : {}
+  };
+}
+
+async function persistVisualConcepts(items) {
+  if (!pgPool) return;
+  try {
+    await ensureVisualConceptsTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into visual_concepts (
+          id, draft_id, package_id, concept_type, title, description, prompt,
+          ctr_score, emotion_score, realism_score, risk_score, rank, status,
+          critic_notes, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        on conflict (id) do update set
+          draft_id = excluded.draft_id,
+          package_id = excluded.package_id,
+          concept_type = excluded.concept_type,
+          title = excluded.title,
+          description = excluded.description,
+          prompt = excluded.prompt,
+          ctr_score = excluded.ctr_score,
+          emotion_score = excluded.emotion_score,
+          realism_score = excluded.realism_score,
+          risk_score = excluded.risk_score,
+          rank = excluded.rank,
+          status = excluded.status,
+          critic_notes = excluded.critic_notes`,
+        [
+          item.id || crypto.randomUUID(),
+          item.draft_id || "",
+          item.package_id || "",
+          item.concept_type || "",
+          item.title || "",
+          item.description || "",
+          item.prompt || "",
+          Number(item.ctr_score || 0),
+          Number(item.emotion_score || 0),
+          Number(item.realism_score || 0),
+          Number(item.risk_score || 0),
+          Number(item.rank || 0),
+          item.status || "draft",
+          JSON.stringify(item.critic_notes || {}),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL visual_concepts persist failed: ${error.message}`);
+  }
+}
+
 async function persistScheduledPosts(items) {
   if (!pgPool) return;
   try {
@@ -1584,14 +1694,16 @@ async function persistPrepublishPreviews(items) {
     for (const item of items) {
       await pgPool.query(
         `insert into prepublish_previews (
-          id, package_id, post_text, image_prompt_id, scheduled_time, safety_score,
+          id, package_id, post_text, image_prompt_id, visual_concept_id, preferred_image_prompt, scheduled_time, safety_score,
           editorial_score, readiness_score, expected_reaction, risk_warnings_json,
           checklist_json, created_at
-        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
         on conflict (id) do update set
           package_id = excluded.package_id,
           post_text = excluded.post_text,
           image_prompt_id = excluded.image_prompt_id,
+          visual_concept_id = excluded.visual_concept_id,
+          preferred_image_prompt = excluded.preferred_image_prompt,
           scheduled_time = excluded.scheduled_time,
           safety_score = excluded.safety_score,
           editorial_score = excluded.editorial_score,
@@ -1604,6 +1716,8 @@ async function persistPrepublishPreviews(items) {
           item.package_id || "",
           item.post_text || "",
           item.image_prompt_id || "",
+          item.visual_concept_id || "",
+          item.preferred_image_prompt || "",
           item.scheduled_time || null,
           Number(item.safety_score || 0),
           Number(item.editorial_score || 0),
@@ -8208,6 +8322,293 @@ async function updateImageQueueStatusByNumber(numberText, status) {
   return updateImageQueueStatusByRef(numberText, status);
 }
 
+function latestVisualConcepts(limit = 20) {
+  return [...readVisualConcepts()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function visualConceptByRef(ref = "1") {
+  const index = Number(ref);
+  if (Number.isInteger(index) && index >= 1) return latestVisualConcepts(50)[index - 1] || null;
+  return readVisualConcepts().find((item) => item.id === ref) || null;
+}
+
+function selectedVisualConceptForPackage(packageId = "", draftId = "") {
+  return readVisualConcepts()
+    .filter((item) => item.status === "selected")
+    .filter((item) => (packageId && item.package_id === packageId) || (draftId && item.draft_id === draftId))
+    .sort((a, b) => Number(a.rank || 99) - Number(b.rank || 99) || new Date(b.created_at || 0) - new Date(a.created_at || 0))[0] || null;
+}
+
+function visualTargetByRef(ref = "1") {
+  const packageRef = readinessPackageByRef(ref);
+  if (packageRef) {
+    const details = publishingPackageDetails(packageRef);
+    return {
+      target_type: "package",
+      package: packageRef,
+      draft: details?.draft || null,
+      schedule: details?.schedule || null,
+      image_prompt: details?.image_prompt || null
+    };
+  }
+  const draft = generatedDraftByRef(ref) || readGeneratedStories().find((item) => item.id === ref) || null;
+  if (!draft) return null;
+  const pkg = readPublishingPackages().find((item) => item.draft_id === draft.id) || null;
+  return {
+    target_type: pkg ? "draft_with_package" : "draft",
+    package: pkg,
+    draft,
+    schedule: pkg ? publishingPackageDetails(pkg)?.schedule || null : null,
+    image_prompt: pkg ? publishingPackageDetails(pkg)?.image_prompt || null : null
+  };
+}
+
+function visualStoryText(draft = {}) {
+  return [draft.title, draft.hook, draft.full_story, draft.moral, draft.image_prompt]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function visualDetectLocation(text = "") {
+  const lower = String(text || "").toLowerCase();
+  if (/hospital|clinic|corridor|ward|больниц|коридор/i.test(lower)) return "hospital corridor";
+  if (/kitchen|tea|table|кухн|чай|стол/i.test(lower)) return "modest apartment kitchen";
+  if (/village|yard|garden|деревн|двор|сад/i.test(lower)) return "village yard near an old house";
+  if (/notary|court|office|document|will|нотари|суд|офис|завещ/i.test(lower)) return "small notary office with family documents";
+  if (/train|station|platform|bus|вокзал|станц|автобус/i.test(lower)) return "rainy station platform";
+  return "ordinary lived-in apartment";
+}
+
+function visualDetectObject(text = "") {
+  const lower = String(text || "").toLowerCase();
+  if (/letter|envelope|письм|конверт/i.test(lower)) return "old envelope in trembling hands";
+  if (/photo|picture|фото|снимок/i.test(lower)) return "old family photograph";
+  if (/will|inheritance|document|завещ|наслед|документ/i.test(lower)) return "folded inheritance document";
+  if (/phone|message|call|телефон|сообщ|звон/i.test(lower)) return "phone with an unread message";
+  if (/key|ключ/i.test(lower)) return "old apartment key";
+  if (/cup|tea|чашк|чай/i.test(lower)) return "cold cup of tea on the table";
+  return "small personal object that reveals the secret";
+}
+
+function visualImageDirector(draft = {}, pkg = null) {
+  const text = visualStoryText(draft);
+  const lower = text.toLowerCase();
+  const location = visualDetectLocation(text);
+  const object = visualDetectObject(text);
+  const emotion = draft.emotion || detectResearchEmotion(text, draft.category || "");
+  const ageGroup = /grandmother|elderly|pension|пожил|пенси|бабуш/i.test(lower)
+    ? "60-75"
+    : /mother|father|husband|wife|мать|отец|муж|жена/i.test(lower)
+      ? "45-65"
+      : "40-65";
+  const characters = /mother-in-law|daughter-in-law|свекров|невест/i.test(lower)
+    ? "mother-in-law and daughter-in-law"
+    : /son|daughter|сын|дочь/i.test(lower)
+      ? "mother and adult child"
+      : /husband|wife|муж|жена/i.test(lower)
+        ? "husband and wife"
+        : "two ordinary family members";
+  const facialEmotion = /betray|измен|предател/i.test(lower)
+    ? "betrayal, restrained anger, wounded silence"
+    : /inherit|наслед|завещ/i.test(lower)
+      ? "shock, suspicion, quiet fear"
+      : /love|любов/i.test(lower)
+        ? "sad tenderness and hope"
+        : "tense curiosity and emotional restraint";
+  const timeOfDay = /night|midnight|ноч/i.test(lower)
+    ? "late evening"
+    : /morning|утр/i.test(lower)
+      ? "early morning"
+      : "warm evening";
+  const mainScene = `${characters} aged ${ageGroup} in ${location}, focused on ${object}`;
+  const emotionalMoment = /secret|тайн|truth|правд/i.test(lower)
+    ? "the second the hidden truth becomes visible"
+    : /argument|fight|ссор|конфликт/i.test(lower)
+      ? "the silent pause after a family accusation"
+      : "the first moment when ordinary life turns into a family revelation";
+  const bestVisualHook = `${object} placed between people who can no longer pretend nothing happened`;
+  return {
+    main_scene: mainScene,
+    emotional_moment: emotionalMoment,
+    best_visual_hook: bestVisualHook,
+    characters,
+    age_group: ageGroup,
+    location,
+    time_of_day: timeOfDay,
+    objects: [object],
+    facial_emotion: facialEmotion,
+    camera_angle: "eye-level 35mm documentary angle, close enough for facial emotion",
+    lighting: location.includes("kitchen") ? "warm practical kitchen light" : "natural soft window light",
+    composition: "one clear central emotional subject, object visible in foreground, uncluttered background",
+    facebook_thumbnail_strength: clampStyleScore(70 + (object ? 8 : 0) + (facialEmotion.includes("shock") ? 8 : 4)),
+    package_id: pkg?.id || "",
+    draft_id: draft.id || ""
+  };
+}
+
+function visualConceptPrompt(director, conceptType) {
+  const styleMap = {
+    cinematic_realism: "photorealistic cinematic realism, documentary family drama, natural faces, believable skin texture",
+    emotional_close_up: "photorealistic emotional close-up, expressive eyes, hands visible, shallow realistic depth of field",
+    family_conflict_scene: "photorealistic family conflict scene, two people at a table, tension in body language",
+    mysterious_object_reveal: "photorealistic mysterious object reveal, discovered object in foreground, shocked faces behind it",
+    facebook_cover_style: "photorealistic Facebook story cover, strong thumbnail composition, high emotional clarity"
+  };
+  return [
+    styleMap[conceptType],
+    `Scene: ${director.main_scene}.`,
+    `Emotional moment: ${director.emotional_moment}.`,
+    `Visual hook: ${director.best_visual_hook}.`,
+    `Characters: ${director.characters}, age group ${director.age_group}.`,
+    `Location: ${director.location}, ${director.time_of_day}.`,
+    `Facial emotion: ${director.facial_emotion}.`,
+    `Camera angle: ${director.camera_angle}.`,
+    `Lighting: ${director.lighting}.`,
+    `Composition: ${director.composition}.`,
+    "Audience: Facebook readers age 40-65+.",
+    "No text, no logos, no watermark, no cartoon, no glossy AI skin, no distorted hands, no fake smiles."
+  ].join(" ");
+}
+
+function buildVisualConceptsFromDirector(director) {
+  const types = [
+    ["cinematic_realism", "Cinematic realism", "A realistic domestic story frame with strong atmosphere and believable faces."],
+    ["emotional_close_up", "Emotional close-up", "A tight human moment centered on facial emotion and the discovered object."],
+    ["family_conflict_scene", "Family conflict scene", "A wider table or room scene showing relationship tension between characters."],
+    ["mysterious_object_reveal", "Mysterious object reveal", "The secret-bearing object becomes the visual hook that stops the scroll."],
+    ["facebook_cover_style", "Facebook cover style", "A clear high-contrast feed image designed for fast mobile recognition."]
+  ];
+  return types.map(([conceptType, title, description]) => {
+    const objectBoost = conceptType === "mysterious_object_reveal" ? 10 : 0;
+    const faceBoost = conceptType === "emotional_close_up" ? 9 : 0;
+    const conflictBoost = conceptType === "family_conflict_scene" ? 8 : 0;
+    const coverBoost = conceptType === "facebook_cover_style" ? 7 : 0;
+    const ctrScore = clampStyleScore(director.facebook_thumbnail_strength + objectBoost + faceBoost + coverBoost - (conceptType === "cinematic_realism" ? 2 : 0));
+    const emotionScore = clampStyleScore(68 + faceBoost + conflictBoost + (director.facial_emotion.includes("shock") ? 7 : 4));
+    const realismScore = clampStyleScore(82 - coverBoost + (conceptType === "cinematic_realism" ? 8 : 0));
+    const riskScore = clampStyleScore(18 + coverBoost + (conceptType === "family_conflict_scene" ? 4 : 0) - (conceptType === "cinematic_realism" ? 3 : 0));
+    return {
+      id: crypto.randomUUID(),
+      draft_id: director.draft_id || "",
+      package_id: director.package_id || "",
+      concept_type: conceptType,
+      title,
+      description,
+      prompt: visualConceptPrompt(director, conceptType),
+      ctr_score: ctrScore,
+      emotion_score: emotionScore,
+      realism_score: realismScore,
+      risk_score: riskScore,
+      rank: 0,
+      status: "draft",
+      critic_notes: {},
+      created_at: new Date().toISOString()
+    };
+  });
+}
+
+function visualCriticRankConcepts(concepts = [], director = {}) {
+  const ranked = [...concepts]
+    .map((item) => ({
+      ...item,
+      critic_total: Number(item.ctr_score || 0) * 0.38 + Number(item.emotion_score || 0) * 0.3 + Number(item.realism_score || 0) * 0.22 - Number(item.risk_score || 0) * 0.18
+    }))
+    .sort((a, b) => b.critic_total - a.critic_total)
+    .map((item, index) => ({
+      ...item,
+      rank: index + 1,
+      critic_notes: {
+        why: index === 0
+          ? `Strongest because it combines ${director.best_visual_hook || "a clear visual hook"} with readable emotion for a mobile Facebook thumbnail.`
+          : "Weaker because it has less immediate scroll-stopping clarity, lower emotional proximity, or higher staged-cover risk.",
+        attractors: [
+          director.objects?.[0] || "revealing object",
+          director.facial_emotion || "visible emotion",
+          director.location || "ordinary domestic location"
+        ],
+        avoid: [
+          "overly glossy advertising look",
+          "plastic AI faces",
+          "too many people in the frame",
+          "text written inside the image"
+        ],
+        critic_total: Math.round(item.critic_total)
+      }
+    }));
+  return ranked;
+}
+
+async function createVisualConceptsForRef(ref = "1") {
+  const target = visualTargetByRef(ref);
+  if (!target?.draft) {
+    return {
+      ok: false,
+      module: "Visual Intelligence v1",
+      code: "draft_or_package_not_found",
+      message: "Draft/package not found. Use /drafts or /packages to see current numbers.",
+      safety: { real_image_generation: false, facebook_posting: false, autopublishing: false }
+    };
+  }
+  const director = visualImageDirector(target.draft, target.package);
+  const concepts = visualCriticRankConcepts(buildVisualConceptsFromDirector(director), director);
+  const next = [...concepts, ...readVisualConcepts()].slice(0, 500);
+  await writeVisualConcepts(next);
+  return {
+    ok: true,
+    module: "Visual Intelligence v1",
+    target_type: target.target_type,
+    draft_id: target.draft.id,
+    package_id: target.package?.id || "",
+    image_director: director,
+    concepts,
+    image_critic: {
+      best_concept_id: concepts[0]?.id || "",
+      best_concept_title: concepts[0]?.title || "",
+      why_best: concepts[0]?.critic_notes?.why || "",
+      weak_concepts: concepts.slice(1).map((item) => ({
+        id: item.id,
+        title: item.title,
+        reason: item.critic_notes?.why || ""
+      })),
+      visual_elements_that_may_attract: [director.best_visual_hook, director.facial_emotion, director.location].filter(Boolean),
+      what_to_avoid: concepts[0]?.critic_notes?.avoid || []
+    },
+    safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+  };
+}
+
+async function selectVisualConcept(ref = "1") {
+  const concept = visualConceptByRef(ref);
+  if (!concept) return null;
+  const next = readVisualConcepts().map((item) => {
+    const sameTarget = (concept.package_id && item.package_id === concept.package_id) || (!concept.package_id && concept.draft_id && item.draft_id === concept.draft_id);
+    if (item.id === concept.id) return { ...item, status: "selected" };
+    if (sameTarget && item.status === "selected") return { ...item, status: "draft" };
+    return item;
+  });
+  await writeVisualConcepts(next);
+  return next.find((item) => item.id === concept.id) || null;
+}
+
+function buildVisualIntelligenceDashboardData() {
+  const concepts = latestVisualConcepts(50);
+  const selected = concepts.filter((item) => item.status === "selected");
+  const avgCtr = concepts.length ? Math.round(concepts.reduce((sum, item) => sum + Number(item.ctr_score || 0), 0) / concepts.length) : 0;
+  return {
+    ok: true,
+    module: "Visual Intelligence v1",
+    latest_concepts: concepts,
+    selected_concepts: selected,
+    concepts_count: readVisualConcepts().length,
+    selected_count: readVisualConcepts().filter((item) => item.status === "selected").length,
+    average_ctr_score: avgCtr,
+    top_visual_hooks: countBy(concepts, (item) => item.concept_type || "unknown").slice(0, 8),
+    safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+  };
+}
+
 function imageGenerationConfigStatus() {
   return {
     configured: Boolean(process.env.OPENAI_API_KEY),
@@ -9398,11 +9799,14 @@ async function createPrepublishPreviewForPackage(ref = "1") {
   const draft = details?.draft || {};
   const imagePrompt = details?.image_prompt || {};
   const schedule = details?.schedule || {};
+  const selectedVisual = selectedVisualConceptForPackage(readiness.package_id, draft.id || "");
   const preview = {
     id: crypto.randomUUID(),
     package_id: readiness.package_id,
     post_text: prepublishFacebookPostText(draft),
     image_prompt_id: imagePrompt.id || "",
+    visual_concept_id: selectedVisual?.id || "",
+    preferred_image_prompt: selectedVisual?.prompt || imagePrompt.prompt || "",
     scheduled_time: schedule.scheduled_time || readiness.details?.scheduled_time || null,
     safety_score: Number(readiness.safety_review?.safety_score || 0),
     editorial_score: Number(readiness.editorial?.final_editorial_score || 0),
@@ -9433,7 +9837,9 @@ async function createPrepublishPreviewForPackage(ref = "1") {
     image_prompt: {
       id: imagePrompt.id || "",
       status: imagePrompt.status || "",
-      prompt: imagePrompt.prompt || "",
+      preferred_visual_concept_id: selectedVisual?.id || "",
+      prompt: selectedVisual?.prompt || imagePrompt.prompt || "",
+      original_prompt: imagePrompt.prompt || "",
       generated_image_url: imagePrompt.generated_image_url || ""
     },
     schedule: {
@@ -10090,6 +10496,7 @@ function renderAutopilotV1Dashboard() {
   const contentSafety = buildContentSafetyDashboardData();
   const readinessGate = buildReadinessGateDashboardData();
   const prepublish = buildPrepublishDashboardData();
+  const visualIntelligence = buildVisualIntelligenceDashboardData();
   const emotionEngine = buildEmotionEngineRecommendations(readEmotionTimelines());
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
@@ -10127,6 +10534,7 @@ function renderAutopilotV1Dashboard() {
           ${card("Content Safety", `${contentSafety.average_safety_score}%`, `${contentSafety.reviews_count} reviews, ${contentSafety.needs_edit_drafts.length} need edit`)}
           ${card("Readiness Gate", `${readinessGate.average_readiness_score}%`, `${readinessGate.ready_count} ready, ${readinessGate.blocked_count} blocked`)}
           ${card("Pre-Publish", prepublish.preview_status.previews_count, `${prepublish.preview_status.ready_without_preview_count} ready packages need preview`)}
+          ${card("Visual Intelligence", visualIntelligence.concepts_count, `${visualIntelligence.selected_count} selected, avg CTR ${visualIntelligence.average_ctr_score}`)}
           ${card("Image Generator v3", imageV3.generated_images, `${imageV3.needs_review} needs review, ${imageV3.approved_images} approved`)}
           ${card("Emotion Engine", `${emotionEngine.statistics.average_ending_satisfaction}%`, `${emotionEngine.timelines_count} timelines, peak ${emotionEngine.ideal_peak_position}`)}
           ${card("Publishing", status.system.autopublishing, "Approval is required before any publishing step.")}
@@ -10167,6 +10575,7 @@ function renderAutopilotV1Dashboard() {
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/ideas" type="button">Generate Ideas</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/image-prompts" type="button">Image Prompts v2</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/image-queue" type="button">Image Queue</button>
+          <button class="secondary-btn" data-autopilot-action="/api/visual-intelligence/v1/concepts" type="button">Visual Intelligence</button>
           <button class="secondary-btn" data-autopilot-action="/api/autopilot/v1/plan" type="button">Daily Plan</button>
         </div>
         <p id="autopilotV1Message" class="helper-text">Ready.</p>
@@ -10210,6 +10619,22 @@ function renderAutopilotV1Dashboard() {
           <table class="facebook-table">
             <thead><tr><th>Draft</th><th>Style</th><th>Status</th><th>Prompt</th></tr></thead>
             <tbody>${rows(queue, "No queued image prompts yet.", (item) => `<tr><td>${escapeHtml(item.story_title)}</td><td>${escapeHtml(item.style || "story_idea_prompt")}</td><td>${escapeHtml(item.status)}</td><td>${escapeHtml(shortText(item.prompt, 220))}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
+        <h2>Visual Intelligence v1</h2>
+        <div class="autopilot-status-grid">
+          ${card("Visual Concepts", visualIntelligence.concepts_count, "Five prompt concepts per draft/package")}
+          ${card("Selected Concepts", visualIntelligence.selected_count, "Preferred for pre-publish preview")}
+          ${card("Average CTR", visualIntelligence.average_ctr_score, "Predicted Facebook thumbnail strength")}
+          ${card("Image Generation", "disabled", "No OpenAI Images call in this module")}
+        </div>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Rank</th><th>Concept</th><th>Scores</th><th>Status</th></tr></thead>
+            <tbody>${rows(visualIntelligence.latest_concepts.slice(0, 10), "No visual concepts yet. Run /visual 1 or click Visual Intelligence.", (item) => `<tr><td>${Number(item.rank || 0)}</td><td><strong>${escapeHtml(item.title || item.concept_type)}</strong><br>${escapeHtml(shortText(item.description || item.prompt || "", 170))}</td><td>CTR ${Number(item.ctr_score || 0)} / emotion ${Number(item.emotion_score || 0)} / realism ${Number(item.realism_score || 0)} / risk ${Number(item.risk_score || 0)}</td><td>${escapeHtml(item.status || "draft")}</td></tr>`)}</tbody>
           </table>
         </div>
       </section>
@@ -10292,8 +10717,8 @@ function renderAutopilotV1Dashboard() {
         </div>
         <div class="facebook-table-wrap">
           <table class="facebook-table">
-            <thead><tr><th>Package</th><th>Scheduled</th><th>Scores</th><th>Expected Reaction</th></tr></thead>
-            <tbody>${rows(prepublish.latest_previews.slice(0, 8), "No pre-publish previews yet.", (item) => `<tr><td>${escapeHtml(item.package_id)}</td><td>${item.scheduled_time ? escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU")) : "missing"}</td><td>safety ${Number(item.safety_score || 0)} / editorial ${Number(item.editorial_score || 0)} / ready ${Number(item.readiness_score || 0)}</td><td>${escapeHtml(shortText(item.expected_reaction || "", 180))}</td></tr>`)}</tbody>
+            <thead><tr><th>Package</th><th>Scheduled</th><th>Scores</th><th>Visual</th></tr></thead>
+            <tbody>${rows(prepublish.latest_previews.slice(0, 8), "No pre-publish previews yet.", (item) => `<tr><td>${escapeHtml(item.package_id)}</td><td>${item.scheduled_time ? escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU")) : "missing"}</td><td>safety ${Number(item.safety_score || 0)} / editorial ${Number(item.editorial_score || 0)} / ready ${Number(item.readiness_score || 0)}</td><td>${item.visual_concept_id ? `visual concept selected<br>${escapeHtml(shortText(item.preferred_image_prompt || "", 120))}` : escapeHtml(shortText(item.expected_reaction || "", 150))}</td></tr>`)}</tbody>
           </table>
         </div>
       </section>
@@ -10903,6 +11328,69 @@ async function telegramRejectGeneratedImage(chatId, numberText = "1") {
   return sendTelegramMessage(chatId, image
     ? `Generated image ${escapeHtml(numberText)} rejected.\nstatus: ${escapeHtml(image.status)}\n\nNo Facebook posting.`
     : "Generated image not found. Use /картинки_готовые.", mainTelegramKeyboard());
+}
+
+async function telegramCreateVisualConcepts(chatId, numberText = "1") {
+  const result = await createVisualConceptsForRef(numberText || "1");
+  if (!result.ok) {
+    return sendTelegramMessage(chatId, [
+      "<b>Visual Intelligence v1</b>",
+      "",
+      escapeHtml(result.message || "Draft/package not found."),
+      "",
+      "No real image generation. No Facebook posting."
+    ].join("\n"), mainTelegramKeyboard());
+  }
+  const text = result.concepts.slice(0, 5).map((item, index) => [
+    `${index + 1}. <b>${escapeHtml(item.title)}</b>`,
+    `rank: ${Number(item.rank || 0)} | CTR ${Number(item.ctr_score || 0)} | emotion ${Number(item.emotion_score || 0)} | realism ${Number(item.realism_score || 0)} | risk ${Number(item.risk_score || 0)}`,
+    escapeHtml(shortText(item.description || "", 160)),
+    `prompt: ${escapeHtml(shortText(item.prompt || "", 360))}`
+  ].join("\n")).join("\n\n");
+  return sendTelegramLongMessage(chatId, [
+    "<b>Visual Intelligence v1</b>",
+    "",
+    `draft_id: ${escapeHtml(result.draft_id || "")}`,
+    `package_id: ${escapeHtml(result.package_id || "")}`,
+    `best: ${escapeHtml(result.image_critic.best_concept_title || "")}`,
+    "",
+    text,
+    "",
+    "/выбрать_визуал 1 - выбрать лучший концепт",
+    "/визуалы - последние концепты",
+    "",
+    "No OpenAI Images call. No Facebook posting."
+  ].join("\n"), mainTelegramKeyboard());
+}
+
+async function telegramVisualConcepts(chatId) {
+  const concepts = latestVisualConcepts(10);
+  if (!concepts.length) return sendTelegramMessage(chatId, "Visual concepts пока нет. Используйте /визуал 1 или /visual 1.", mainTelegramKeyboard());
+  const text = concepts.map((item, index) => [
+    `${index + 1}. <b>${escapeHtml(item.title || item.concept_type)}</b>`,
+    `status: ${escapeHtml(item.status || "draft")} | rank: ${Number(item.rank || 0)}`,
+    `CTR ${Number(item.ctr_score || 0)} | emotion ${Number(item.emotion_score || 0)} | realism ${Number(item.realism_score || 0)} | risk ${Number(item.risk_score || 0)}`,
+    `draft: ${escapeHtml(shortText(item.draft_id || "", 32))}`,
+    `package: ${escapeHtml(shortText(item.package_id || "", 32))}`,
+    escapeHtml(shortText(item.description || item.prompt || "", 220))
+  ].join("\n")).join("\n\n");
+  return sendTelegramLongMessage(chatId, `<b>Visual Concepts</b>\n\n${text}\n\n/выбрать_визуал 1\n\nNo real image generation. No Facebook posting.`, mainTelegramKeyboard());
+}
+
+async function telegramSelectVisualConcept(chatId, numberText = "1") {
+  const selected = await selectVisualConcept(numberText || "1");
+  return sendTelegramMessage(chatId, selected
+    ? [
+        "<b>Visual concept selected</b>",
+        "",
+        `title: ${escapeHtml(selected.title || "")}`,
+        `rank: ${Number(selected.rank || 0)} | CTR ${Number(selected.ctr_score || 0)}/100`,
+        `status: ${escapeHtml(selected.status || "")}`,
+        "",
+        "This concept is now preferred for package/prepublish preview. Old image prompts were not deleted.",
+        "No real image generation. No Facebook posting."
+      ].join("\n")
+    : "Visual concept not found. Use /визуалы or /visuals.", mainTelegramKeyboard());
 }
 
 async function telegramAudience(chatId) {
@@ -11919,7 +12407,7 @@ async function telegramHelp(chatId) {
     "/готовность 1 - editorial readiness status",
     "",
     "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /preview 1, /previews, /versions 1, /compare 1 2, /image 1, /images, /generate_image 1, /generated_images, /approve_generated_image 1, /reject_generated_image 1, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /preview 1, /previews, /versions 1, /compare 1 2, /image 1, /images, /visual 1, /visuals, /select_visual 1, /generate_image 1, /generated_images, /approve_generated_image 1, /reject_generated_image 1, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -11947,6 +12435,9 @@ function telegramCommandList() {
     { command: "generated_images", description: "Latest generated images" },
     { command: "approve_generated_image", description: "Approve generated image" },
     { command: "reject_generated_image", description: "Reject generated image" },
+    { command: "visual", description: "Create 5 visual concepts" },
+    { command: "visuals", description: "Latest visual concepts" },
+    { command: "select_visual", description: "Select preferred visual concept" },
     { command: "schedule", description: "План публикаций" },
     { command: "queue", description: "Очередь расписания" },
     { command: "packages", description: "Пакеты публикаций" },
@@ -12133,6 +12624,9 @@ async function handleTelegramMessage(message) {
   if (command === "/generated_images" || command === "/картинки_готовые") return telegramGeneratedImages(chatId);
   if (command === "/approve_generated_image" || command === "/одобрить_готовую_картинку") return telegramApproveGeneratedImage(chatId, args[0] || "1");
   if (command === "/reject_generated_image" || command === "/отклонить_готовую_картинку") return telegramRejectGeneratedImage(chatId, args[0] || "1");
+  if (command === "/visual" || command === "/визуал") return telegramCreateVisualConcepts(chatId, args[0] || "1");
+  if (command === "/visuals" || command === "/визуалы") return telegramVisualConcepts(chatId);
+  if (command === "/select_visual" || command === "/выбрать_визуал") return telegramSelectVisualConcept(chatId, args[0] || "1");
   if (command === "/audience") return telegramAudience(chatId);
   if (command === "/competitors") return telegramCompetitors(chatId);
   if (command === "/autopilot") return telegramAutopilot(chatId);
@@ -12585,6 +13079,7 @@ const productionPersistenceTables = [
   "generated_stories",
   "image_queue",
   "generated_images",
+  "visual_concepts",
   "scheduled_posts",
   "publishing_packages",
   "prepublish_previews",
@@ -12631,6 +13126,7 @@ async function buildStorageStatus() {
       generated_stories: readGeneratedStories().length,
       image_queue: readImageQueue().length,
       generated_images: readGeneratedImages().length,
+      visual_concepts: readVisualConcepts().length,
       scheduled_posts: readScheduledPosts().length,
       publishing_packages: readPublishingPackages().length,
       prepublish_previews: readPrepublishPreviews().length,
@@ -14534,6 +15030,26 @@ async function handleApi(req, res, pathname) {
       module: "Image Generator v3",
       generated_image: updated,
       safety: { facebook_posting_enabled: false, autopublishing: false, tokens_exposed: false }
+    });
+  }
+
+  if (pathname === "/api/visual-intelligence/v1/concepts" && req.method === "POST") {
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await createVisualConceptsForRef(payload.package || payload.package_id || payload.draft || payload.draft_id || payload.index || "1"));
+  }
+
+  if (pathname === "/api/visual-intelligence/v1/concepts" && req.method === "GET") {
+    return sendJson(res, 200, buildVisualIntelligenceDashboardData());
+  }
+
+  if (pathname === "/api/visual-intelligence/v1/select" && req.method === "POST") {
+    const payload = await parseBody(req);
+    const selected = await selectVisualConcept(payload.visual_concept_id || payload.concept || payload.index || "1");
+    return sendJson(res, 200, {
+      ok: Boolean(selected),
+      module: "Visual Intelligence v1",
+      selected_concept: selected,
+      safety: { real_image_generation: false, facebook_posting: false, autopublishing: false }
     });
   }
 
