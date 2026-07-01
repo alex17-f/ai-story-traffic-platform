@@ -8374,7 +8374,7 @@ async function generateImageV3(ref = "1") {
     provider: generation.provider || "OpenAI Images",
     prompt: promptItem.prompt || "",
     image_url: generation.image_url || "",
-    status: generation.ok ? "needs_review" : "failed",
+    status: generation.ok ? "generated" : "failed",
     quality_score: generation.ok ? generatedImageQualityScore(promptItem.prompt, generation.provider) : 0,
     created_at: new Date().toISOString()
   };
@@ -8401,7 +8401,7 @@ async function generateImageV3(ref = "1") {
 }
 
 async function updateGeneratedImageStatus(ref = "1", status = "approved") {
-  const allowed = new Set(["needs_review", "approved", "rejected"]);
+  const allowed = new Set(["generated", "needs_review", "approved", "rejected"]);
   if (!allowed.has(status)) return null;
   const image = generatedImageByRef(ref);
   if (!image) return null;
