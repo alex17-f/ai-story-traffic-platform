@@ -7016,7 +7016,15 @@ function buildProjectBrainV2Recommendations() {
   const stats = buildStoryDnaStatistics(dnaItems);
   const recommendationStats = buildStoryDnaStatistics(recommendationItems);
   const lengthStats = weightedDnaStats(recommendationItems, "story_length").slice(0, 6);
-  const avoidTopics = lowestUsefulDnaStats(facebookEvidence.length >= 10 ? facebookEvidence : [], "main_theme");
+  const hasMeasuredFacebookEngagement = facebookEvidence.some((item) =>
+    Number(item.engagement_score || 0) > 0
+    || Number(item.comments_score || 0) > 0
+    || Number(item.shares_score || 0) > 0
+    || Number(item.viral_score || 0) > 0
+  );
+  const avoidTopics = hasMeasuredFacebookEngagement
+    ? lowestUsefulDnaStats(facebookEvidence, "main_theme")
+    : [];
   const bestEmotion = recommendationStats.top_emotions[0]?.name || "hope";
   const bestHook = recommendationStats.top_hooks[0]?.name || "hidden truth hook";
   const bestLength = lengthStats[0]?.name || "medium";
@@ -7044,6 +7052,7 @@ function buildProjectBrainV2Recommendations() {
     best_story_length: lengthStats[0] || null,
     facebook_fragment: fragmentRecommendation,
     avoid_topics: avoidTopics,
+    avoid_topics_status: hasMeasuredFacebookEngagement ? "measured" : "unavailable_without_engagement_metrics",
     suggested_next_story_type: suggested,
     reason_why: stats.story_dna_count
       ? `Based on ${stats.story_dna_count} Story DNA patterns; decision signals come from ${facebookEvidence.length >= 10 ? `${facebookEvidence.length} own Facebook posts` : "available public research patterns"}. Strongest signals: emotion "${bestEmotion}", hook "${bestHook}", conflict "${bestConflict}", length "${bestLength}".`
