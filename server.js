@@ -5,34 +5,38 @@ const crypto = require("crypto");
 
 const PORT = Number(process.env.PORT || 4173);
 const ROOT = __dirname;
-const DATA_FILE = path.join(ROOT, "data", "stories.json");
-const FACEBOOK_POSTS_FILE = path.join(ROOT, "data", "facebook_posts.json");
-const COMPETITORS_FILE = path.join(ROOT, "data", "competitors.json");
-const PROJECT_BRAIN_FILE = path.join(ROOT, "data", "project_brain.json");
-const FACEBOOK_CONNECTION_FILE = path.join(ROOT, "data", "facebook_connection.local.json");
-const INTERNET_RESEARCH_FILE = path.join(ROOT, "data", "internet_research.json");
-const RESEARCH_STORIES_FILE = path.join(ROOT, "data", "research_stories.json");
-const STORY_DNA_FILE = path.join(ROOT, "data", "story_dna.json");
-const GENERATED_STORIES_FILE = path.join(ROOT, "data", "generated_stories.json");
-const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
-const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
-const GENERATED_IMAGES_FILE = path.join(ROOT, "data", "generated_images.json");
-const VISUAL_CONCEPTS_FILE = path.join(ROOT, "data", "visual_concepts.json");
-const VISUAL_QUALITY_REVIEWS_FILE = path.join(ROOT, "data", "visual_quality_reviews.json");
-const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
-const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
-const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
-const PREPUBLISH_PREVIEWS_FILE = path.join(ROOT, "data", "prepublish_previews.json");
-const STYLE_BRAIN_PROFILES_FILE = path.join(ROOT, "data", "style_brain_profiles.json");
-const CONTENT_SAFETY_REVIEWS_FILE = path.join(ROOT, "data", "content_safety_reviews.json");
-const EMOTION_TIMELINE_FILE = path.join(ROOT, "data", "emotion_timeline.json");
-const EDITORIAL_REVIEWS_FILE = path.join(ROOT, "data", "editorial_reviews.json");
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, "data");
+const DATA_FILE = path.join(DATA_DIR, "stories.json");
+const FACEBOOK_POSTS_FILE = path.join(DATA_DIR, "facebook_posts.json");
+const COMPETITORS_FILE = path.join(DATA_DIR, "competitors.json");
+const PROJECT_BRAIN_FILE = path.join(DATA_DIR, "project_brain.json");
+const FACEBOOK_CONNECTION_FILE = path.join(DATA_DIR, "facebook_connection.local.json");
+const INTERNET_RESEARCH_FILE = path.join(DATA_DIR, "internet_research.json");
+const RESEARCH_STORIES_FILE = path.join(DATA_DIR, "research_stories.json");
+const STORY_DNA_FILE = path.join(DATA_DIR, "story_dna.json");
+const GENERATED_STORIES_FILE = path.join(DATA_DIR, "generated_stories.json");
+const STORY_IDEAS_FILE = path.join(DATA_DIR, "story_ideas.json");
+const IMAGE_QUEUE_FILE = path.join(DATA_DIR, "image_queue.json");
+const GENERATED_IMAGES_FILE = path.join(DATA_DIR, "generated_images.json");
+const VISUAL_CONCEPTS_FILE = path.join(DATA_DIR, "visual_concepts.json");
+const VISUAL_QUALITY_REVIEWS_FILE = path.join(DATA_DIR, "visual_quality_reviews.json");
+const CONTENT_PLAN_FILE = path.join(DATA_DIR, "content_plan.json");
+const SCHEDULED_POSTS_FILE = path.join(DATA_DIR, "scheduled_posts.json");
+const PUBLISHING_PACKAGES_FILE = path.join(DATA_DIR, "publishing_packages.json");
+const PREPUBLISH_PREVIEWS_FILE = path.join(DATA_DIR, "prepublish_previews.json");
+const STYLE_BRAIN_PROFILES_FILE = path.join(DATA_DIR, "style_brain_profiles.json");
+const CONTENT_SAFETY_REVIEWS_FILE = path.join(DATA_DIR, "content_safety_reviews.json");
+const EMOTION_TIMELINE_FILE = path.join(DATA_DIR, "emotion_timeline.json");
+const EDITORIAL_REVIEWS_FILE = path.join(DATA_DIR, "editorial_reviews.json");
+const WEBSITE_EVENTS_FILE = path.join(DATA_DIR, "website_events.json");
+const TELEGRAM_UPDATES_FILE = path.join(DATA_DIR, "telegram_updates.json");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const ENV_FILE = path.join(ROOT, ".env");
 const FACEBOOK_CONNECTION_COOKIE = "astp_fb_conn";
 const FACEBOOK_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
 const FACEBOOK_GRAPH_VERSION = "v20.0";
 const TELEGRAM_WEBHOOK_URL = process.env.TELEGRAM_WEBHOOK_URL || "https://ai-story-traffic-platform.vercel.app/api/telegram/webhook";
+const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "https://ai-story-traffic-platform.vercel.app").replace(/\/+$/, "");
 const facebookReadPermissions = [
   "pages_show_list",
   "pages_read_engagement",
@@ -79,9 +83,10 @@ const facebookLegacyPostsFields = [
   "likes.summary(true).limit(0)",
   "comments.summary(true).limit(0)"
 ].join(",");
-const facebookPostEndpointOrder = ["published_posts"];
+const facebookPostEndpointOrder = ["published_posts", "posts"];
 
 function loadLocalEnv() {
+  if (process.env.LOAD_LOCAL_ENV === "false") return;
   if (!fs.existsSync(ENV_FILE)) return;
   const lines = fs.readFileSync(ENV_FILE, "utf8").split(/\r?\n/);
   for (const line of lines) {
@@ -173,30 +178,30 @@ function readStories() {
   return storageCache.stories;
 }
 
-function writeStories(stories) {
+async function writeStories(stories) {
   storageCache.stories = stories;
   writeJsonBackup(DATA_FILE, stories);
-  persistStories(stories);
+  await persistStories(stories);
 }
 
 function readFacebookPosts() {
   return storageCache.facebookPosts;
 }
 
-function writeFacebookPosts(posts) {
+async function writeFacebookPosts(posts) {
   storageCache.facebookPosts = posts;
   writeJsonBackup(FACEBOOK_POSTS_FILE, posts);
-  persistFacebookPosts(posts);
+  await persistFacebookPosts(posts);
 }
 
 function readCompetitors() {
   return storageCache.competitors;
 }
 
-function writeCompetitors(competitors) {
+async function writeCompetitors(competitors) {
   storageCache.competitors = competitors;
   writeJsonBackup(COMPETITORS_FILE, competitors);
-  persistCompetitors(competitors);
+  await persistCompetitors(competitors);
 }
 
 function autopilotV1BrainState() {
@@ -204,9 +209,11 @@ function autopilotV1BrainState() {
 }
 
 function readAutopilotV1Collection(cacheKey, brainKey) {
+  const cachedItems = storageCache[cacheKey];
+  if (Array.isArray(cachedItems) && cachedItems.length) return cachedItems;
   const brainItems = autopilotV1BrainState()[brainKey];
   if (Array.isArray(brainItems) && brainItems.length) return brainItems;
-  return storageCache[cacheKey] || [];
+  return [];
 }
 
 async function writeAutopilotV1Collection(cacheKey, filePath, brainKey, items) {
@@ -238,9 +245,11 @@ async function writeInternetResearchItems(items) {
 }
 
 function readResearchStories() {
+  const cachedItems = storageCache.researchStories;
+  if (Array.isArray(cachedItems) && cachedItems.length) return cachedItems;
   const brainItems = autopilotV1BrainState().research_stories;
   if (Array.isArray(brainItems) && brainItems.length) return brainItems;
-  return storageCache.researchStories || [];
+  return [];
 }
 
 async function writeResearchStories(stories) {
@@ -486,6 +495,28 @@ async function writeEmotionTimelines(items) {
   return items;
 }
 
+function readWebsiteEvents() {
+  return storageCache.websiteEvents || [];
+}
+
+async function writeWebsiteEvents(items) {
+  storageCache.websiteEvents = items;
+  writeJsonBackup(WEBSITE_EVENTS_FILE, items);
+  await persistWebsiteEvents(items);
+  return items;
+}
+
+function readTelegramUpdates() {
+  return storageCache.telegramUpdates || [];
+}
+
+async function writeTelegramUpdates(items) {
+  storageCache.telegramUpdates = items;
+  writeJsonBackup(TELEGRAM_UPDATES_FILE, items);
+  await persistTelegramUpdates(items);
+  return items;
+}
+
 function readJsonArray(filePath) {
   if (!fs.existsSync(filePath)) return [];
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -530,6 +561,8 @@ const storageCache = {
   contentSafetyReviews: readJsonArray(CONTENT_SAFETY_REVIEWS_FILE),
   emotionTimelines: readJsonArray(EMOTION_TIMELINE_FILE),
   editorialReviews: readJsonArray(EDITORIAL_REVIEWS_FILE),
+  websiteEvents: readJsonArray(WEBSITE_EVENTS_FILE),
+  telegramUpdates: readJsonArray(TELEGRAM_UPDATES_FILE),
   projectBrain: fs.existsSync(PROJECT_BRAIN_FILE)
     ? JSON.parse(fs.readFileSync(PROJECT_BRAIN_FILE, "utf8"))
     : {
@@ -558,8 +591,38 @@ const storageCache = {
 };
 
 let pgPool = null;
-let storageMode = "json";
+let storageMode = process.env.VERCEL ? "unavailable" : "json_local_fallback";
 let storageLastError = "";
+
+function clearProductionRuntimeDataWhenStorageUnavailable() {
+  if (!process.env.VERCEL) return;
+  for (const key of Object.keys(storageCache)) {
+    if (Array.isArray(storageCache[key])) storageCache[key] = [];
+  }
+  storageCache.facebookConnection = {};
+  storageCache.projectBrain = {
+    best_topics: [],
+    best_images: [],
+    best_times: [],
+    best_titles: [],
+    best_emotions: [],
+    best_publications: [],
+    best_ctr: [],
+    best_lengths: [],
+    best_story_formats: [],
+    successful_stories: [],
+    unsuccessful_stories: [],
+    audience_analytics: {},
+    competitor_analytics: {},
+    internet_research: {},
+    publication_statistics: {},
+    data_quality: { status: "unavailable", reason: "postgres_not_connected" },
+    work_history: [],
+    autopilot_runs: [],
+    recommendations: [],
+    updated_at: null
+  };
+}
 
 function pgColumnDate(value, fallback = new Date().toISOString()) {
   return value || fallback;
@@ -584,7 +647,12 @@ async function runDatabaseMigrations(pool = pgPool) {
 
 async function initializeStorage() {
   if (!process.env.DATABASE_URL) {
-    console.log("Storage: JSON backup mode. Set DATABASE_URL to use PostgreSQL.");
+    storageMode = process.env.VERCEL ? "unavailable" : "json_local_fallback";
+    storageLastError = process.env.VERCEL ? "DATABASE_URL is missing in the production environment." : "";
+    clearProductionRuntimeDataWhenStorageUnavailable();
+    console.log(process.env.VERCEL
+      ? "Storage: unavailable in production because DATABASE_URL is missing."
+      : "Storage: explicit local JSON fallback. Set DATABASE_URL to use PostgreSQL.");
     return;
   }
   try {
@@ -612,6 +680,8 @@ async function initializeStorage() {
     await ensureContentSafetyReviewsTable();
     await ensureEditorialReviewsTable();
     await ensureEmotionTimelineTable();
+    await ensureWebsiteEventsTable();
+    await ensureTelegramUpdatesTable();
     storageMode = "postgres";
     storageCache.stories = (await pgPool.query("select * from stories order by created_at desc")).rows;
     storageCache.facebookPosts = (await pgPool.query("select * from facebook_posts order by total_score desc, published_at desc")).rows;
@@ -620,23 +690,25 @@ async function initializeStorage() {
       followers_count: row.followers_count || 0,
       category: row.category || "Facebook-страница"
     }));
-    storageCache.researchStories = (await pgPool.query("select * from research_stories order by viral_score desc, similarity_score desc, created_at desc limit 500")).rows.map((row) => ({
+    storageCache.researchStories = (await pgPool.query("select * from research_stories order by viral_score desc, similarity_score desc, created_at desc")).rows.map((row) => ({
       ...row,
       keywords: Array.isArray(row.keywords) ? row.keywords : []
     }));
-    storageCache.storyDna = (await pgPool.query("select * from story_dna order by viral_score desc, engagement_score desc, created_at desc limit 1000")).rows.map(normalizeStoryDnaRow);
-    storageCache.generatedStories = (await pgPool.query("select * from generated_stories order by created_at desc limit 300")).rows.map(normalizeGeneratedStoryRow);
-    storageCache.imageQueue = (await pgPool.query("select * from image_queue order by created_at desc limit 300")).rows.map(normalizeImageQueueRow);
-    storageCache.generatedImages = (await pgPool.query("select * from generated_images order by created_at desc limit 300")).rows.map(normalizeGeneratedImageRow);
-    storageCache.visualConcepts = (await pgPool.query("select * from visual_concepts order by created_at desc limit 500")).rows.map(normalizeVisualConceptRow);
-    storageCache.visualQualityReviews = (await pgPool.query("select * from visual_quality_reviews order by created_at desc limit 500")).rows.map(normalizeVisualQualityReviewRow);
-    storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
-    storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
-    storageCache.prepublishPreviews = (await pgPool.query("select * from prepublish_previews order by created_at desc limit 300")).rows.map(normalizePrepublishPreviewRow);
-    storageCache.styleBrainProfiles = (await pgPool.query("select * from style_brain_profiles order by created_at desc limit 1200")).rows.map(normalizeStyleBrainProfileRow);
-    storageCache.contentSafetyReviews = (await pgPool.query("select * from content_safety_reviews order by created_at desc limit 1000")).rows.map(normalizeContentSafetyReviewRow);
-    storageCache.editorialReviews = (await pgPool.query("select * from editorial_reviews order by created_at desc limit 1200")).rows.map(normalizeEditorialReviewRow);
-    storageCache.emotionTimelines = (await pgPool.query("select * from emotion_timeline order by created_at desc limit 1500")).rows.map(normalizeEmotionTimelineRow);
+    storageCache.storyDna = (await pgPool.query("select * from story_dna order by viral_score desc, engagement_score desc, created_at desc")).rows.map(normalizeStoryDnaRow);
+    storageCache.generatedStories = (await pgPool.query("select * from generated_stories order by created_at desc")).rows.map(normalizeGeneratedStoryRow);
+    storageCache.imageQueue = (await pgPool.query("select * from image_queue order by created_at desc")).rows.map(normalizeImageQueueRow);
+    storageCache.generatedImages = (await pgPool.query("select * from generated_images order by created_at desc")).rows.map(normalizeGeneratedImageRow);
+    storageCache.visualConcepts = (await pgPool.query("select * from visual_concepts order by created_at desc")).rows.map(normalizeVisualConceptRow);
+    storageCache.visualQualityReviews = (await pgPool.query("select * from visual_quality_reviews order by created_at desc")).rows.map(normalizeVisualQualityReviewRow);
+    storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc")).rows;
+    storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc")).rows.map(normalizePublishingPackageRow);
+    storageCache.prepublishPreviews = (await pgPool.query("select * from prepublish_previews order by created_at desc")).rows.map(normalizePrepublishPreviewRow);
+    storageCache.styleBrainProfiles = (await pgPool.query("select * from style_brain_profiles order by created_at desc")).rows.map(normalizeStyleBrainProfileRow);
+    storageCache.contentSafetyReviews = (await pgPool.query("select * from content_safety_reviews order by created_at desc")).rows.map(normalizeContentSafetyReviewRow);
+    storageCache.editorialReviews = (await pgPool.query("select * from editorial_reviews order by created_at desc")).rows.map(normalizeEditorialReviewRow);
+    storageCache.emotionTimelines = (await pgPool.query("select * from emotion_timeline order by created_at desc")).rows.map(normalizeEmotionTimelineRow);
+    storageCache.websiteEvents = (await pgPool.query("select * from website_events order by created_at desc")).rows;
+    storageCache.telegramUpdates = (await pgPool.query("select * from telegram_updates order by processed_at desc limit 500")).rows;
     const brain = (await pgPool.query("select * from project_brain where id = 'main'")).rows[0];
     if (brain) {
       storageCache.projectBrain = {
@@ -669,9 +741,12 @@ async function initializeStorage() {
     console.log("Storage: PostgreSQL mode.");
   } catch (error) {
     pgPool = null;
-    storageMode = "json";
+    storageMode = process.env.VERCEL ? "unavailable" : "json_local_fallback";
     storageLastError = error.message;
-    console.warn(`Storage: PostgreSQL unavailable, using JSON backup mode. ${error.message}`);
+    clearProductionRuntimeDataWhenStorageUnavailable();
+    console.warn(process.env.VERCEL
+      ? `Storage: PostgreSQL unavailable in production. ${error.message}`
+      : `Storage: PostgreSQL unavailable, using explicit local JSON fallback. ${error.message}`);
   }
 }
 
@@ -923,15 +998,31 @@ async function ensurePublishingPackagesTable() {
       draft_id text not null,
       image_prompt_id text,
       schedule_id text,
+      story_id text,
+      campaign_id text,
+      tracked_url text,
+      facebook_fragment text,
+      comment_text text,
+      fragment_metrics jsonb not null default '{}'::jsonb,
+      telegram_delivery jsonb not null default '{}'::jsonb,
       status text not null default 'review',
       publish_allowed boolean not null default false,
       approval_required boolean not null default true,
       created_at timestamptz not null default now(),
       approved_at timestamptz
     );
+    alter table publishing_packages add column if not exists story_id text;
+    alter table publishing_packages add column if not exists campaign_id text;
+    alter table publishing_packages add column if not exists tracked_url text;
+    alter table publishing_packages add column if not exists facebook_fragment text;
+    alter table publishing_packages add column if not exists comment_text text;
+    alter table publishing_packages add column if not exists fragment_metrics jsonb not null default '{}'::jsonb;
+    alter table publishing_packages add column if not exists telegram_delivery jsonb not null default '{}'::jsonb;
     create index if not exists publishing_packages_status_idx on publishing_packages (status);
     create index if not exists publishing_packages_created_at_idx on publishing_packages (created_at desc);
     create index if not exists publishing_packages_draft_idx on publishing_packages (draft_id);
+    create index if not exists publishing_packages_story_idx on publishing_packages (story_id);
+    create unique index if not exists publishing_packages_campaign_idx on publishing_packages (campaign_id) where campaign_id is not null and campaign_id <> '';
   `);
 }
 
@@ -948,6 +1039,11 @@ async function ensurePrepublishPreviewsTable() {
       visual_quality_review_id text,
       visual_quality_score integer not null default 0,
       visual_quality_recommendation text,
+      story_id text,
+      tracked_url text,
+      comment_text text,
+      facebook_fragment text,
+      fragment_metrics jsonb not null default '{}'::jsonb,
       scheduled_time timestamptz,
       safety_score integer not null default 0,
       editorial_score integer not null default 0,
@@ -962,11 +1058,55 @@ async function ensurePrepublishPreviewsTable() {
     alter table prepublish_previews add column if not exists visual_quality_review_id text;
     alter table prepublish_previews add column if not exists visual_quality_score integer not null default 0;
     alter table prepublish_previews add column if not exists visual_quality_recommendation text;
+    alter table prepublish_previews add column if not exists story_id text;
+    alter table prepublish_previews add column if not exists tracked_url text;
+    alter table prepublish_previews add column if not exists comment_text text;
+    alter table prepublish_previews add column if not exists facebook_fragment text;
+    alter table prepublish_previews add column if not exists fragment_metrics jsonb not null default '{}'::jsonb;
     create index if not exists prepublish_previews_package_idx on prepublish_previews (package_id);
     create index if not exists prepublish_previews_visual_concept_idx on prepublish_previews (visual_concept_id);
     create index if not exists prepublish_previews_visual_quality_idx on prepublish_previews (visual_quality_score desc);
     create index if not exists prepublish_previews_created_at_idx on prepublish_previews (created_at desc);
     create index if not exists prepublish_previews_readiness_idx on prepublish_previews (readiness_score desc);
+  `);
+}
+
+async function ensureWebsiteEventsTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists website_events (
+      id text primary key,
+      story_id text,
+      package_id text,
+      campaign_id text,
+      event_type text not null,
+      source text,
+      created_at timestamptz not null default now()
+    );
+    alter table stories add column if not exists source_draft_id text;
+    alter table stories add column if not exists package_id text;
+    alter table stories add column if not exists campaign_id text;
+    create index if not exists website_events_story_idx on website_events (story_id);
+    create index if not exists website_events_package_idx on website_events (package_id);
+    create index if not exists website_events_campaign_idx on website_events (campaign_id);
+    create index if not exists website_events_type_idx on website_events (event_type);
+    create index if not exists website_events_created_at_idx on website_events (created_at desc);
+    create index if not exists stories_source_draft_idx on stories (source_draft_id);
+  `);
+}
+
+async function ensureTelegramUpdatesTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists telegram_updates (
+      update_id bigint primary key,
+      event_type text,
+      status text not null default 'processing',
+      error_message text,
+      processed_at timestamptz not null default now()
+    );
+    create index if not exists telegram_updates_status_idx on telegram_updates (status);
+    create index if not exists telegram_updates_processed_at_idx on telegram_updates (processed_at desc);
   `);
 }
 
@@ -1103,8 +1243,9 @@ async function persistStories(stories) {
       await pgPool.query(
         `insert into stories (
           id, title, slug, short_code, category, image, facebook_text, website_text, comment_text,
-          status, views, clicks, ai_assistant_notes, seo_title, seo_description, created_at, updated_at
-        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+          status, views, clicks, ai_assistant_notes, seo_title, seo_description, source_draft_id,
+          package_id, campaign_id, created_at, updated_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
         on conflict (id) do update set
           title = excluded.title,
           slug = excluded.slug,
@@ -1120,6 +1261,9 @@ async function persistStories(stories) {
           ai_assistant_notes = excluded.ai_assistant_notes,
           seo_title = excluded.seo_title,
           seo_description = excluded.seo_description,
+          source_draft_id = excluded.source_draft_id,
+          package_id = excluded.package_id,
+          campaign_id = excluded.campaign_id,
           updated_at = excluded.updated_at`,
         [
           story.id,
@@ -1137,6 +1281,9 @@ async function persistStories(stories) {
           story.ai_assistant_notes || "",
           story.seo_title || "",
           story.seo_description || "",
+          story.source_draft_id || "",
+          story.package_id || "",
+          story.campaign_id || "",
           pgColumnDate(story.created_at),
           pgColumnDate(story.updated_at)
         ]
@@ -1461,13 +1608,12 @@ function normalizeGeneratedStoryRow(row = {}) {
   };
 }
 
-async function refreshGeneratedStoriesFromDatabase(limit = 300) {
+async function refreshGeneratedStoriesFromDatabase() {
   if (!pgPool) return readGeneratedStories();
   try {
     await ensureGeneratedStoriesTable();
     storageCache.generatedStories = (await pgPool.query(
-      "select * from generated_stories order by created_at desc limit $1",
-      [Math.max(1, Math.min(Number(limit || 300), 1000))]
+      "select * from generated_stories order by created_at desc"
     )).rows.map(normalizeGeneratedStoryRow);
   } catch (error) {
     console.warn(`PostgreSQL generated_stories refresh failed: ${error.message}`);
@@ -1749,13 +1895,21 @@ async function persistPublishingPackages(items) {
     for (const item of items) {
       await pgPool.query(
         `insert into publishing_packages (
-          id, draft_id, image_prompt_id, schedule_id, status, publish_allowed,
-          approval_required, created_at, approved_at
-        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          id, draft_id, image_prompt_id, schedule_id, story_id, campaign_id, tracked_url,
+          facebook_fragment, comment_text, fragment_metrics, telegram_delivery, status,
+          publish_allowed, approval_required, created_at, approved_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         on conflict (id) do update set
           draft_id = excluded.draft_id,
           image_prompt_id = excluded.image_prompt_id,
           schedule_id = excluded.schedule_id,
+          story_id = excluded.story_id,
+          campaign_id = excluded.campaign_id,
+          tracked_url = excluded.tracked_url,
+          facebook_fragment = excluded.facebook_fragment,
+          comment_text = excluded.comment_text,
+          fragment_metrics = excluded.fragment_metrics,
+          telegram_delivery = excluded.telegram_delivery,
           status = excluded.status,
           publish_allowed = excluded.publish_allowed,
           approval_required = excluded.approval_required,
@@ -1765,6 +1919,13 @@ async function persistPublishingPackages(items) {
           item.draft_id || "",
           item.image_prompt_id || "",
           item.schedule_id || "",
+          item.story_id || "",
+          item.campaign_id || "",
+          item.tracked_url || "",
+          item.facebook_fragment || "",
+          item.comment_text || "",
+          JSON.stringify(item.fragment_metrics || {}),
+          JSON.stringify(item.telegram_delivery || {}),
           item.status || "review",
           Boolean(item.publish_allowed),
           item.approval_required !== false,
@@ -1778,6 +1939,16 @@ async function persistPublishingPackages(items) {
   }
 }
 
+function normalizePublishingPackageRow(row = {}) {
+  return {
+    ...row,
+    fragment_metrics: row.fragment_metrics && typeof row.fragment_metrics === "object" ? row.fragment_metrics : {},
+    telegram_delivery: row.telegram_delivery && typeof row.telegram_delivery === "object" ? row.telegram_delivery : {},
+    approval_required: row.approval_required !== false,
+    publish_allowed: Boolean(row.publish_allowed)
+  };
+}
+
 function normalizePrepublishPreviewRow(row = {}) {
   return {
     ...row,
@@ -1785,6 +1956,7 @@ function normalizePrepublishPreviewRow(row = {}) {
     editorial_score: Number(row.editorial_score || 0),
     readiness_score: Number(row.readiness_score || 0),
     visual_quality_score: Number(row.visual_quality_score || 0),
+    fragment_metrics: row.fragment_metrics && typeof row.fragment_metrics === "object" ? row.fragment_metrics : {},
     risk_warnings_json: Array.isArray(row.risk_warnings_json) ? row.risk_warnings_json : [],
     checklist_json: Array.isArray(row.checklist_json) ? row.checklist_json : []
   };
@@ -1799,10 +1971,11 @@ async function persistPrepublishPreviews(items) {
         `insert into prepublish_previews (
           id, package_id, post_text, image_prompt_id, visual_concept_id, preferred_image_prompt,
           visual_quality_review_id, visual_quality_score, visual_quality_recommendation,
+          story_id, tracked_url, comment_text, facebook_fragment, fragment_metrics,
           scheduled_time, safety_score,
           editorial_score, readiness_score, expected_reaction, risk_warnings_json,
           checklist_json, created_at
-        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
         on conflict (id) do update set
           package_id = excluded.package_id,
           post_text = excluded.post_text,
@@ -1812,6 +1985,11 @@ async function persistPrepublishPreviews(items) {
           visual_quality_review_id = excluded.visual_quality_review_id,
           visual_quality_score = excluded.visual_quality_score,
           visual_quality_recommendation = excluded.visual_quality_recommendation,
+          story_id = excluded.story_id,
+          tracked_url = excluded.tracked_url,
+          comment_text = excluded.comment_text,
+          facebook_fragment = excluded.facebook_fragment,
+          fragment_metrics = excluded.fragment_metrics,
           scheduled_time = excluded.scheduled_time,
           safety_score = excluded.safety_score,
           editorial_score = excluded.editorial_score,
@@ -1829,6 +2007,11 @@ async function persistPrepublishPreviews(items) {
           item.visual_quality_review_id || "",
           Number(item.visual_quality_score || 0),
           item.visual_quality_recommendation || "",
+          item.story_id || "",
+          item.tracked_url || "",
+          item.comment_text || "",
+          item.facebook_fragment || item.post_text || "",
+          JSON.stringify(item.fragment_metrics || {}),
           item.scheduled_time || null,
           Number(item.safety_score || 0),
           Number(item.editorial_score || 0),
@@ -1842,6 +2025,60 @@ async function persistPrepublishPreviews(items) {
     }
   } catch (error) {
     console.warn(`PostgreSQL prepublish_previews persist failed: ${error.message}`);
+  }
+}
+
+async function persistWebsiteEvents(items) {
+  if (!pgPool) return;
+  try {
+    await ensureWebsiteEventsTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into website_events (
+          id, story_id, package_id, campaign_id, event_type, source, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7)
+        on conflict (id) do nothing`,
+        [
+          item.id || crypto.randomUUID(),
+          item.story_id || "",
+          item.package_id || "",
+          item.campaign_id || "",
+          item.event_type || "view",
+          item.source || "",
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL website_events persist failed: ${error.message}`);
+  }
+}
+
+async function persistTelegramUpdates(items) {
+  if (!pgPool) return;
+  try {
+    await ensureTelegramUpdatesTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into telegram_updates (
+          update_id, event_type, status, error_message, processed_at
+        ) values ($1,$2,$3,$4,$5)
+        on conflict (update_id) do update set
+          event_type = excluded.event_type,
+          status = excluded.status,
+          error_message = excluded.error_message,
+          processed_at = excluded.processed_at`,
+        [
+          Number(item.update_id),
+          item.event_type || "",
+          item.status || "processed",
+          item.error_message || "",
+          pgColumnDate(item.processed_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL telegram_updates persist failed: ${error.message}`);
   }
 }
 
@@ -2040,13 +2277,12 @@ async function persistEditorialReviews(items) {
   }
 }
 
-async function refreshEditorialReviewsFromDatabase(limit = 1200) {
+async function refreshEditorialReviewsFromDatabase() {
   if (!pgPool) return readEditorialReviews();
   try {
     await ensureEditorialReviewsTable();
     storageCache.editorialReviews = (await pgPool.query(
-      "select * from editorial_reviews order by created_at desc limit $1",
-      [Math.max(1, Math.min(Number(limit || 1200), 5000))]
+      "select * from editorial_reviews order by created_at desc"
     )).rows.map(normalizeEditorialReviewRow);
   } catch (error) {
     console.warn(`PostgreSQL editorial_reviews refresh failed: ${error.message}`);
@@ -2327,8 +2563,8 @@ function renderProductionStatus() {
       <section class="insight-card">
         <h2>System Status</h2>
         <div class="autopilot-status-grid">
-          <article><span>Database</span><strong>${pgPool ? "PostgreSQL" : "JSON backup mode"}</strong><p>${pgPool ? "DATABASE_URL активен." : "Для продакшена нужен DATABASE_URL."}</p></article>
-          <article><span>Facebook OAuth</span><strong>${fb.configured ? "ready" : "not ready"}</strong><p>${fb.configured ? "Meta OAuth и Page Token доступны." : `Missing: ${fb.missing.join(", ") || "OAuth connection"}`}</p></article>
+          <article><span>Database</span><strong>${escapeHtml(storageMode)}</strong><p>${pgPool ? "PostgreSQL is the production source of truth." : (process.env.VERCEL ? "Production storage is unavailable; JSON fallback is not used silently." : "Explicit local JSON fallback.")}</p></article>
+          <article><span>Facebook OAuth</span><strong>${fb.configured ? "ready" : "not ready"}</strong><p>${fb.configured ? `${escapeHtml(fb.object_type)}: ${escapeHtml(fb.page_name || fb.page_id)}` : `Missing: ${fb.missing.join(", ") || "OAuth connection"}`}</p></article>
           <article><span>Telegram Bot</span><strong>${tg.configured ? "ready" : "not ready"}</strong><p>${tg.configured ? "BOT_TOKEN и CHAT_ID заданы." : "Нужны BOT_TOKEN и CHAT_ID в environment variables."}</p></article>
           <article><span>Project Brain</span><strong>${brain.updated_at ? "active" : "needs refresh"}</strong><p>${brain.updated_at || "Нажмите Refresh Brain в AI Autopilot."}</p></article>
         </div>
@@ -2697,7 +2933,7 @@ function renderHome() {
     <footer class="footer">AI Story Traffic Platform MVP</footer>`);
 }
 
-function renderStory(req, story) {
+async function renderStory(req, story, options = {}) {
   const stories = readStories();
   const published = stories.filter((item) => item.status === "published" && item.id !== story.id);
   const related = published
@@ -2712,12 +2948,27 @@ function renderStory(req, story) {
     return index === midpoint ? `${adBlock("Внутри текста")}${html}` : html;
   }).join("");
 
-  story.views = Number(story.views || 0) + 1;
-  story.updated_at = new Date().toISOString();
-  writeStories(stories.map((item) => item.id === story.id ? story : item));
+  if (options.countView !== false) {
+    story.views = Number(story.views || 0) + 1;
+    story.updated_at = new Date().toISOString();
+    await writeStories(stories.map((item) => item.id === story.id ? story : item));
+    const requestUrl = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const campaignId = requestUrl.searchParams.get("campaign") || story.campaign_id || "";
+    const pkg = readPublishingPackages().find((item) =>
+      item.id === story.package_id || item.campaign_id === campaignId || item.story_id === story.id
+    );
+    await recordWebsiteEvent({
+      storyId: story.id,
+      packageId: pkg?.id || story.package_id || "",
+      campaignId,
+      eventType: "story_view",
+      source: requestUrl.searchParams.get("source") || "website"
+    });
+  }
 
   return layout(story.title, `${renderHeader()}
     <main class="reader">
+      ${options.preview ? `<p class="connect-alert"><strong>Preview only.</strong> This story is not published. Facebook publishing remains disabled.</p>` : ""}
       ${adBlock("Верх страницы")}
       <article class="story-page">
         <p class="kicker">${escapeHtml(story.category)}</p>
@@ -3042,8 +3293,252 @@ function groupStats(posts, keyFn) {
   })).sort((a, b) => b.avg_score - a.avg_score);
 }
 
+const facebookFragmentLengthBuckets = [
+  { name: "до 500 символов", min: 0, max: 499, target_min: 360, target_max: 500 },
+  { name: "500-800 символов", min: 500, max: 800, target_min: 560, target_max: 800 },
+  { name: "800-1200 символов", min: 801, max: 1200, target_min: 850, target_max: 1200 },
+  { name: "1200-1800 символов", min: 1201, max: 1800, target_min: 1250, target_max: 1750 },
+  { name: "1800+ символов", min: 1801, max: Number.POSITIVE_INFINITY, target_min: 1800, target_max: 2300 }
+];
+
+function facebookFragmentBucket(chars = 0) {
+  const value = Number(chars || 0);
+  return facebookFragmentLengthBuckets.find((item) => value >= item.min && value <= item.max)
+    || facebookFragmentLengthBuckets[facebookFragmentLengthBuckets.length - 1];
+}
+
+function textWordCount(text = "") {
+  return String(text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+function textParagraphCount(text = "") {
+  return Math.max(1, String(text || "").split(/\n+/).map((item) => item.trim()).filter(Boolean).length);
+}
+
+function medianNumber(values = [], fallback = 0) {
+  const sorted = values.map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!sorted.length) return fallback;
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+}
+
+function buildFacebookFragmentRecommendation(posts = readFacebookPosts()) {
+  const continuationClicks = readWebsiteEvents().filter((item) => item.event_type === "continuation_click");
+  const clicksByPackage = continuationClicks.reduce((map, item) => {
+    const key = item.package_id || "";
+    if (key) map.set(key, (map.get(key) || 0) + 1);
+    return map;
+  }, new Map());
+  const trackedRows = readPublishingPackages()
+    .filter((pkg) => clicksByPackage.has(pkg.id) && Number(pkg.fragment_metrics?.characters || 0) > 0)
+    .map((pkg) => ({
+      package_id: pkg.id,
+      chars: Number(pkg.fragment_metrics.characters || 0),
+      words: Number(pkg.fragment_metrics.words || 0),
+      paragraphs: Number(pkg.fragment_metrics.paragraphs || 0),
+      bucket: facebookFragmentBucket(pkg.fragment_metrics.characters).name,
+      clicks: Number(clicksByPackage.get(pkg.id) || 0)
+    }));
+  const rows = posts
+    .filter((post) => String(post.message || "").trim())
+    .map((post) => {
+      const text = String(post.message || "");
+      const chars = Number(post.text_length || text.length);
+      return {
+        ...post,
+        chars,
+        words: textWordCount(text),
+        paragraphs: Number(post.paragraphs_count || textParagraphCount(text)),
+        bucket: facebookFragmentBucket(chars).name,
+        score: Number(post.total_score || 0),
+        clicks: Number(post.link_clicks_count || 0)
+      };
+    });
+  const postsWithClicks = rows.filter((item) => item.clicks > 0).length;
+  const clickCoverage = rows.length ? postsWithClicks / rows.length : 0;
+  const evidenceMode = trackedRows.length >= 3
+    ? "website_continuation_clicks"
+    : (postsWithClicks >= 5 ? "meta_link_clicks" : "engagement_proxy");
+  const groups = facebookFragmentLengthBuckets.map((bucket) => {
+    const items = rows.filter((item) => item.bucket === bucket.name);
+    const trackedItems = trackedRows.filter((item) => item.bucket === bucket.name);
+    const avg = (key) => items.length
+      ? Math.round(items.reduce((sum, item) => sum + Number(item[key] || 0), 0) / items.length)
+      : 0;
+    const trackedAvg = (key) => trackedItems.length
+      ? Math.round(trackedItems.reduce((sum, item) => sum + Number(item[key] || 0), 0) / trackedItems.length)
+      : 0;
+    const avgScore = avg("score");
+    const avgClicks = avg("clicks");
+    const avgTrackedClicks = trackedAvg("clicks");
+    return {
+      name: bucket.name,
+      posts_count: items.length,
+      tracked_packages_count: trackedItems.length,
+      avg_score: avgScore,
+      avg_clicks: avgClicks,
+      avg_tracked_continuation_clicks: avgTrackedClicks,
+      avg_comments: items.length ? Math.round(items.reduce((sum, item) => sum + Number(item.comments_count || 0), 0) / items.length) : 0,
+      avg_shares: items.length ? Math.round(items.reduce((sum, item) => sum + Number(item.shares_count || 0), 0) / items.length) : 0,
+      median_words: medianNumber(
+        trackedItems.length ? trackedItems.map((item) => item.words) : items.map((item) => item.words)
+      ),
+      median_paragraphs: medianNumber(
+        trackedItems.length ? trackedItems.map((item) => item.paragraphs) : items.map((item) => item.paragraphs),
+        1
+      ),
+      target_min: bucket.target_min,
+      target_max: bucket.target_max,
+      ranking_score: evidenceMode === "website_continuation_clicks"
+        ? avgTrackedClicks * 10 + avgScore
+        : evidenceMode === "meta_link_clicks"
+          ? avgClicks * 5 + avgScore
+          : avgScore
+    };
+  }).filter((item) => item.posts_count || item.tracked_packages_count);
+  groups.sort((a, b) => b.ranking_score - a.ranking_score || (b.posts_count + b.tracked_packages_count) - (a.posts_count + a.tracked_packages_count));
+  const best = groups[0] || {
+    name: "800-1200 символов",
+    posts_count: 0,
+    avg_score: 0,
+    avg_clicks: 0,
+    median_words: 150,
+    median_paragraphs: 5,
+    target_min: 800,
+    target_max: 1200
+  };
+  const volumeScore = Math.min(45, Math.round((rows.length / 100) * 45));
+  const coverageScore = evidenceMode === "website_continuation_clicks"
+    ? Math.min(35, trackedRows.length * 5)
+    : evidenceMode === "meta_link_clicks"
+      ? Math.min(35, Math.round(clickCoverage * 100))
+      : 10;
+  const sampleScore = Math.min(20, (best.posts_count + Number(best.tracked_packages_count || 0)) * 2);
+  const rawConfidence = Math.min(100, volumeScore + coverageScore + sampleScore);
+  const confidence = evidenceMode === "engagement_proxy" ? Math.min(60, rawConfidence) : rawConfidence;
+  return {
+    status: rows.length || trackedRows.length ? "available" : "insufficient_data",
+    evidence_mode: evidenceMode,
+    source: trackedRows.length >= 3 ? "own_tracked_website_events" : (rows.length ? "own_facebook_posts" : "fallback_hypothesis"),
+    posts_analyzed: rows.length,
+    posts_with_link_clicks: postsWithClicks,
+    tracked_packages_analyzed: trackedRows.length,
+    tracked_continuation_clicks: continuationClicks.length,
+    click_data_coverage_percent: Math.round(clickCoverage * 100),
+    confidence_score: rows.length ? confidence : 10,
+    confidence_level: confidence >= 75 ? "high" : confidence >= 45 ? "medium" : "low",
+    recommended_length_bucket: best.name,
+    target_characters: { min: best.target_min, max: best.target_max },
+    target_words: best.median_words || Math.round(((best.target_min + best.target_max) / 2) / 6.2),
+    target_paragraphs: Math.max(3, best.median_paragraphs || 5),
+    recommended_story_share_percent: null,
+    story_share_status: "unknown_until_full_story_and_facebook_fragment_are_linked",
+    recommended_break_point: "after the first concrete conflict and before the answer, confession or main twist",
+    length_groups: groups,
+    note: evidenceMode === "website_continuation_clicks"
+      ? "Recommendation prioritizes tracked continuation clicks linked to publishing packages."
+      : evidenceMode === "meta_link_clicks"
+        ? "Recommendation uses available Meta link-click signals from the connected Page."
+        : "Meta and website click data are insufficient. Length is ranked by engagement only, so confidence is capped at 60%."
+  };
+}
+
+function sentenceChunks(text = "") {
+  return String(text || "")
+    .split(/(?<=[.!?])\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function buildFacebookFragment(draft = {}, recommendation = buildFacebookFragmentRecommendation()) {
+  const target = recommendation.target_characters || { min: 800, max: 1200 };
+  const hook = stripLinks(draft.hook || draft.title || "").trim();
+  const story = stripLinks(draft.full_story || draft.moral || "").trim();
+  const paragraphs = story.split(/\n+/).map((item) => item.trim()).filter(Boolean);
+  const selected = hook ? [hook] : [];
+  for (const paragraph of paragraphs) {
+    if (hook && paragraph.toLowerCase().startsWith(hook.toLowerCase().slice(0, 80))) continue;
+    const candidate = [...selected, paragraph].join("\n\n");
+    if (candidate.length <= target.max) {
+      selected.push(paragraph);
+      if (candidate.length >= target.min && selected.length >= 3) break;
+      continue;
+    }
+    for (const sentence of sentenceChunks(paragraph)) {
+      const sentenceCandidate = [...selected, sentence].join("\n\n");
+      if (sentenceCandidate.length > target.max && selected.join("\n\n").length >= target.min) break;
+      selected.push(sentence);
+      if (sentenceCandidate.length >= target.min) break;
+    }
+    break;
+  }
+  let fragment = selected.join("\n\n").trim();
+  if (!fragment) fragment = hook || shortText(story, target.max);
+  if (fragment.length > target.max) {
+    const safeCut = fragment.slice(0, target.max);
+    const sentenceEnd = Math.max(safeCut.lastIndexOf("."), safeCut.lastIndexOf("!"), safeCut.lastIndexOf("?"));
+    fragment = (sentenceEnd >= Math.round(target.min * 0.7) ? safeCut.slice(0, sentenceEnd + 1) : safeCut).trim();
+  }
+  if (story && fragment.length < story.length && !/[.…!?]$/.test(fragment)) fragment += "…";
+  const fullCharacters = story.length;
+  return {
+    text: fragment,
+    metrics: {
+      characters: fragment.length,
+      words: textWordCount(fragment),
+      paragraphs: textParagraphCount(fragment),
+      full_story_characters: fullCharacters,
+      story_share_percent: fullCharacters ? Math.min(100, Math.round((fragment.length / fullCharacters) * 100)) : 0,
+      recommended_characters: target,
+      recommendation_confidence: recommendation.confidence_score,
+      recommendation_evidence: recommendation.evidence_mode,
+      break_point: recommendation.recommended_break_point,
+      link_in_post: false
+    }
+  };
+}
+
+function packageTrackingSummary(pkg = {}) {
+  const events = readWebsiteEvents().filter((item) =>
+    (pkg.id && item.package_id === pkg.id)
+    || (pkg.campaign_id && item.campaign_id === pkg.campaign_id)
+  );
+  const clicks = events.filter((item) => item.event_type === "continuation_click").length;
+  const views = events.filter((item) => item.event_type === "story_view").length;
+  return {
+    continuation_clicks: clicks,
+    story_views: views,
+    continuation_view_rate: clicks ? Math.round((views / clicks) * 100) : 0,
+    events_count: events.length
+  };
+}
+
+async function recordWebsiteEvent({ storyId = "", packageId = "", campaignId = "", eventType, source = "" }) {
+  if (!eventType) return null;
+  const event = {
+    id: crypto.randomUUID(),
+    story_id: storyId,
+    package_id: packageId,
+    campaign_id: campaignId,
+    event_type: eventType,
+    source,
+    created_at: new Date().toISOString()
+  };
+  storageCache.websiteEvents = [event, ...readWebsiteEvents()].slice(0, 10000);
+  writeJsonBackup(WEBSITE_EVENTS_FILE, storageCache.websiteEvents);
+  await persistWebsiteEvents([event]);
+  if (eventType === "continuation_click") {
+    const clickCount = storageCache.websiteEvents.filter((item) => item.event_type === "continuation_click").length;
+    if (clickCount % 10 === 1) {
+      await autoSyncProjectBrainV2({ sources: ["website"], reason: "website_continuation_metrics_updated" });
+    }
+  }
+  return event;
+}
+
 function realDataSources() {
   const stories = readStories();
+  const websiteEvents = readWebsiteEvents();
   const facebookPosts = readFacebookPosts();
   const competitors = readCompetitors();
   const facebook = facebookConfigStatus();
@@ -3066,18 +3561,25 @@ function realDataSources() {
     },
     website: {
       label: "Website Analytics",
-      status: hasStories ? "local_only" : "empty",
-      is_real: hasStories,
-      message: hasStories ? "Есть локальные истории и счётчики сайта." : "Истории ещё не созданы.",
+      status: storageMode === "postgres"
+        ? (websiteEvents.length ? "real_tracked_events" : "connected_empty")
+        : (hasStories ? "local_json_fallback" : "empty"),
+      is_real: storageMode === "postgres" && websiteEvents.length > 0,
+      message: storageMode === "postgres"
+        ? (websiteEvents.length ? "Website events сохраняются в PostgreSQL." : "Website tracking готов, но реальных событий пока нет.")
+        : (hasStories ? "Доступны только локальные JSON-счётчики." : "Истории ещё не созданы."),
       stories_count: stories.length,
+      events_count: websiteEvents.length,
+      continuation_clicks: websiteEvents.filter((item) => item.event_type === "continuation_click").length,
+      story_views: websiteEvents.filter((item) => item.event_type === "story_view").length,
       views: stories.reduce((sum, story) => sum + Number(story.views || 0), 0),
       clicks: stories.reduce((sum, story) => sum + Number(story.clicks || 0), 0)
     },
     competitors: {
       label: "Competitor Data",
-      status: hasCompetitors ? "manual_sample" : "empty",
+      status: hasCompetitors ? "manual_public_sources" : "empty",
       is_real: false,
-      message: hasCompetitors ? "Есть ручные/демо данные конкурентов. Live-анализ ещё не подключён." : "Конкуренты ещё не добавлены.",
+      message: hasCompetitors ? "Есть вручную добавленные публичные источники; чужой CTR не заявляется." : "Конкуренты ещё не добавлены.",
       competitors_count: competitors.length
     },
     project_brain: {
@@ -3106,7 +3608,7 @@ function realDataSources() {
   if (!sources.telegram.is_real) warnings.push("Telegram Center не подключён: ежедневные отчёты не отправляются.");
   if (storageMode !== "postgres") warnings.push("PostgreSQL не подключён: сейчас используется локальный JSON backup mode.");
   return {
-    mode: sources.facebook.is_real ? "real" : (hasStories || hasCompetitors ? "mixed_local_demo" : "demo"),
+    mode: sources.facebook.is_real ? "real" : (hasStories || hasCompetitors ? "mixed_verified_and_unmeasured" : "no_real_data"),
     notice: sources.facebook.is_real
       ? "Используются реальные Facebook-данные."
       : "Нет реальных Facebook-данных. Используются демо-данные и локальные данные проекта.",
@@ -3174,6 +3676,10 @@ function buildRealDataLayer() {
       stories: stories.length,
       facebook_posts: facebookPosts.length,
       competitors: competitors.length,
+      website_events: readWebsiteEvents().length,
+      story_dna: readStoryDna().length,
+      scheduled_posts: readScheduledPosts().length,
+      publishing_packages: readPublishingPackages().length,
       recommendations: recommendations.length
     },
     entities: {
@@ -3991,8 +4497,12 @@ function storyDnaFromFacebookPost(post = {}, maxScore = 0) {
         likes_count: Number(post.likes_count || 0),
         comments_count: Number(post.comments_count || 0),
         shares_count: Number(post.shares_count || 0),
+        reach_count: Number(post.reach_count || 0),
         link_clicks_count: Number(post.link_clicks_count || 0),
-        total_score: score
+        total_score: score,
+        text_characters: Number(post.text_length || text.length),
+        text_words: textWordCount(text),
+        paragraphs_count: Number(post.paragraphs_count || textParagraphCount(text))
       }
     },
     created_at: post.published_at || post.created_at || new Date().toISOString()
@@ -4250,8 +4760,7 @@ function mergeStyleBrainProfiles(existing = [], incoming = []) {
   }
   return [...byReference.values()]
     .sort((a, b) => Number(b.human_realism_score || 0) + Number(b.hook_strength || 0) - Number(b.boring_risk || 0)
-      - (Number(a.human_realism_score || 0) + Number(a.hook_strength || 0) - Number(a.boring_risk || 0)))
-    .slice(0, 1500);
+      - (Number(a.human_realism_score || 0) + Number(a.hook_strength || 0) - Number(a.boring_risk || 0)));
 }
 
 function buildStyleBrainSourceProfiles() {
@@ -4642,8 +5151,7 @@ function mergeEmotionTimelines(existing = [], incoming = []) {
     });
   }
   return [...byReference.values()]
-    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-    .slice(0, 2000);
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 }
 
 async function learnEmotionTimelineFromGeneratedStory(story = {}) {
@@ -5027,7 +5535,7 @@ function contentSafetyRecommendation({ safetyScore, originalityScore, facebookRi
 }
 
 async function saveContentSafetyReview(review) {
-  const next = [review, ...readContentSafetyReviews()].slice(0, 1200);
+  const next = [review, ...readContentSafetyReviews()];
   await writeContentSafetyReviews(next);
   return review;
 }
@@ -5284,7 +5792,7 @@ function editorialReviewByNumber(numberText = "1") {
 }
 
 async function saveEditorialReview(review) {
-  const next = [review, ...readEditorialReviews()].slice(0, 1200);
+  const next = [review, ...readEditorialReviews()];
   await writeEditorialReviews(next);
   return review;
 }
@@ -5554,7 +6062,7 @@ async function generatedStoryById(id = "") {
     const row = (await pgPool.query("select * from generated_stories where id = $1 limit 1", [id])).rows[0];
     if (!row) return null;
     const story = normalizeGeneratedStoryRow(row);
-    storageCache.generatedStories = [story, ...readGeneratedStories().filter((item) => item.id !== story.id)].slice(0, 300);
+    storageCache.generatedStories = [story, ...readGeneratedStories().filter((item) => item.id !== story.id)];
     return story;
   } catch (error) {
     console.warn(`PostgreSQL generated story lookup failed: ${error.message}`);
@@ -5591,8 +6099,7 @@ async function editorialRevisionChainAsync(ref = "1") {
         const byId = new Map(readGeneratedStories().map((item) => [item.id, item]));
         rows.forEach((item) => byId.set(item.id, item));
         storageCache.generatedStories = [...byId.values()]
-          .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-          .slice(0, 300);
+          .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
         return rows;
       }
     } catch (error) {
@@ -5921,7 +6428,7 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
     created_at: now,
     updated_at: now
   };
-  await writeGeneratedStories([improvedDraft, ...readGeneratedStories()].slice(0, 300));
+  await writeGeneratedStories([improvedDraft, ...readGeneratedStories()]);
   await autoSyncProjectBrainV2({ sources: ["generated"], reason: "editorial_rewrite_created" });
   const styleProfile = await learnStyleBrainFromGeneratedStory(improvedDraft);
   const emotionTimeline = await learnEmotionTimelineFromGeneratedStory(improvedDraft);
@@ -6278,8 +6785,7 @@ function mergeStoryDna(existing = [], incoming = []) {
     });
   }
   return [...byReference.values()]
-    .sort((a, b) => Number(b.viral_score || 0) - Number(a.viral_score || 0) || new Date(b.created_at || 0) - new Date(a.created_at || 0))
-    .slice(0, 1500);
+    .sort((a, b) => Number(b.viral_score || 0) - Number(a.viral_score || 0) || new Date(b.created_at || 0) - new Date(a.created_at || 0));
 }
 
 function weightedDnaStats(items = [], key) {
@@ -6288,9 +6794,11 @@ function weightedDnaStats(items = [], key) {
     const name = item[key] || "unknown";
     const current = groups.get(name) || { name, count: 0, total_score: 0, viral_score: 0, engagement_score: 0 };
     current.count += 1;
-    current.total_score += Number(item.viral_score || 0) + Number(item.engagement_score || 0);
-    current.viral_score += Number(item.viral_score || 0);
-    current.engagement_score += Number(item.engagement_score || 0);
+    const viralScore = Math.max(0, Math.min(100, Number(item.viral_score || 0)));
+    const engagementScore = Math.max(0, Math.min(100, Number(item.engagement_score || 0)));
+    current.total_score += viralScore + engagementScore;
+    current.viral_score += viralScore;
+    current.engagement_score += engagementScore;
     groups.set(name, current);
   }
   return [...groups.values()]
@@ -6325,11 +6833,20 @@ function buildStoryDnaStatistics(items = readStoryDna()) {
     structure_key: storyDnaStructureName(item)
   })), "structure_key").slice(0, 8);
   const averageOriginality = safeItems.length ? Math.round(safeItems.reduce((sum, item) => sum + Number(item.originality_score || 0), 0) / safeItems.length) : 0;
+  const facebookItems = safeItems.filter((item) => item.source_type === "facebook");
+  const measuredFacebookItems = facebookItems.filter((item) => {
+    const metrics = item.structure_analysis?.source_metrics || {};
+    return ["likes_count", "comments_count", "shares_count", "link_clicks_count", "total_score"]
+      .some((key) => Number(metrics[key] || 0) > 0);
+  });
+  const websiteSignalCount = readWebsiteEvents().length;
+  const sourceTypesCount = new Set(safeItems.map((item) => item.source_type).filter(Boolean)).size;
   const confidenceScore = Math.min(100, Math.round(
-    Math.min(safeItems.length, 100) * 0.55 +
-    Math.min(topHooks.length * 4, 20) +
-    Math.min(trendingTopics.length * 3, 15) +
-    (averageOriginality >= 90 ? 10 : 0)
+    Math.min(20, safeItems.length / 10) +
+    Math.min(40, facebookItems.length * 0.4) +
+    Math.min(20, measuredFacebookItems.length * 0.4) +
+    Math.min(15, websiteSignalCount * 0.5) +
+    Math.min(5, sourceTypesCount)
   ));
   return {
     module: "Project Brain v2 Core",
@@ -6342,6 +6859,15 @@ function buildStoryDnaStatistics(items = readStoryDna()) {
     story_rhythm_analysis: rhythmAnalysis,
     most_successful_structures: successfulStructures,
     brain_confidence_score: confidenceScore,
+    confidence_evidence: {
+      facebook_dna_count: facebookItems.length,
+      measured_facebook_dna_count: measuredFacebookItems.length,
+      website_events_count: websiteSignalCount,
+      source_types_count: sourceTypesCount,
+      note: websiteSignalCount
+        ? "Confidence includes own Facebook performance and tracked website events."
+        : "Website conversion data is not available yet, so confidence is limited to content and engagement signals."
+    },
     brain_memory: {
       worked: successfulStructures.slice(0, 5).map((item) => item.name),
       failed: safeItems.filter((item) => Number(item.viral_score || 0) < 35).slice(0, 5).map(storyDnaStructureName),
@@ -6473,22 +6999,29 @@ async function importGeneratedStoriesToStoryDna(options = {}) {
 
 function lowestUsefulDnaStats(items = [], key) {
   return weightedDnaStats(items, key)
-    .filter((item) => item.count >= 1 && Number(item.avg_score || 0) < 35 && item.name !== "unknown")
+    .filter((item) => item.count >= 3 && Number(item.avg_score || 0) < 35 && item.name !== "unknown")
     .sort((a, b) => a.avg_score - b.avg_score || b.count - a.count)
     .slice(0, 6);
 }
 
 function buildProjectBrainV2Recommendations() {
   const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
+  const facebookEvidence = dnaItems.filter((item) => item.source_type === "facebook");
+  const researchEvidence = dnaItems.filter((item) => item.source_type !== "generated");
+  const recommendationItems = facebookEvidence.length >= 10
+    ? facebookEvidence
+    : (researchEvidence.length ? researchEvidence : dnaItems);
   const stats = buildStoryDnaStatistics(dnaItems);
-  const lengthStats = weightedDnaStats(dnaItems, "story_length").slice(0, 6);
-  const avoidTopics = lowestUsefulDnaStats(dnaItems, "main_theme");
-  const bestEmotion = stats.top_emotions[0]?.name || "hope";
-  const bestHook = stats.top_hooks[0]?.name || "hidden truth hook";
+  const recommendationStats = buildStoryDnaStatistics(recommendationItems);
+  const lengthStats = weightedDnaStats(recommendationItems, "story_length").slice(0, 6);
+  const avoidTopics = lowestUsefulDnaStats(facebookEvidence.length >= 10 ? facebookEvidence : [], "main_theme");
+  const bestEmotion = recommendationStats.top_emotions[0]?.name || "hope";
+  const bestHook = recommendationStats.top_hooks[0]?.name || "hidden truth hook";
   const bestLength = lengthStats[0]?.name || "medium";
-  const bestConflict = stats.top_conflicts[0]?.name || "family moral conflict";
-  const bestEnding = stats.top_endings[0]?.name || "moral emotional ending";
-  const bestTopic = stats.trending_topics[0]?.name || "family conflict";
+  const bestConflict = recommendationStats.top_conflicts[0]?.name || "family moral conflict";
+  const bestEnding = recommendationStats.top_endings[0]?.name || "moral emotional ending";
+  const bestTopic = recommendationStats.trending_topics[0]?.name || "family conflict";
+  const fragmentRecommendation = buildFacebookFragmentRecommendation();
   const suggested = {
     theme: bestTopic,
     emotion: bestEmotion,
@@ -6503,13 +7036,15 @@ function buildProjectBrainV2Recommendations() {
     module: "Project Brain v2 Recommendations",
     dna_count: stats.story_dna_count,
     confidence_score: stats.brain_confidence_score,
-    best_emotions: stats.top_emotions.slice(0, 5),
-    best_hook_types: stats.top_hooks.slice(0, 5),
+    evidence_source: facebookEvidence.length >= 10 ? "own_facebook_posts" : (researchEvidence.length ? "public_research_patterns" : "generated_hypotheses"),
+    best_emotions: recommendationStats.top_emotions.slice(0, 5),
+    best_hook_types: recommendationStats.top_hooks.slice(0, 5),
     best_story_length: lengthStats[0] || null,
+    facebook_fragment: fragmentRecommendation,
     avoid_topics: avoidTopics,
     suggested_next_story_type: suggested,
     reason_why: stats.story_dna_count
-      ? `Based on ${stats.story_dna_count} Story DNA patterns. Strongest signals: emotion "${bestEmotion}", hook "${bestHook}", conflict "${bestConflict}", length "${bestLength}".`
+      ? `Based on ${stats.story_dna_count} Story DNA patterns; decision signals come from ${facebookEvidence.length >= 10 ? `${facebookEvidence.length} own Facebook posts` : "available public research patterns"}. Strongest signals: emotion "${bestEmotion}", hook "${bestHook}", conflict "${bestConflict}", length "${bestLength}".`
       : "Not enough Story DNA yet. Import Facebook posts, generated stories, or run Internet Research first.",
     safety: {
       stores_full_copyrighted_text: false,
@@ -7298,8 +7833,7 @@ async function runInternetStoryResearch(payload = {}) {
     byUrl.set(key, { ...(byUrl.get(key) || {}), ...story, updated_at: new Date().toISOString() });
   }
   const stories = [...byUrl.values()]
-    .sort((a, b) => Number(b.viral_score || 0) - Number(a.viral_score || 0) || Number(b.similarity_score || 0) - Number(a.similarity_score || 0))
-    .slice(0, 500);
+    .sort((a, b) => Number(b.viral_score || 0) - Number(a.viral_score || 0) || Number(b.similarity_score || 0) - Number(a.similarity_score || 0));
   await writeResearchStories(stories);
   const items = stories.map((story) => ({
     id: story.id,
@@ -8375,7 +8909,7 @@ async function createImagePromptsForGeneratedDraft(ref = "1") {
     generated_image_url: "",
     visual_analysis: signals
   }));
-  const next = [...created, ...readImageQueue()].slice(0, 200);
+  const next = [...created, ...readImageQueue()];
   await writeImageQueue(next);
   return {
     ok: true,
@@ -8664,7 +9198,7 @@ async function createVisualConceptsForRef(ref = "1") {
   }
   const director = visualImageDirector(target.draft, target.package);
   const concepts = visualCriticRankConcepts(buildVisualConceptsFromDirector(director), director);
-  const next = [...concepts, ...readVisualConcepts()].slice(0, 500);
+  const next = [...concepts, ...readVisualConcepts()];
   await writeVisualConcepts(next);
   return {
     ok: true,
@@ -8871,7 +9405,7 @@ function visualQualityCheckConcept(ref = "1") {
 async function createVisualQualityReview(ref = "1") {
   const result = visualQualityCheckConcept(ref);
   if (!result.ok) return result;
-  const next = [result.review, ...readVisualQualityReviews()].slice(0, 500);
+  const next = [result.review, ...readVisualQualityReviews()];
   await writeVisualQualityReviews(next);
   return {
     ...result,
@@ -8899,10 +9433,12 @@ function buildVisualQualityDashboardData() {
 }
 
 function imageGenerationConfigStatus() {
+  const enabled = process.env.ENABLE_OPENAI_IMAGES === "true";
   return {
-    configured: Boolean(process.env.OPENAI_API_KEY),
+    configured: enabled && Boolean(process.env.OPENAI_API_KEY),
+    enabled,
     has_openai_api_key: Boolean(process.env.OPENAI_API_KEY),
-    provider: process.env.OPENAI_API_KEY ? "OpenAI Images" : "",
+    provider: enabled && process.env.OPENAI_API_KEY ? "OpenAI Images" : "",
     model: process.env.OPENAI_IMAGE_MODEL || "gpt-image-1",
     size: process.env.OPENAI_IMAGE_SIZE || "1536x1024",
     output_format: process.env.OPENAI_IMAGE_FORMAT || "jpeg",
@@ -9021,11 +9557,13 @@ async function generateImageV3(ref = "1") {
     return {
       ok: false,
       module: "Image Generator v3",
-      code: "image_generation_config_missing",
-      message: "OPENAI_API_KEY is not configured. Add it to Vercel/local environment variables to generate real images.",
+      code: config.enabled ? "image_generation_config_missing" : "image_generation_disabled",
+      message: config.enabled
+        ? "OPENAI_API_KEY is not configured."
+        : "Real image generation is disabled for MVP RC-1. Use approved prompts and upload an image manually.",
       provider: "",
       status: "failed",
-      has_openai_api_key: false,
+      has_openai_api_key: config.has_openai_api_key,
       safety: { facebook_posting_enabled: false, autopublishing: false, tokens_exposed: false }
     };
   }
@@ -9068,7 +9606,7 @@ async function generateImageV3(ref = "1") {
     quality_score: generation.ok ? generatedImageQualityScore(promptItem.prompt, generation.provider) : 0,
     created_at: new Date().toISOString()
   };
-  const next = [record, ...readGeneratedImages()].slice(0, 300);
+  const next = [record, ...readGeneratedImages()];
   await writeGeneratedImages(next);
   return {
     ok: generation.ok,
@@ -9244,7 +9782,7 @@ async function generateOriginalStoryV2(payload = {}) {
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
-  const saved = [story, ...readGeneratedStories()].slice(0, 200);
+  const saved = [story, ...readGeneratedStories()];
   await writeGeneratedStories(saved);
   await autoSyncProjectBrainV2({ sources: ["generated"], reason: "story_generated" });
   await learnStyleBrainFromGeneratedStory(story);
@@ -9376,7 +9914,7 @@ async function enqueueImagePromptsForIdeas() {
       updated_at: now
     });
   }
-  const next = [...created, ...queue].slice(0, 150);
+  const next = [...created, ...queue];
   await writeImageQueue(next);
   return {
     ok: true,
@@ -9574,8 +10112,7 @@ async function createSchedulerV2Plan(options = {}) {
     }
   }
   const next = [...readScheduledPosts(), ...created]
-    .sort((a, b) => new Date(a.scheduled_time || 0) - new Date(b.scheduled_time || 0))
-    .slice(0, 300);
+    .sort((a, b) => new Date(a.scheduled_time || 0) - new Date(b.scheduled_time || 0));
   await writeScheduledPosts(next);
   return {
     ok: true,
@@ -9658,8 +10195,7 @@ async function createScheduleForDraft(ref = "1", options = {}) {
     updated_at: new Date().toISOString()
   };
   const next = [...readScheduledPosts(), item]
-    .sort((a, b) => new Date(a.scheduled_time || 0) - new Date(b.scheduled_time || 0))
-    .slice(0, 300);
+    .sort((a, b) => new Date(a.scheduled_time || 0) - new Date(b.scheduled_time || 0));
   await writeScheduledPosts(next);
   return {
     ok: true,
@@ -9712,16 +10248,66 @@ function scheduleForDraft(draftId) {
   return scheduledQueueItems(200).find((item) => item.draft_id === draftId) || null;
 }
 
+function trackedStoryUrl(shortCodeValue, campaignId) {
+  const params = new URLSearchParams();
+  if (campaignId) params.set("campaign", campaignId);
+  params.set("source", "facebook_comment");
+  return `${PUBLIC_BASE_URL}/s/${encodeURIComponent(shortCodeValue)}?${params.toString()}`;
+}
+
+async function ensureWebsiteStoryForDraft(draft, { packageId, campaignId, facebookFragment, imagePrompt } = {}) {
+  const stories = readStories();
+  const existing = stories.find((item) => item.source_draft_id === draft.id);
+  const now = new Date().toISOString();
+  const id = existing?.id || crypto.randomUUID();
+  const code = existing?.short_code || shortCode();
+  const trackedUrl = trackedStoryUrl(code, campaignId || existing?.campaign_id || "");
+  const category = categories.includes(draft.category)
+    ? draft.category
+    : detectTopic(`${draft.category || ""} ${draft.title || ""} ${draft.full_story || ""}`);
+  const story = {
+    ...(existing || {}),
+    id,
+    title: draft.title || existing?.title || "Жизненная история",
+    slug: existing?.slug || uniqueSlug(draft.title || "life-story", stories, id),
+    short_code: code,
+    category,
+    image: imagePrompt?.generated_image_url || existing?.image || "/assets/default-story-cover.png",
+    facebook_text: facebookFragment || existing?.facebook_text || draft.hook || "",
+    website_text: draft.full_story || draft.moral || existing?.website_text || "",
+    comment_text: `Продолжение истории читайте здесь: ${trackedUrl}`,
+    status: existing?.status || "draft",
+    views: Number(existing?.views || 0),
+    clicks: Number(existing?.clicks || 0),
+    source_draft_id: draft.id,
+    package_id: packageId || existing?.package_id || "",
+    campaign_id: campaignId || existing?.campaign_id || "",
+    seo_title: existing?.seo_title || `${draft.title || "Жизненная история"} | Жизненные истории`,
+    seo_description: existing?.seo_description || buildSeoDescription(draft.full_story || draft.moral || ""),
+    ai_assistant_notes: existing?.ai_assistant_notes || "Created by Approval Pipeline for manual website review. Not published automatically.",
+    created_at: existing?.created_at || now,
+    updated_at: now
+  };
+  const next = existing
+    ? stories.map((item) => item.id === story.id ? story : item)
+    : [story, ...stories];
+  await writeStories(next);
+  return { story, tracked_url: trackedUrl };
+}
+
 function publishingPackageDetails(pkg) {
   if (!pkg) return null;
   const draft = readGeneratedStories().find((item) => item.id === pkg.draft_id) || null;
   const imagePrompt = readImageQueue().find((item) => item.id === pkg.image_prompt_id) || null;
   const schedule = readScheduledPosts().find((item) => item.id === pkg.schedule_id) || null;
+  const story = readStories().find((item) => item.id === pkg.story_id || item.source_draft_id === pkg.draft_id) || null;
   return {
     package: pkg,
     draft,
     image_prompt: imagePrompt,
     schedule,
+    story,
+    tracking: packageTrackingSummary(pkg),
     safety: {
       publish_allowed: false,
       approval_required: true,
@@ -9743,18 +10329,50 @@ async function createPublishingPackageFromDraft(ref = "1") {
   const imagePrompt = approvedImageForDraft(draft.id);
   const schedule = scheduleForDraft(draft.id);
   const now = new Date().toISOString();
+  const existingPackage = latestPublishingPackages(300).find((item) =>
+    item.draft_id === draft.id && item.status !== "rejected" && item.status !== "published"
+  );
+  const packageId = existingPackage?.id || crypto.randomUUID();
+  const campaignId = existingPackage?.campaign_id || `campaign_${crypto.randomBytes(9).toString("hex")}`;
+  const fragmentRecommendation = buildFacebookFragmentRecommendation();
+  const fragment = buildFacebookFragment(draft, fragmentRecommendation);
+  const website = await ensureWebsiteStoryForDraft(draft, {
+    packageId,
+    campaignId,
+    facebookFragment: fragment.text,
+    imagePrompt
+  });
   const pkg = {
-    id: crypto.randomUUID(),
+    ...(existingPackage || {}),
+    id: packageId,
     draft_id: draft.id,
     image_prompt_id: imagePrompt?.id || "",
     schedule_id: schedule?.id || "",
-    status: "review",
+    story_id: website.story.id,
+    campaign_id: campaignId,
+    tracked_url: website.tracked_url,
+    facebook_fragment: fragment.text,
+    comment_text: website.story.comment_text,
+    fragment_metrics: {
+      ...fragment.metrics,
+      recommendation: {
+        confidence_score: fragmentRecommendation.confidence_score,
+        confidence_level: fragmentRecommendation.confidence_level,
+        evidence_mode: fragmentRecommendation.evidence_mode,
+        posts_analyzed: fragmentRecommendation.posts_analyzed
+      }
+    },
+    telegram_delivery: existingPackage?.telegram_delivery || {},
+    status: existingPackage?.status || "review",
     publish_allowed: false,
     approval_required: true,
-    created_at: now,
-    approved_at: null
+    created_at: existingPackage?.created_at || now,
+    approved_at: existingPackage?.approved_at || null,
+    updated_at: now
   };
-  const next = [pkg, ...readPublishingPackages()].slice(0, 300);
+  const next = existingPackage
+    ? readPublishingPackages().map((item) => item.id === pkg.id ? pkg : item)
+    : [pkg, ...readPublishingPackages()];
   await writePublishingPackages(next);
   return {
     ok: true,
@@ -9763,6 +10381,7 @@ async function createPublishingPackageFromDraft(ref = "1") {
     details: publishingPackageDetails(pkg),
     editorial_review: editorialReview.review || null,
     warnings: [
+      ...(existingPackage ? ["Existing package was refreshed; no duplicate package was created."] : []),
       ...(!editorialReview.ok ? ["Editorial review was not created for this draft."] : []),
       ...(editorialReview.review?.publication_readiness === "needs_edit" ? ["Editorial Board recommends editing before final approval."] : []),
       ...(editorialReview.review?.publication_readiness === "reject" ? ["Editorial Board marks this draft as reject. Review it before packaging further."] : []),
@@ -9782,6 +10401,9 @@ async function updatePublishingPackageStatus(numberText, status) {
   if (!allowed.has(status)) return null;
   const pkg = publishingPackageByNumber(numberText) || readPublishingPackages().find((item) => item.id === numberText);
   if (!pkg) return null;
+  if (pkg.status === status && (status !== "approved" || latestContentSafetyReviewForPackage(pkg.id))) {
+    return { ...pkg, idempotent_replay: true };
+  }
   const now = new Date().toISOString();
   if (status === "approved") {
     const safetyResult = await checkContentSafetyPackage(pkg.id);
@@ -10050,6 +10672,8 @@ function prepublishRiskWarnings(readiness = {}, details = {}) {
   if (readiness.safety_review?.policy_risk && readiness.safety_review.policy_risk !== "low") warnings.push(`Policy risk is ${readiness.safety_review.policy_risk}.`);
   if (!details.image_prompt?.id) warnings.push("Approved image prompt reference is missing.");
   if (!details.schedule?.scheduled_time) warnings.push("Scheduled time is missing.");
+  if (!details.story?.id) warnings.push("Website story draft is missing.");
+  if (details.story?.id && details.story.status !== "published") warnings.push("Website story must be published manually before the Facebook fragment and first comment.");
   warnings.push("Simulation only: no Facebook post, no write permission, no autopublishing.");
   return [...new Set(warnings)].map((message) => ({ message }));
 }
@@ -10063,6 +10687,9 @@ function prepublishChecklist(readiness = {}, details = {}) {
     { item: "Approved image prompt attached", passed: Boolean(readiness.checks?.image_approved) },
     { item: "Schedule exists", passed: Boolean(readiness.checks?.schedule_exists) },
     { item: "Readiness score 100", passed: Number(readiness.readiness_score || 0) >= 100 },
+    { item: "Website story draft linked", passed: Boolean(details.story?.id) },
+    { item: "Tracked continuation link created", passed: Boolean(readiness.package?.tracked_url) },
+    { item: "Website story published manually before Facebook", passed: details.story?.status === "published" },
     { item: "publish_allowed remains false", passed: readiness.package?.publish_allowed === false },
     { item: "No Facebook write action", passed: true },
     { item: "Manual human approval still required", passed: true }
@@ -10090,16 +10717,24 @@ async function createPrepublishPreviewForPackage(ref = "1") {
   const schedule = details?.schedule || {};
   const selectedVisual = selectedVisualConceptForPackage(readiness.package_id, draft.id || "");
   const visualQuality = selectedVisual ? latestVisualQualityReviewForConcept(selectedVisual.id) : null;
+  const facebookFragment = readiness.package.facebook_fragment || prepublishFacebookPostText(draft);
+  const trackedUrl = readiness.package.tracked_url || "";
+  const commentText = readiness.package.comment_text || (trackedUrl ? `Продолжение истории читайте здесь: ${trackedUrl}` : "");
   const preview = {
     id: crypto.randomUUID(),
     package_id: readiness.package_id,
-    post_text: prepublishFacebookPostText(draft),
+    post_text: facebookFragment,
     image_prompt_id: imagePrompt.id || "",
     visual_concept_id: selectedVisual?.id || "",
     preferred_image_prompt: selectedVisual?.prompt || imagePrompt.prompt || "",
     visual_quality_review_id: visualQuality?.id || "",
     visual_quality_score: Number(visualQuality?.visual_quality_score || 0),
     visual_quality_recommendation: visualQuality?.recommendation || "",
+    story_id: readiness.package.story_id || details.story?.id || "",
+    tracked_url: trackedUrl,
+    comment_text: commentText,
+    facebook_fragment: facebookFragment,
+    fragment_metrics: readiness.package.fragment_metrics || {},
     scheduled_time: schedule.scheduled_time || readiness.details?.scheduled_time || null,
     safety_score: Number(readiness.safety_review?.safety_score || 0),
     editorial_score: Number(readiness.editorial?.final_editorial_score || 0),
@@ -10114,7 +10749,7 @@ async function createPrepublishPreviewForPackage(ref = "1") {
     checklist_json: prepublishChecklist(readiness, details),
     created_at: new Date().toISOString()
   };
-  const next = [preview, ...readPrepublishPreviews()].slice(0, 300);
+  const next = [preview, ...readPrepublishPreviews()];
   await writePrepublishPreviews(next);
   return {
     ok: true,
@@ -10125,7 +10760,10 @@ async function createPrepublishPreviewForPackage(ref = "1") {
       id: draft.id || "",
       title: draft.title || "",
       category: draft.category || "",
-      emotion: draft.emotion || ""
+      emotion: draft.emotion || "",
+      website_preview_url: readiness.package.id ? `${PUBLIC_BASE_URL}/story-preview/${encodeURIComponent(readiness.package.id)}` : "",
+      tracked_url: trackedUrl,
+      website_status: details.story?.status || "missing"
     },
     image_prompt: {
       id: imagePrompt.id || "",
@@ -10308,6 +10946,9 @@ function renderProjectBrainDashboard() {
           <article><span>Best emotion</span><strong>${escapeHtml(recommendations.suggested_next_story_type.emotion)}</strong><p>Use in the first 1-2 lines.</p></article>
           <article><span>Best hook</span><strong>${escapeHtml(recommendations.suggested_next_story_type.hook_type)}</strong><p>${escapeHtml(recommendations.suggested_next_story_type.format)}</p></article>
           <article><span>Best length</span><strong>${escapeHtml(recommendations.suggested_next_story_type.story_length)}</strong><p>${escapeHtml(recommendations.reason_why)}</p></article>
+          <article><span>Facebook fragment</span><strong>${escapeHtml(recommendations.facebook_fragment.recommended_length_bucket)}</strong><p>${Number(recommendations.facebook_fragment.target_words || 0)} words · ${Number(recommendations.facebook_fragment.target_paragraphs || 0)} paragraphs</p></article>
+          <article><span>Fragment confidence</span><strong>${Number(recommendations.facebook_fragment.confidence_score || 0)}%</strong><p>${escapeHtml(recommendations.facebook_fragment.evidence_mode)} · ${Number(recommendations.facebook_fragment.posts_analyzed || 0)} own posts</p></article>
+          <article><span>Break point</span><strong>${escapeHtml(recommendations.facebook_fragment.confidence_level)}</strong><p>${escapeHtml(recommendations.facebook_fragment.recommended_break_point)}</p></article>
         </div>
         <h3>Avoid topics</h3>
         ${recommendations.avoid_topics.length ? rowList(recommendations.avoid_topics, "No weak topics yet.") : `<p class="empty-table">No weak topics yet.</p>`}
@@ -11196,6 +11837,7 @@ function telegramConfigStatus() {
     configured,
     has_bot_token: Boolean(process.env.BOT_TOKEN),
     has_chat_id: Boolean(process.env.CHAT_ID),
+    has_webhook_secret: Boolean(process.env.TELEGRAM_WEBHOOK_SECRET),
     webhook_url: TELEGRAM_WEBHOOK_URL
   };
 }
@@ -11276,11 +11918,15 @@ async function setTelegramWebhook() {
     };
   }
   const commands = await registerTelegramCommands();
-  const result = safeTelegramApiResult(await telegramApi("setWebhook", {
+  const webhookPayload = {
     url: TELEGRAM_WEBHOOK_URL,
     allowed_updates: ["message", "callback_query"],
     drop_pending_updates: false
-  }));
+  };
+  if (process.env.TELEGRAM_WEBHOOK_SECRET) {
+    webhookPayload.secret_token = process.env.TELEGRAM_WEBHOOK_SECRET;
+  }
+  const result = safeTelegramApiResult(await telegramApi("setWebhook", webhookPayload));
   const info = await telegramWebhookInfo();
   return {
     ok: result.ok,
@@ -11791,7 +12437,7 @@ async function telegramStatus(chatId) {
   const tg = telegramConfigStatus();
   const realData = buildRealDataLayer();
   const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
-  return sendTelegramMessage(chatId, `🧠 <b>Статус системы</b>\n\nTelegram: ${tg.configured ? "подключён" : "не подключён"}\nFacebook: ${fb.configured ? "подключён" : "не подключён"}\nБаза данных: ${pgPool ? "PostgreSQL" : "JSON backup mode"}\nProject Brain: ${brain.updated_at ? "активен" : "нужно обновить"}\n\n${escapeHtml(realData.notice)}\n\nСледующие действия:\n/поиск измена — найти идеи\n/создать измена 3 — создать черновики\n/пакеты — проверить пакеты\n\n${telegramSafetyFooter()}`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `🧠 <b>Статус системы</b>\n\nTelegram: ${tg.configured ? "подключён" : "не подключён"}\nFacebook: ${fb.configured ? "подключён" : "не подключён"}\nБаза данных: ${escapeHtml(storageMode)}\nProject Brain: ${brain.updated_at ? "активен" : "нужно обновить"}\n\n${escapeHtml(realData.notice)}\n\nСледующие действия:\n/поиск измена — найти идеи\n/создать измена 3 — создать черновики\n/пакеты — проверить пакеты\n\n${telegramSafetyFooter()}`, mainTelegramKeyboard());
 }
 
 async function telegramStats(chatId) {
@@ -11977,6 +12623,98 @@ function packageLine(pkg, index) {
   ].join("\n");
 }
 
+function publishingPackageTelegramKeyboard(pkg = {}) {
+  const id = String(pkg.id || "");
+  return {
+    inline_keyboard: [
+      [
+        { text: "✅ Одобрить", callback_data: `pkg:approve:${id}` },
+        { text: "❌ Отклонить", callback_data: `pkg:reject:${id}` }
+      ],
+      [
+        { text: "✏️ Изменить текст", callback_data: `pkg:edit:${id}` },
+        { text: "🔄 Переделать", callback_data: `pkg:rewrite:${id}` }
+      ],
+      [
+        { text: "🎨 Изображение", callback_data: `pkg:image:${id}` },
+        { text: "🕒 Время", callback_data: `pkg:time:${id}` }
+      ],
+      [
+        { text: "🌐 Preview", callback_data: `pkg:preview:${id}` },
+        { text: "📦 К очереди", callback_data: "pkg:queue" }
+      ]
+    ]
+  };
+}
+
+function publishingPackageTelegramCard(pkg = {}) {
+  const details = publishingPackageDetails(pkg);
+  const draft = details?.draft || {};
+  const editorial = latestEditorialReviewForDraft(draft.id) || {};
+  const safety = latestContentSafetyReviewForDraft(draft.id) || {};
+  const style = readStyleBrainProfiles().find((item) => item.source_reference === `generated:${draft.id}`) || {};
+  const emotion = latestEmotionTimelineForDraft(draft.id) || {};
+  const selectedVisual = selectedVisualConceptForPackage(pkg.id, draft.id);
+  const visualQuality = selectedVisual ? latestVisualQualityReviewForConcept(selectedVisual.id) : null;
+  const readiness = readinessGateCheckPackageSync(pkg);
+  const fragment = pkg.fragment_metrics || {};
+  const recommendation = fragment.recommendation || {};
+  const scheduleText = details?.schedule?.scheduled_time
+    ? new Date(details.schedule.scheduled_time).toLocaleString("ru-RU")
+    : "не назначено";
+  const previewUrl = `${PUBLIC_BASE_URL}/story-preview/${encodeURIComponent(pkg.id)}`;
+  return [
+    "<b>📦 Публикационный пакет</b>",
+    "",
+    `<b>${escapeHtml(draft.title || pkg.draft_id || "История")}</b>`,
+    `Статус: <b>${escapeHtml(pkg.status || "review")}</b>`,
+    `Кратко: ${escapeHtml(shortText(draft.hook || draft.why_it_should_work || "", 420))}`,
+    "",
+    "<b>Качество</b>",
+    `Editorial: ${Number(editorial.editorial_score || draft.final_editorial_score || 0)}/100`,
+    `Safety: ${escapeHtml(safety.recommendation || draft.final_safety_recommendation || "pending")}`,
+    `Style realism: ${Number(style.human_realism_score || 0)}/100`,
+    `Emotion peak: ${escapeHtml(emotion.peak_emotion || "unknown")} (${Number(emotion.peak_position || 0)}%)`,
+    `Visual Quality: ${visualQuality ? `${Number(visualQuality.visual_quality_score || 0)}/100` : "не проверено"}`,
+    `Readiness: ${Number(readiness.readiness_score || 0)}/100, ${escapeHtml(readiness.status || "blocked")}`,
+    "",
+    "<b>Facebook-фрагмент</b>",
+    `${Number(fragment.characters || 0)} знаков · ${Number(fragment.words || 0)} слов · ${Number(fragment.paragraphs || 0)} абзацев`,
+    `Точка обрыва: ${escapeHtml(fragment.break_point || "не определена")}`,
+    `Brain: ${Number(recommendation.confidence_score || 0)}% (${escapeHtml(recommendation.evidence_mode || "insufficient_data")})`,
+    escapeHtml(shortText(pkg.facebook_fragment || draft.hook || "", 900)),
+    "",
+    `<b>Первый комментарий</b>\n${escapeHtml(pkg.comment_text || "не создан")}`,
+    "",
+    `Изображение: ${pkg.image_prompt_id ? "prompt одобрен" : "не выбрано"}`,
+    `Время: ${escapeHtml(scheduleText)}`,
+    `Preview: ${escapeHtml(previewUrl)}`,
+    "",
+    "<b>Важно:</b> одобрение меняет только статус. Публикация в Facebook и автопубликация отключены."
+  ].join("\n");
+}
+
+async function sendPublishingPackageToTelegram(pkgRef, chatId = process.env.CHAT_ID) {
+  const pkg = typeof pkgRef === "object" ? pkgRef : readinessPackageByRef(pkgRef);
+  if (!pkg || !chatId) {
+    return { ok: false, code: !pkg ? "package_not_found" : "telegram_chat_missing" };
+  }
+  const result = await sendTelegramLongMessage(
+    chatId,
+    publishingPackageTelegramCard(pkg),
+    publishingPackageTelegramKeyboard(pkg)
+  );
+  const delivery = {
+    status: result?.ok ? "delivered" : "failed",
+    delivered_at: result?.ok ? new Date().toISOString() : null,
+    message_id: result?.result?.message_id || null,
+    error: result?.ok ? "" : shortText(result?.description || "telegram_delivery_failed", 300)
+  };
+  const updated = { ...pkg, telegram_delivery: delivery, updated_at: new Date().toISOString() };
+  await writePublishingPackages(readPublishingPackages().map((item) => item.id === pkg.id ? updated : item));
+  return { ok: Boolean(result?.ok), package_id: pkg.id, delivery };
+}
+
 async function telegramPackages(chatId) {
   const packages = latestPublishingPackages(10);
   if (!packages.length) return sendTelegramMessage(chatId, "Пакетов публикаций пока нет. Используйте /создать_пакет 1.", mainTelegramKeyboard());
@@ -12012,7 +12750,7 @@ async function telegramPackageDetails(chatId, numberText = "1") {
     "approval_required: true",
     "Автоматической публикации в Facebook нет."
   ].join("\n");
-  return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, publishingPackageTelegramCard(pkg), publishingPackageTelegramKeyboard(pkg));
 }
 
 async function telegramCreatePackage(chatId, draftNumber = "1") {
@@ -12857,7 +13595,7 @@ async function registerTelegramCommands() {
   return telegramApi("setMyCommands", { commands: telegramCommandList() });
 }
 
-function setStoryStatusFromTelegram(id, action) {
+async function setStoryStatusFromTelegram(id, action) {
   const stories = readStories();
   const story = stories.find((item) => item.id === id);
   if (!story) return null;
@@ -12874,14 +13612,84 @@ function setStoryStatusFromTelegram(id, action) {
     story.ai_assistant_notes = [story.ai_assistant_notes || "", "Telegram: rejected. Story was kept for audit history and was not published."].filter(Boolean).join("\n");
   }
   story.updated_at = new Date().toISOString();
-  writeStories(stories.map((item) => item.id === id ? story : item));
+  await writeStories(stories.map((item) => item.id === id ? story : item));
   return { title: story.title, status: storyTelegramStatus(story) };
+}
+
+async function handlePublishingPackageCallback(chatId, data) {
+  if (data === "pkg:queue") return telegramPackages(chatId);
+  const [, action, packageId] = data.split(":");
+  const pkg = readinessPackageByRef(packageId);
+  if (!pkg) return sendTelegramMessage(chatId, "Публикационный пакет не найден.", mainTelegramKeyboard());
+  if (action === "approve") {
+    const updated = await updatePublishingPackageStatus(pkg.id, "approved");
+    if (updated?.safety_blocked) {
+      return sendTelegramLongMessage(chatId, [
+        "<b>Одобрение заблокировано Content Safety</b>",
+        "",
+        telegramContentSafetyReviewText(updated.safety_review || {}),
+        "",
+        "Материал не опубликован."
+      ].join("\n"), publishingPackageTelegramKeyboard(updated));
+    }
+    return sendTelegramLongMessage(chatId, publishingPackageTelegramCard(updated), publishingPackageTelegramKeyboard(updated));
+  }
+  if (action === "reject") {
+    const updated = await updatePublishingPackageStatus(pkg.id, "rejected");
+    return sendTelegramLongMessage(chatId, publishingPackageTelegramCard(updated), publishingPackageTelegramKeyboard(updated));
+  }
+  if (action === "edit") {
+    await updatePublishingPackageStatus(pkg.id, "review");
+    return sendTelegramMessage(chatId, [
+      "<b>Пакет возвращён на редактирование</b>",
+      "Используйте /улучшить 1 для редакционной версии или откройте черновик в админке.",
+      "Исходная версия сохранена. Ничего не опубликовано."
+    ].join("\n"), publishingPackageTelegramKeyboard(pkg));
+  }
+  if (action === "rewrite") {
+    const result = await rewriteDraftFromEditorialReview(pkg.draft_id);
+    if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Не удалось переделать текст."), publishingPackageTelegramKeyboard(pkg));
+    const improved = result.improved_draft || {};
+    return sendTelegramLongMessage(chatId, [
+      "<b>Создана новая редакционная версия</b>",
+      "",
+      `<b>${escapeHtml(improved.title || "Новая версия")}</b>`,
+      `Editorial: ${Number(result.score_after || 0)}/100`,
+      `Safety: ${escapeHtml(result.content_safety_review?.recommendation || "pending")}`,
+      `Новый draft ID: ${escapeHtml(improved.id || "")}`,
+      "",
+      "Исходный текст не перезаписан. Создайте пакет для новой версии после проверки."
+    ].join("\n"), mainTelegramKeyboard());
+  }
+  if (action === "image") {
+    const result = await createVisualConceptsForRef(pkg.id);
+    return sendTelegramMessage(chatId, result.ok
+      ? `Создано визуальных концепций: ${result.concepts.length}. Лучшая: ${escapeHtml(result.image_critic.best_concept_title)}. Используйте /визуалы для выбора.`
+      : escapeHtml(result.message || "Не удалось создать визуальные концепции."), publishingPackageTelegramKeyboard(pkg));
+  }
+  if (action === "time") {
+    return sendTelegramMessage(chatId, "Чтобы изменить время, отправьте: /move 1 tomorrow 19:30. Номер слота смотрите в /очередь.", publishingPackageTelegramKeyboard(pkg));
+  }
+  if (action === "preview") {
+    const previewUrl = `${PUBLIC_BASE_URL}/story-preview/${encodeURIComponent(pkg.id)}`;
+    return sendTelegramMessage(chatId, `<b>Website Preview</b>\n${escapeHtml(previewUrl)}\n\nЭто закрытый рабочий preview. История ещё не опубликована.`, publishingPackageTelegramKeyboard(pkg));
+  }
+  return sendTelegramMessage(chatId, "Неизвестное действие пакета.", publishingPackageTelegramKeyboard(pkg));
 }
 
 async function handleTelegramCallback(callback) {
   const chatId = callback.message.chat.id;
   const data = callback.data || "";
+  if (process.env.CHAT_ID && String(chatId) !== String(process.env.CHAT_ID)) {
+    await telegramApi("answerCallbackQuery", {
+      callback_query_id: callback.id,
+      text: "Эта кнопка доступна только владельцу.",
+      show_alert: true
+    });
+    return null;
+  }
   await telegramApi("answerCallbackQuery", { callback_query_id: callback.id });
+  if (data.startsWith("pkg:")) return handlePublishingPackageCallback(chatId, data);
   if (data === "menu:start") return telegramStart(chatId);
   if (data === "menu:stories") return telegramStories(chatId);
   if (data === "menu:images") return telegramImageQueueV2(chatId);
@@ -12893,7 +13701,7 @@ async function handleTelegramCallback(callback) {
   if (data.startsWith("image:")) return telegramImageDetails(chatId, data.split(":")[1]);
   if (data.startsWith("approve:") || data.startsWith("rewrite:") || data.startsWith("reject:") || data.startsWith("delete:")) {
     const [action, id] = data.split(":");
-    const result = setStoryStatusFromTelegram(id, action);
+    const result = await setStoryStatusFromTelegram(id, action);
     return sendTelegramMessage(chatId, result ? `Готово: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(result.status)}` : "История не найдена.", mainTelegramKeyboard());
   }
 }
@@ -12907,14 +13715,74 @@ function telegramCommandParts(text = "") {
   };
 }
 
-async function handleTelegramUpdate(update = {}) {
-  if (update.message) await handleTelegramMessage(update.message);
-  if (update.callback_query) await handleTelegramCallback(update.callback_query);
-  return {
-    ok: true,
-    update_id: update.update_id || null,
-    handled: Boolean(update.message || update.callback_query)
+async function claimTelegramUpdate(update = {}) {
+  const updateId = Number(update.update_id);
+  if (!Number.isFinite(updateId)) return { claimed: true, update_id: null };
+  const eventType = update.callback_query ? "callback_query" : update.message ? "message" : "other";
+  if (pgPool) {
+    const result = await pgPool.query(
+      `insert into telegram_updates (update_id, event_type, status, error_message, processed_at)
+       values ($1,$2,'processing','',now())
+       on conflict (update_id) do nothing
+       returning update_id`,
+      [updateId, eventType]
+    );
+    return { claimed: result.rowCount === 1, update_id: updateId };
+  }
+  const existing = readTelegramUpdates().some((item) => Number(item.update_id) === updateId);
+  if (existing) return { claimed: false, update_id: updateId };
+  await writeTelegramUpdates([{
+    update_id: updateId,
+    event_type: eventType,
+    status: "processing",
+    error_message: "",
+    processed_at: new Date().toISOString()
+  }, ...readTelegramUpdates()].slice(0, 500));
+  return { claimed: true, update_id: updateId };
+}
+
+async function completeTelegramUpdate(updateId, status = "processed", errorMessage = "") {
+  if (!Number.isFinite(Number(updateId))) return;
+  const current = readTelegramUpdates().find((item) => Number(item.update_id) === Number(updateId)) || {};
+  const item = {
+    ...current,
+    update_id: Number(updateId),
+    status,
+    error_message: shortText(errorMessage, 500),
+    processed_at: new Date().toISOString()
   };
+  storageCache.telegramUpdates = [
+    item,
+    ...readTelegramUpdates().filter((entry) => Number(entry.update_id) !== Number(updateId))
+  ].slice(0, 500);
+  writeJsonBackup(TELEGRAM_UPDATES_FILE, storageCache.telegramUpdates);
+  await persistTelegramUpdates([item]);
+}
+
+async function handleTelegramUpdate(update = {}) {
+  const claim = await claimTelegramUpdate(update);
+  if (!claim.claimed) {
+    return {
+      ok: true,
+      duplicate: true,
+      update_id: claim.update_id,
+      handled: false
+    };
+  }
+  try {
+    if (update.message) await handleTelegramMessage(update.message);
+    if (update.callback_query) await handleTelegramCallback(update.callback_query);
+    await completeTelegramUpdate(claim.update_id, "processed");
+    return {
+      ok: true,
+      duplicate: false,
+      update_id: claim.update_id,
+      handled: Boolean(update.message || update.callback_query)
+    };
+  } catch (error) {
+    await completeTelegramUpdate(claim.update_id, "failed", error.message || "telegram_update_failed");
+    throw error;
+  }
 }
 
 async function handleTelegramMessage(message) {
@@ -13063,7 +13931,7 @@ function startTelegramControlCenter() {
   sendTelegramMessage(process.env.CHAT_ID, "🤖 Telegram Control Center запущен.\n\nПубликация отключена. Доступны уведомления, просмотр, одобрение и отклонение.", mainTelegramKeyboard());
 }
 
-function createCompetitor(payload) {
+async function createCompetitor(payload) {
   const name = String(payload.name || "").trim();
   const url = String(payload.url || "").trim();
   const category = String(payload.category || "Facebook-страница").trim();
@@ -13084,7 +13952,7 @@ function createCompetitor(payload) {
   const next = existing
     ? competitors.map((item) => item.id === existing.id ? competitor : item)
     : [competitor, ...competitors];
-  writeCompetitors(next);
+  await writeCompetitors(next);
   return competitor;
 }
 
@@ -13387,6 +14255,8 @@ function facebookConfigStatus(req) {
     pending_pages_count: Array.isArray(connection.pending_pages) ? connection.pending_pages.length : 0,
     page_id: pageId,
     page_name: connection.page_name || "",
+    page_category: connection.page_category || "",
+    object_type: connection.page_category ? "facebook_page" : (pageId ? "unknown_facebook_object" : "not_connected"),
     page_source: connection.page_id ? "oauth" : (process.env.FACEBOOK_PAGE_ID ? "env" : ""),
     page_token_source: connection.page_access_token ? "oauth" : (process.env.FACEBOOK_PAGE_ACCESS_TOKEN ? "env" : ""),
     connected_at: connection.connected_at || null,
@@ -13422,7 +14292,9 @@ function securityAudit() {
     facebook_connection_file_gitignored: /data\/facebook_connection\.local\.json/.test(gitignore),
     telegram_bot_token_present: tg.has_bot_token,
     telegram_chat_id_present: tg.has_chat_id,
+    telegram_webhook_secret_present: tg.has_webhook_secret,
     openai_api_key_present: Boolean(process.env.OPENAI_API_KEY),
+    openai_images_enabled: process.env.ENABLE_OPENAI_IMAGES === "true",
     autopublish_enabled: false,
     facebook_write_permissions_requested: false
   };
@@ -13432,6 +14304,8 @@ function securityAudit() {
   if (!checks.meta_app_id_present || !checks.meta_app_secret_present) warnings.push("Meta OAuth is not fully configured.");
   if (!checks.facebook_page_id_present || !checks.facebook_page_token_present) warnings.push("Facebook Page is not connected yet.");
   if (!checks.telegram_bot_token_present || !checks.telegram_chat_id_present) warnings.push("Telegram Bot is not configured yet.");
+  if (process.env.VERCEL && !checks.telegram_webhook_secret_present) warnings.push("TELEGRAM_WEBHOOK_SECRET is missing in production.");
+  if (checks.openai_images_enabled) warnings.push("OpenAI Images is enabled, but RC-1 requires it to remain disabled.");
   if (!checks.facebook_connection_file_gitignored) warnings.push("Local Facebook OAuth connection file should stay out of Git.");
   return {
     safe_to_commit: checks.env_is_gitignored && checks.env_example_exists && checks.facebook_connection_file_gitignored,
@@ -13460,7 +14334,9 @@ const productionPersistenceTables = [
   "style_brain_profiles",
   "content_safety_reviews",
   "editorial_reviews",
-  "emotion_timeline"
+  "emotion_timeline",
+  "website_events",
+  "telegram_updates"
 ];
 
 function migrationFilesStatus() {
@@ -13508,7 +14384,9 @@ async function buildStorageStatus() {
       style_brain_profiles: readStyleBrainProfiles().length,
       content_safety_reviews: readContentSafetyReviews().length,
       editorial_reviews: readEditorialReviews().length,
-      emotion_timeline: readEmotionTimelines().length
+      emotion_timeline: readEmotionTimelines().length,
+      website_events: readWebsiteEvents().length,
+      telegram_updates: readTelegramUpdates().length
     },
     safety: {
       secrets_returned: false,
@@ -13543,6 +14421,15 @@ async function buildStorageStatus() {
       counts[table] = Number(result.rows[0]?.count || 0);
     }
     const missingTables = productionPersistenceTables.filter((table) => !present.has(table));
+    const comparableCounts = Object.entries(base.cache_counts)
+      .filter(([table]) => Number.isFinite(counts[table]))
+      .map(([table, cacheCount]) => ({
+        table,
+        postgres_count: counts[table],
+        cache_count: cacheCount,
+        matches: counts[table] === cacheCount
+      }));
+    const countMismatches = comparableCounts.filter((item) => !item.matches);
     return {
       ...base,
       ok: missingTables.length === 0,
@@ -13550,6 +14437,11 @@ async function buildStorageStatus() {
       tables_present: tablesPresent,
       current_counts: counts,
       missing_tables: missingTables,
+      consistency: {
+        counts_match: countMismatches.length === 0,
+        compared_tables: comparableCounts.length,
+        mismatches: countMismatches
+      },
       message: missingTables.length
         ? `PostgreSQL connected, but missing tables: ${missingTables.join(", ")}. Run npm run db:migrate or redeploy.`
         : "PostgreSQL connected and all expected production persistence tables are present."
@@ -14107,11 +14999,25 @@ function enrichFacebookPostAnalysis(post) {
 
 function normalizeFacebookPost(post, existing) {
   const attachmentUrl = post.attachments?.data?.find((item) => item?.url)?.url || "";
-  const likes = Number(post.reactions?.summary?.total_count || post.likes?.summary?.total_count || 0);
-  const comments = Number(post.comments?.summary?.total_count || 0);
-  const shares = Number(post.shares?.count || 0);
-  const reach = Number(insightValue(post.insights, ["post_impressions_unique", "post_impressions"]) || 0);
-  const linkClicks = Number(insightValue(post.insights, ["post_clicks_by_type", "post_clicks"]) || 0);
+  const likesAvailable = post.reactions?.summary?.total_count !== undefined || post.likes?.summary?.total_count !== undefined;
+  const commentsAvailable = post.comments?.summary?.total_count !== undefined;
+  const sharesAvailable = post.shares?.count !== undefined;
+  const insightsAvailable = Array.isArray(post.insights?.data) && post.insights.data.length > 0;
+  const likes = likesAvailable
+    ? Number(post.reactions?.summary?.total_count ?? post.likes?.summary?.total_count ?? 0)
+    : Number(existing?.likes_count || existing?.likes || 0);
+  const comments = commentsAvailable
+    ? Number(post.comments?.summary?.total_count || 0)
+    : Number(existing?.comments_count || existing?.comments || 0);
+  const shares = sharesAvailable
+    ? Number(post.shares?.count || 0)
+    : Number(existing?.shares_count || existing?.shares || 0);
+  const reach = insightsAvailable
+    ? Number(insightValue(post.insights, ["post_impressions_unique", "post_impressions"]) || 0)
+    : Number(existing?.reach_count || existing?.reach || 0);
+  const linkClicks = insightsAvailable
+    ? Number(insightValue(post.insights, ["post_clicks_by_type", "post_clicks"]) || 0)
+    : Number(existing?.link_clicks_count || existing?.link_clicks || 0);
   const score = likes + comments * 3 + shares * 5 + linkClicks * 5;
   const now = new Date().toISOString();
   const analysis = enrichFacebookPostAnalysis({ ...existing, ...post, image_url: post.full_picture || attachmentUrl || existing?.image_url || "" });
@@ -14195,7 +15101,7 @@ async function checkFacebookConnection(req) {
   };
 }
 
-async function fetchFacebookPostsPage(url, token, existingPosts) {
+async function fetchFacebookPostsPage(url, token, existingPosts, options = {}) {
   const { response, data } = await graphFetchJson(url, "posts-page", 20000);
   if (!response.ok || data.error) {
     const error = new Error(data.error?.message || "Meta Graph API could not load posts.");
@@ -14203,10 +15109,12 @@ async function fetchFacebookPostsPage(url, token, existingPosts) {
     error.metaError = safeMetaErrorObject(data.error);
     throw error;
   }
-  const postsWithInsights = await Promise.all((data.data || []).map(async (post) => ({
-    ...post,
-    insights: await fetchFacebookPostInsights(post.id, token)
-  })));
+  const postsWithInsights = options.fetchInsights
+    ? await Promise.all((data.data || []).map(async (post) => ({
+        ...post,
+        insights: await fetchFacebookPostInsights(post.id, token)
+      })))
+    : (data.data || []);
   return {
     posts: postsWithInsights.map((post) => normalizeFacebookPost(post, existingPosts.find((item) => item.facebook_post_id === post.id))),
     next: data.paging?.next || ""
@@ -14265,9 +15173,9 @@ function publicPostsAttempt(attempt, pageId, tokenSource, pageTasks) {
 
 async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessToken, attempts, refresh, pageId, pageAccessTokenSource, fields, options = {} }) {
   const startedAt = Date.now();
-  const maxPages = Math.max(1, Math.min(Number(options.maxPages || process.env.FACEBOOK_SYNC_MAX_PAGES || 10), 10));
-  const maxPosts = Math.max(1, Math.min(Number(options.maxPosts || process.env.FACEBOOK_SYNC_MAX_POSTS || 250), 250));
-  const timeoutMs = Math.max(5000, Math.min(Number(options.timeoutMs || process.env.FACEBOOK_SYNC_TIMEOUT_MS || 50000), 55000));
+  const maxPages = Math.max(1, Math.min(Number(options.maxPages || process.env.FACEBOOK_SYNC_MAX_PAGES || 25), 25));
+  const maxPosts = Math.max(1, Math.min(Number(options.maxPosts || process.env.FACEBOOK_SYNC_MAX_POSTS || 625), 625));
+  const timeoutMs = Math.max(5000, Math.min(Number(options.timeoutMs || process.env.FACEBOOK_SYNC_TIMEOUT_MS || 25000), 28000));
   const token = encodeURIComponent(pageAccessToken);
   const existingPosts = readFacebookPosts();
   const fetchedPosts = [];
@@ -14295,7 +15203,7 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
 
   try {
     while (nextUrl && pages < maxPages && fetchedPosts.length < maxPosts && Date.now() - startedAt < timeoutMs) {
-      const page = await fetchFacebookPostsPage(nextUrl, token, [...existingPosts, ...fetchedPosts]);
+      const page = await fetchFacebookPostsPage(nextUrl, token, [...existingPosts, ...fetchedPosts], { fetchInsights: false });
       const remaining = maxPosts - fetchedPosts.length;
       fetchedPosts.push(...page.posts.slice(0, remaining));
       nextUrl = page.next;
@@ -14357,8 +15265,13 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
 
   const skippedDuplicates = updatedExisting + duplicateInApi;
   const merged = [...mergedById.values()].sort((a, b) => b.total_score - a.total_score);
-  writeFacebookPosts(merged);
+  await writeFacebookPosts(merged);
   const autoSync = await autoSyncProjectBrainV2({ sources: ["facebook"], reason: "facebook_posts_loaded" });
+  const datedPosts = merged
+    .filter((item) => item.published_at)
+    .sort((a, b) => new Date(a.published_at) - new Date(b.published_at));
+  const postsWithReach = merged.filter((item) => Number(item.reach_count || 0) > 0).length;
+  const postsWithLinkClicks = merged.filter((item) => Number(item.link_clicks_count || 0) > 0).length;
 
   const stoppedByTimeout = Boolean(nextUrl && Date.now() - startedAt >= timeoutMs);
   const stoppedByMaxPosts = Boolean(nextUrl && fetchedPosts.length >= maxPosts);
@@ -14368,6 +15281,7 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
     posts: merged,
     summary: {
       loaded_posts: fetchedPosts.length,
+      stored_posts: merged.length,
       saved_new_posts: savedNew,
       skipped_duplicates: skippedDuplicates,
       updated_existing_posts: updatedExisting,
@@ -14377,6 +15291,16 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
       max_posts: maxPosts,
       stopped_by_timeout: stoppedByTimeout,
       stopped_by_max_posts: stoppedByMaxPosts,
+      first_published_at: datedPosts[0]?.published_at || null,
+      last_published_at: datedPosts[datedPosts.length - 1]?.published_at || null,
+      data_completeness: {
+        text_and_date: merged.length,
+        reach_available: postsWithReach,
+        link_clicks_available: postsWithLinkClicks,
+        reach_unavailable: Math.max(0, merged.length - postsWithReach),
+        link_clicks_unavailable: Math.max(0, merged.length - postsWithLinkClicks),
+        demo_records: 0
+      },
       auto_sync: {
         story_dna_count: autoSync.story_dna_count,
         confidence_score: autoSync.confidence_score,
@@ -14711,11 +15635,8 @@ async function loadFacebookPosts(req, options = {}) {
       }
     };
   }
-  const token = encodeURIComponent(pageAccessToken);
-  const allPages = Boolean(options.allPages);
   const fields = facebookFeedFields;
   const limit = "25";
-  const oldPostsEndpoint = metaEndpoint(`/${pageId}/posts`, { fields: facebookLegacyPostsFields, limit });
   const attempts = [];
   let selectedAttempt = null;
   for (const edge of facebookPostEndpointOrder) {
@@ -14796,122 +15717,6 @@ async function loadFacebookPosts(req, options = {}) {
     options
   });
 
-  if (allPages) {
-    const existingPosts = readFacebookPosts();
-    let loaded = [];
-    try {
-      const firstPostsWithInsights = await Promise.all((selectedAttempt.data.data || []).map(async (post) => ({
-        ...post,
-        insights: await fetchFacebookPostInsights(post.id, token)
-      })));
-      loaded = firstPostsWithInsights.map((post) => normalizeFacebookPost(post, existingPosts.find((item) => item.facebook_post_id === post.id)));
-    } catch (error) {
-      return {
-        ok: false,
-        configured: true,
-        posts: [],
-        code: "facebook_posts_normalize_failed",
-        message: safeMetaError(error),
-        diagnostics: { selected_endpoint: selectedAttempt.edge, attempts }
-      };
-    }
-    let nextUrl = selectedAttempt.paging_next;
-    let pages = 1;
-    const maxPages = Number(process.env.FACEBOOK_SYNC_MAX_PAGES || 25);
-    try {
-      while (nextUrl && pages < maxPages) {
-        const page = await fetchFacebookPostsPage(nextUrl, token, [...existingPosts, ...loaded]);
-        loaded.push(...page.posts);
-        nextUrl = page.next;
-        pages += 1;
-      }
-    } catch (error) {
-      return {
-        ok: false,
-        configured: true,
-        posts: [],
-        code: "meta_api_error",
-        message: error.message || "Meta Graph API could not load historical posts.",
-        meta_status: error.metaStatus || null,
-        diagnostics: {
-          graph_api_version: FACEBOOK_GRAPH_VERSION,
-          selected_endpoint: selectedAttempt.edge,
-          endpoint: selectedAttempt.endpoint,
-          fields,
-          selected_page_id: pageId,
-          token_type: "page_access_token",
-          page_token_source: pageAccessTokenSource,
-          page_tasks: refresh.page_tasks || [],
-          uses_env_token: false,
-          meta_status: error.metaStatus || null,
-          meta_error: error.metaError || null,
-          attempts
-        }
-      };
-    }
-    const posts = loaded.sort((a, b) => b.total_score - a.total_score);
-    const merged = [
-      ...posts,
-      ...existingPosts.filter((item) => !posts.some((post) => post.facebook_post_id === item.facebook_post_id))
-    ].sort((a, b) => b.total_score - a.total_score);
-    writeFacebookPosts(merged);
-    const autoSync = await autoSyncProjectBrainV2({ sources: ["facebook"], reason: "facebook_historical_sync" });
-    return {
-      ok: true,
-      configured: true,
-      posts: merged,
-      summary: {
-        count: merged.length,
-        loaded: posts.length,
-        pages,
-        best_score: merged[0]?.total_score || 0,
-        selected_endpoint: selectedAttempt.edge,
-        selected_field_profile: selectedAttempt.field_profile,
-        auto_sync: {
-          story_dna_count: autoSync.story_dna_count,
-          confidence_score: autoSync.confidence_score,
-          last_learning_time: autoSync.last_learning_time
-        }
-      },
-      message: `Historical sync complete via ${selectedAttempt.edge} (${selectedAttempt.field_profile}). Loaded posts: ${posts.length}, API pages: ${pages}. Project Brain updated.`
-    };
-  }
-
-  const data = selectedAttempt.data;
-
-  const existingPosts = readFacebookPosts();
-  const postsWithInsights = await Promise.all((data.data || []).map(async (post) => ({
-    ...post,
-    insights: await fetchFacebookPostInsights(post.id, token)
-  })));
-  const posts = postsWithInsights
-    .map((post) => normalizeFacebookPost(post, existingPosts.find((item) => item.facebook_post_id === post.id)))
-    .sort((a, b) => b.total_score - a.total_score);
-  const merged = [
-    ...posts,
-    ...existingPosts.filter((item) => !posts.some((post) => post.facebook_post_id === item.facebook_post_id))
-  ].sort((a, b) => b.total_score - a.total_score);
-  writeFacebookPosts(merged);
-  const autoSync = await autoSyncProjectBrainV2({ sources: ["facebook"], reason: "facebook_posts_loaded" });
-  return {
-    ok: true,
-    configured: true,
-    posts: merged,
-    summary: {
-      count: merged.length,
-      best_score: merged[0]?.total_score || 0,
-      loaded: posts.length,
-      selected_endpoint: selectedAttempt.edge,
-      selected_field_profile: selectedAttempt.field_profile,
-      auto_sync: {
-        story_dna_count: autoSync.story_dna_count,
-        confidence_score: autoSync.confidence_score,
-        last_learning_time: autoSync.last_learning_time
-      },
-      attempts
-    },
-    message: `Загружено и сохранено постов: ${posts.length}. Таблица отсортирована по лучшим результатам.`
-  };
 }
 
 function send(res, status, body, type = "text/html; charset=utf-8") {
@@ -14965,6 +15770,16 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === "/api/telegram/webhook" && req.method === "POST") {
+    const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
+    const receivedSecret = String(req.headers["x-telegram-bot-api-secret-token"] || "");
+    if (expectedSecret && receivedSecret !== expectedSecret) {
+      console.warn("Telegram webhook rejected: secret token mismatch.");
+      return sendJson(res, 403, {
+        ok: false,
+        code: "telegram_webhook_unauthorized",
+        message: "Telegram webhook secret token is invalid."
+      });
+    }
     try {
       const update = await parseBody(req);
       const result = await handleTelegramUpdate(update);
@@ -14985,6 +15800,22 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/telegram/webhook-info" && req.method === "GET") {
     return sendJson(res, 200, await telegramWebhookInfo());
+  }
+
+  if (pathname === "/api/telegram/send-package" && req.method === "POST") {
+    const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET || "";
+    const receivedSecret = String(req.headers["x-telegram-bot-api-secret-token"] || "");
+    if (!expectedSecret || receivedSecret !== expectedSecret) {
+      return sendJson(res, 403, {
+        ok: false,
+        code: "telegram_delivery_unauthorized",
+        message: "Telegram package delivery requires the configured webhook secret."
+      });
+    }
+    const payload = await parseBody(req);
+    return sendJson(res, 200, await sendPublishingPackageToTelegram(
+      payload.package_id || payload.package || payload.index || "1"
+    ));
   }
 
   if (pathname === "/api/stories" && req.method === "GET") {
@@ -15147,7 +15978,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (pathname === "/api/competitors" && req.method === "POST") {
-    const result = createCompetitor(await parseBody(req));
+    const result = await createCompetitor(await parseBody(req));
     if (result.error) return sendJson(res, 422, result);
     await updateProjectBrain();
     return sendJson(res, 200, result);
@@ -15619,7 +16450,7 @@ async function handleApi(req, res, pathname) {
     const nextStories = existing
       ? stories.map((item) => item.id === id ? story : item)
       : [story, ...stories];
-    writeStories(nextStories);
+    await writeStories(nextStories);
     await updateProjectBrain();
     return sendJson(res, 200, storySummary(story, req));
   }
@@ -15683,16 +16514,38 @@ async function router(req, res) {
       if (!story) return send(res, 404, layout("История не найдена", `${renderHeader()}<main class="empty-state"><h1>Ссылка не найдена</h1></main>`));
       story.clicks = Number(story.clicks || 0) + 1;
       story.updated_at = new Date().toISOString();
-      writeStories(stories.map((item) => item.id === story.id ? story : item));
-      res.writeHead(302, { location: `/story/${story.slug}` });
+      await writeStories(stories.map((item) => item.id === story.id ? story : item));
+      const campaignId = url.searchParams.get("campaign") || story.campaign_id || "";
+      const pkg = readPublishingPackages().find((item) =>
+        item.id === story.package_id || item.campaign_id === campaignId || item.story_id === story.id
+      );
+      await recordWebsiteEvent({
+        storyId: story.id,
+        packageId: pkg?.id || story.package_id || "",
+        campaignId,
+        eventType: "continuation_click",
+        source: url.searchParams.get("source") || "facebook_comment"
+      });
+      const redirectParams = new URLSearchParams();
+      if (campaignId) redirectParams.set("campaign", campaignId);
+      redirectParams.set("source", url.searchParams.get("source") || "facebook_comment");
+      res.writeHead(302, { location: `/story/${story.slug}?${redirectParams.toString()}` });
       return res.end();
+    }
+
+    if (pathname.startsWith("/story-preview/")) {
+      const packageId = pathname.split("/").filter(Boolean)[1];
+      const pkg = readPublishingPackages().find((item) => item.id === packageId);
+      const story = pkg ? readStories().find((item) => item.id === pkg.story_id || item.source_draft_id === pkg.draft_id) : null;
+      if (!story) return send(res, 404, layout("Preview not found", `${renderHeader()}<main class="empty-state"><h1>Preview not found</h1></main>`));
+      return send(res, 200, await renderStory(req, story, { countView: false, preview: true }));
     }
 
     if (pathname.startsWith("/story/")) {
       const slug = pathname.split("/").filter(Boolean)[1];
       const story = readStories().find((item) => item.slug === slug && item.status === "published");
       if (!story) return send(res, 404, layout("История не найдена", `${renderHeader()}<main class="empty-state"><h1>История не найдена</h1></main>`));
-      return send(res, 200, renderStory(req, story));
+      return send(res, 200, await renderStory(req, story));
     }
 
     return send(res, 404, layout("Страница не найдена", `${renderHeader()}<main class="empty-state"><h1>Страница не найдена</h1></main>`));
