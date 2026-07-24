@@ -14262,6 +14262,9 @@ function facebookConfigStatus(req) {
     page_source: connection.page_id ? "oauth" : (process.env.FACEBOOK_PAGE_ID ? "env" : ""),
     page_token_source: connection.page_access_token ? "oauth" : (process.env.FACEBOOK_PAGE_ACCESS_TOKEN ? "env" : ""),
     connected_at: connection.connected_at || null,
+    history_sync_in_progress: Boolean(connection.posts_sync_cursor),
+    history_sync_complete: Boolean(connection.posts_sync_complete),
+    history_sync_updated_at: connection.posts_sync_updated_at || null,
     missing,
     has_app_id: Boolean(process.env.META_APP_ID),
     has_app_secret: Boolean(process.env.META_APP_SECRET),
@@ -15123,19 +15126,21 @@ async function fetchFacebookPostsPage(url, token, existingPosts, options = {}) {
   };
 }
 
-function facebookPostsEndpoint(pageId, edge, fields = facebookFeedFields, limit = "25") {
+function facebookPostsEndpoint(pageId, edge, fields = facebookFeedFields, limit = "25", after = "") {
   return metaEndpoint(`/${pageId}/${edge}`, {
     ...(fields ? { fields } : {}),
-    limit
+    limit,
+    ...(after ? { after } : {})
   });
 }
 
-async function requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit = "25", fieldProfile = facebookPostFieldProfiles[0]) {
+async function requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit = "25", fieldProfile = facebookPostFieldProfiles[0], after = "") {
   const fields = fieldProfile.fields;
   const endpoint = facebookPostsEndpoint(pageId, edge, fields, limit);
   const params = new URLSearchParams({
     ...(fields ? { fields } : {}),
     limit,
+    ...(after ? { after } : {}),
     access_token: pageAccessToken
   });
   const url = `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${pageId}/${edge}?${params.toString()}`;
@@ -15146,6 +15151,7 @@ async function requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit = "
     graph_api_version: FACEBOOK_GRAPH_VERSION,
     field_profile: fieldProfile.name,
     fields,
+    resumed_from_cursor: Boolean(after),
     status: response.status,
     ok: response.ok && !data.error,
     error: safeMetaErrorObject(data.error),
@@ -15162,6 +15168,7 @@ function publicPostsAttempt(attempt, pageId, tokenSource, pageTasks) {
     graph_api_version: attempt.graph_api_version,
     field_profile: attempt.field_profile,
     fields: attempt.fields,
+    resumed_from_cursor: attempt.resumed_from_cursor,
     page_id: pageId,
     token_source: tokenSource,
     token_type: "page_access_token",
@@ -15171,6 +15178,15 @@ function publicPostsAttempt(attempt, pageId, tokenSource, pageTasks) {
     error: attempt.error,
     posts_count: attempt.posts_count
   };
+}
+
+function facebookPagingCursor(nextUrl = "") {
+  if (!nextUrl) return "";
+  try {
+    return new URL(nextUrl).searchParams.get("after") || "";
+  } catch {
+    return "";
+  }
 }
 
 async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessToken, attempts, refresh, pageId, pageAccessTokenSource, fields, options = {} }) {
@@ -15277,6 +15293,17 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
 
   const stoppedByTimeout = Boolean(nextUrl && Date.now() - startedAt >= timeoutMs);
   const stoppedByMaxPosts = Boolean(nextUrl && fetchedPosts.length >= maxPosts);
+  const nextCursor = facebookPagingCursor(nextUrl);
+  if (options.allPages && options.res && options.req) {
+    saveFacebookConnection({
+      ...(refresh.connection || {}),
+      posts_sync_cursor: nextCursor,
+      posts_sync_edge: selectedAttempt.edge,
+      posts_sync_field_profile: selectedAttempt.field_profile,
+      posts_sync_complete: !nextUrl,
+      posts_sync_updated_at: new Date().toISOString()
+    }, options.res, options.req);
+  }
   return {
     ok: true,
     configured: true,
@@ -15309,6 +15336,9 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
         last_learning_time: autoSync.last_learning_time
       },
       has_more: Boolean(nextUrl),
+      history_complete: !nextUrl,
+      history_cursor_saved: Boolean(nextCursor),
+      resumed_from_cursor: Boolean(options.resumeCursor),
       selected_endpoint: selectedAttempt.edge,
       selected_field_profile: selectedAttempt.field_profile,
       attempts
@@ -15637,33 +15667,67 @@ async function loadFacebookPosts(req, options = {}) {
       }
     };
   }
-  const fields = facebookFeedFields;
   const limit = "25";
   const attempts = [];
   let selectedAttempt = null;
-  for (const edge of facebookPostEndpointOrder) {
-    for (const fieldProfile of facebookPostFieldProfiles) {
-      const attempt = await requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit, fieldProfile);
-      const publicAttempt = publicPostsAttempt(attempt, pageId, pageAccessTokenSource, refresh.page_tasks || []);
-      attempts.push(publicAttempt);
-      facebookLog("posts-fallback-attempt", {
-        graph_api_version: FACEBOOK_GRAPH_VERSION,
-        endpoint_url: attempt.endpoint,
-        field_profile: attempt.field_profile,
-        selected_page_id: pageId,
-        page_token_source: pageAccessTokenSource,
-        page_tasks: (refresh.page_tasks || []).join(","),
-        status: attempt.status,
-        ok: attempt.ok,
-        posts_count: attempt.posts_count,
-        meta_error: attempt.error?.message || ""
-      });
-      if (attempt.ok) {
-        selectedAttempt = attempt;
-        break;
+  let resumeCursor = options.allPages ? String(refresh.connection?.posts_sync_cursor || "") : "";
+  const storedEdge = String(refresh.connection?.posts_sync_edge || "");
+  const storedFieldProfile = String(refresh.connection?.posts_sync_field_profile || "");
+
+  const tryPostEdges = async (cursor, edges, fieldProfiles) => {
+    for (const edge of edges) {
+      for (const fieldProfile of fieldProfiles) {
+        const attempt = await requestFacebookPostsEdge(pageId, pageAccessToken, edge, limit, fieldProfile, cursor);
+        const publicAttempt = publicPostsAttempt(attempt, pageId, pageAccessTokenSource, refresh.page_tasks || []);
+        attempts.push(publicAttempt);
+        facebookLog("posts-fallback-attempt", {
+          graph_api_version: FACEBOOK_GRAPH_VERSION,
+          endpoint_url: attempt.endpoint,
+          field_profile: attempt.field_profile,
+          selected_page_id: pageId,
+          page_token_source: pageAccessTokenSource,
+          page_tasks: (refresh.page_tasks || []).join(","),
+          resumed_from_cursor: Boolean(cursor),
+          status: attempt.status,
+          ok: attempt.ok,
+          posts_count: attempt.posts_count,
+          meta_error: attempt.error?.message || ""
+        });
+        if (attempt.ok) return attempt;
       }
     }
-    if (selectedAttempt) break;
+    return null;
+  };
+
+  const resumeEdges = resumeCursor && facebookPostEndpointOrder.includes(storedEdge)
+    ? [storedEdge]
+    : facebookPostEndpointOrder;
+  const matchingProfiles = resumeCursor
+    ? facebookPostFieldProfiles.filter((profile) => profile.name === storedFieldProfile)
+    : facebookPostFieldProfiles;
+  selectedAttempt = await tryPostEdges(
+    resumeCursor,
+    resumeEdges,
+    matchingProfiles.length ? matchingProfiles : facebookPostFieldProfiles
+  );
+
+  if (!selectedAttempt && resumeCursor) {
+    facebookLog("posts-history-cursor-reset", {
+      graph_api_version: FACEBOOK_GRAPH_VERSION,
+      selected_page_id: pageId,
+      page_token_source: pageAccessTokenSource,
+      reason: "stored_cursor_rejected"
+    });
+    saveFacebookConnection({
+      ...(refresh.connection || {}),
+      posts_sync_cursor: "",
+      posts_sync_edge: "",
+      posts_sync_field_profile: "",
+      posts_sync_complete: false,
+      posts_sync_updated_at: new Date().toISOString()
+    }, options.res, req);
+    resumeCursor = "";
+    selectedAttempt = await tryPostEdges("", facebookPostEndpointOrder, facebookPostFieldProfiles);
   }
 
   if (!selectedAttempt) {
@@ -15688,7 +15752,7 @@ async function loadFacebookPosts(req, options = {}) {
         },
         uses_env_token: false,
         graph_api_version: FACEBOOK_GRAPH_VERSION,
-        fields,
+        fields: facebookFeedFields,
         attempts,
         page_token_debug: pageTokenDebug,
         final_diagnosis: {
@@ -15715,8 +15779,8 @@ async function loadFacebookPosts(req, options = {}) {
     refresh,
     pageId,
     pageAccessTokenSource,
-    fields,
-    options
+    fields: selectedAttempt.fields,
+    options: { ...options, req, resumeCursor }
   });
 
 }
