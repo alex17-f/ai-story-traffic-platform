@@ -15629,7 +15629,7 @@ async function debugAllFacebookPostEndpoints(req, res) {
 }
 
 async function loadFacebookPosts(req, options = {}) {
-  const refresh = await refreshOAuthPageConnection(req, options.res);
+  const refresh = await refreshOAuthPageConnection(req, options.allPages ? null : options.res);
   const { pageId, pageAccessToken, pageAccessTokenSource } = facebookOAuthPageCredentialsFromConnection(refresh.connection);
   const missing = [
     !pageId ? "OAuth Page ID" : "",
