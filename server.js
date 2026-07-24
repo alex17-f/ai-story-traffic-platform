@@ -7008,7 +7008,13 @@ function lowestUsefulDnaStats(items = [], key) {
 
 function buildProjectBrainV2Recommendations() {
   const dnaItems = readStoryDna().length ? readStoryDna() : readResearchStories().map(storyDnaFromResearchStory).filter(Boolean);
-  const facebookEvidence = dnaItems.filter((item) => item.source_type === "facebook");
+  const currentFacebookPosts = readFacebookPosts();
+  const currentFacebookReferences = new Set(currentFacebookPosts.map((post) =>
+    `facebook:${post.facebook_post_id || post.id || ""}`
+  ));
+  const facebookEvidence = dnaItems.filter((item) =>
+    item.source_type === "facebook" && currentFacebookReferences.has(item.source_reference)
+  );
   const researchEvidence = dnaItems.filter((item) => item.source_type !== "generated");
   const recommendationItems = facebookEvidence.length >= 10
     ? facebookEvidence
@@ -7016,12 +7022,16 @@ function buildProjectBrainV2Recommendations() {
   const stats = buildStoryDnaStatistics(dnaItems);
   const recommendationStats = buildStoryDnaStatistics(recommendationItems);
   const lengthStats = weightedDnaStats(recommendationItems, "story_length").slice(0, 6);
-  const hasMeasuredFacebookEngagement = facebookEvidence.some((item) =>
-    Number(item.engagement_score || 0) > 0
-    || Number(item.comments_score || 0) > 0
-    || Number(item.shares_score || 0) > 0
-    || Number(item.viral_score || 0) > 0
+  const measuredFacebookPosts = currentFacebookPosts.filter((post) =>
+    Number(post.total_score || 0) > 0
+    || Number(post.likes_count || 0) > 0
+    || Number(post.comments_count || 0) > 0
+    || Number(post.shares_count || 0) > 0
+    || Number(post.link_clicks_count || 0) > 0
+    || Number(post.reach_count || 0) > 0
   );
+  const minimumMeasuredPosts = Math.min(10, Math.max(3, Math.ceil(currentFacebookPosts.length * 0.01)));
+  const hasMeasuredFacebookEngagement = measuredFacebookPosts.length >= minimumMeasuredPosts;
   const avoidTopics = hasMeasuredFacebookEngagement
     ? lowestUsefulDnaStats(facebookEvidence, "main_theme")
     : [];
@@ -7053,6 +7063,12 @@ function buildProjectBrainV2Recommendations() {
     facebook_fragment: fragmentRecommendation,
     avoid_topics: avoidTopics,
     avoid_topics_status: hasMeasuredFacebookEngagement ? "measured" : "unavailable_without_engagement_metrics",
+    facebook_engagement_coverage: {
+      posts_loaded: currentFacebookPosts.length,
+      posts_with_measured_engagement: measuredFacebookPosts.length,
+      minimum_required: minimumMeasuredPosts,
+      status: hasMeasuredFacebookEngagement ? "sufficient" : "insufficient"
+    },
     suggested_next_story_type: suggested,
     reason_why: stats.story_dna_count
       ? `Based on ${stats.story_dna_count} Story DNA patterns; decision signals come from ${facebookEvidence.length >= 10 ? `${facebookEvidence.length} own Facebook posts` : "available public research patterns"}. Strongest signals: emotion "${bestEmotion}", hook "${bestHook}", conflict "${bestConflict}", length "${bestLength}".`
