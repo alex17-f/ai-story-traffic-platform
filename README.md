@@ -151,6 +151,14 @@ npm install
 npm run db:migrate
 ```
 
+Before a production migration, create a transactional restore schema:
+
+```bash
+npm run db:restore-point
+```
+
+The command prints only the restore schema name and copied row counts. It never prints `DATABASE_URL`.
+
 This creates:
 
 - `stories`
