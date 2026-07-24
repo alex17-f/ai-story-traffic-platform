@@ -3357,10 +3357,17 @@ function buildFacebookFragmentRecommendation(posts = readFacebookPosts()) {
       };
     });
   const postsWithClicks = rows.filter((item) => item.clicks > 0).length;
+  const postsWithEngagement = rows.filter((item) =>
+    item.score > 0
+    || Number(item.likes_count || 0) > 0
+    || Number(item.comments_count || 0) > 0
+    || Number(item.shares_count || 0) > 0
+    || Number(item.reach_count || 0) > 0
+  ).length;
   const clickCoverage = rows.length ? postsWithClicks / rows.length : 0;
   const evidenceMode = trackedRows.length >= 3
     ? "website_continuation_clicks"
-    : (postsWithClicks >= 5 ? "meta_link_clicks" : "engagement_proxy");
+    : (postsWithClicks >= 5 ? "meta_link_clicks" : (postsWithEngagement >= 10 ? "engagement_proxy" : "structure_only"));
   const groups = facebookFragmentLengthBuckets.map((bucket) => {
     const items = rows.filter((item) => item.bucket === bucket.name);
     const trackedItems = trackedRows.filter((item) => item.bucket === bucket.name);
@@ -3395,7 +3402,9 @@ function buildFacebookFragmentRecommendation(posts = readFacebookPosts()) {
         ? avgTrackedClicks * 10 + avgScore
         : evidenceMode === "meta_link_clicks"
           ? avgClicks * 5 + avgScore
-          : avgScore
+          : evidenceMode === "engagement_proxy"
+            ? avgScore
+            : items.length
     };
   }).filter((item) => item.posts_count || item.tracked_packages_count);
   groups.sort((a, b) => b.ranking_score - a.ranking_score || (b.posts_count + b.tracked_packages_count) - (a.posts_count + a.tracked_packages_count));
@@ -3417,13 +3426,18 @@ function buildFacebookFragmentRecommendation(posts = readFacebookPosts()) {
       : 10;
   const sampleScore = Math.min(20, (best.posts_count + Number(best.tracked_packages_count || 0)) * 2);
   const rawConfidence = Math.min(100, volumeScore + coverageScore + sampleScore);
-  const confidence = evidenceMode === "engagement_proxy" ? Math.min(60, rawConfidence) : rawConfidence;
+  const confidence = evidenceMode === "engagement_proxy"
+    ? Math.min(60, rawConfidence)
+    : evidenceMode === "structure_only"
+      ? Math.min(35, rawConfidence)
+      : rawConfidence;
   return {
     status: rows.length || trackedRows.length ? "available" : "insufficient_data",
     evidence_mode: evidenceMode,
     source: trackedRows.length >= 3 ? "own_tracked_website_events" : (rows.length ? "own_facebook_posts" : "fallback_hypothesis"),
     posts_analyzed: rows.length,
     posts_with_link_clicks: postsWithClicks,
+    posts_with_engagement: postsWithEngagement,
     tracked_packages_analyzed: trackedRows.length,
     tracked_continuation_clicks: continuationClicks.length,
     click_data_coverage_percent: Math.round(clickCoverage * 100),
@@ -3441,7 +3455,9 @@ function buildFacebookFragmentRecommendation(posts = readFacebookPosts()) {
       ? "Recommendation prioritizes tracked continuation clicks linked to publishing packages."
       : evidenceMode === "meta_link_clicks"
         ? "Recommendation uses available Meta link-click signals from the connected Page."
-        : "Meta and website click data are insufficient. Length is ranked by engagement only, so confidence is capped at 60%."
+        : evidenceMode === "engagement_proxy"
+          ? "Meta and website click data are insufficient. Length is ranked by engagement only, so confidence is capped at 60%."
+          : "No usable click or engagement metrics are available. Length reflects only the dominant structure of historical posts, not proven performance, so confidence is capped at 35%."
   };
 }
 
