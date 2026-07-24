@@ -14472,8 +14472,9 @@ function readFacebookConnection(req) {
 function saveFacebookConnection(connection, res, req) {
   storageCache.facebookConnection = connection;
   writeJsonBackup(FACEBOOK_CONNECTION_FILE, connection);
-  persistFacebookConnection(connection);
+  const persisted = persistFacebookConnection(connection);
   if (res) setFacebookConnectionCookie(res, connection, req);
+  return persisted;
 }
 
 async function persistFacebookConnection(connection) {
@@ -15295,14 +15296,14 @@ async function loadAndSavePaginatedFacebookPosts({ selectedAttempt, pageAccessTo
   const stoppedByMaxPosts = Boolean(nextUrl && fetchedPosts.length >= maxPosts);
   const nextCursor = facebookPagingCursor(nextUrl);
   if (options.allPages && options.res && options.req) {
-    saveFacebookConnection({
+    await saveFacebookConnection({
       ...(refresh.connection || {}),
       posts_sync_cursor: nextCursor,
       posts_sync_edge: selectedAttempt.edge,
       posts_sync_field_profile: selectedAttempt.field_profile,
       posts_sync_complete: !nextUrl,
       posts_sync_updated_at: new Date().toISOString()
-    }, options.res, options.req);
+    }, null, options.req);
   }
   return {
     ok: true,
@@ -15718,14 +15719,14 @@ async function loadFacebookPosts(req, options = {}) {
       page_token_source: pageAccessTokenSource,
       reason: "stored_cursor_rejected"
     });
-    saveFacebookConnection({
+    await saveFacebookConnection({
       ...(refresh.connection || {}),
       posts_sync_cursor: "",
       posts_sync_edge: "",
       posts_sync_field_profile: "",
       posts_sync_complete: false,
       posts_sync_updated_at: new Date().toISOString()
-    }, options.res, req);
+    }, null, req);
     resumeCursor = "";
     selectedAttempt = await tryPostEdges("", facebookPostEndpointOrder, facebookPostFieldProfiles);
   }
