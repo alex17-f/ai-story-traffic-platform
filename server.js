@@ -4363,9 +4363,11 @@ function storyDnaFamilyStructure(text = "") {
 }
 
 function storyDnaDialogueDensity(text = "") {
-  const quotes = (String(text || "").match(/["“”«»]/g) || []).length;
-  const dialogueMarkers = (String(text || "").match(/\b(said|asked|answered|told|сказал|спросил|ответил)\b/gi) || []).length;
-  return Math.min(100, Math.round((quotes * 8) + (dialogueMarkers * 14)));
+  const clean = String(text || "");
+  const quotes = (clean.match(/["“”«»]/g) || []).length;
+  const dialogueMarkers = (clean.match(/\b(?:said|asked|answered|told)\b|(?:сказал(?:а|и)?|спросил(?:а|и)?|ответил(?:а|и)?|прошептал(?:а|и)?|произн[её]с(?:ла|ли)?)/gi) || []).length;
+  const dialogueLines = (clean.match(/(?:^|[:\n])\s*[-—]\s+/gm) || []).length;
+  return Math.min(100, Math.round((quotes * 8) + (dialogueMarkers * 14) + (dialogueLines * 8)));
 }
 
 function storyDnaLengthBucket(text = "") {
@@ -4605,7 +4607,7 @@ function styleBrainParagraphRhythm(paragraphs = []) {
 
 function styleBrainConflictSpeed(text = "") {
   const lower = String(text || "").toLowerCase();
-  const index = lower.search(/secret|truth|betray|inherit|argument|fight|silent|found|letter|phone|money|mother|son|daughter|ĐżŃ€Đ°Đ˛Đ´|Ń‚Đ°ĐąĐ˝|Đ¸Đ·ĐĽĐµĐ˝|Đ˝Đ°ŃĐ»ĐµĐ´|ŃŃĐľŃ€/i);
+  const index = lower.search(/secret|truth|betray|inherit|argument|fight|silent|found|letter|phone|money|mother|son|daughter|правд|тайн|измен|предател|наслед|ссор|документ|письм|телефон|деньг|мать|сын|дочь/i);
   if (index < 0) return 25;
   const ratio = index / Math.max(1, lower.length);
   if (ratio <= 0.08) return 92;
@@ -4617,23 +4619,25 @@ function styleBrainConflictSpeed(text = "") {
 function styleBrainHookStrength(text = "") {
   const hook = storyHook(text);
   const length = hook.length;
-  const concreteObject = /letter|envelope|photo|key|ring|receipt|phone|will|transfer|ĐżĐ¸ŃŃŚĐĽ|ĐşĐľĐ˝Đ˛ĐµŃ€Ń‚|Ń„ĐľŃ‚Đľ|ĐşĐ»ŃŽŃ‡|Ń‚ĐµĐ»ĐµŃ„ĐľĐ˝|Đ·Đ°Đ˛ĐµŃ‰/i.test(hook);
-  const hiddenTruth = /secret|truth|found|silent|suddenly|never|ĐżŃ€Đ°Đ˛Đ´|Ń‚Đ°ĐąĐ˝|Đ˝Đ°ŃĐ»|ĐĽĐľĐ»Ń‡|Đ˛Đ´Ń€ŃĐł/i.test(hook);
-  const family = /mother|father|son|daughter|husband|wife|family|ĐĽĐ°Ń‚ŃŚ|ĐľŃ‚ĐµŃ†|ŃŃ‹Đ˝|Đ´ĐľŃ‡ŃŚ|ĐĽŃĐ¶|Đ¶ĐµĐ˝|ŃĐµĐĽŃŚ/i.test(hook);
+  const concreteObject = /letter|envelope|photo|key|ring|receipt|phone|will|transfer|письм|конверт|фото|ключ|кольц|квитанц|телефон|завещ|документ|календар|подпис|сообщен/i.test(hook);
+  const hiddenTruth = /secret|truth|found|silent|suddenly|never|правд|тайн|наш[её]л|нашла|молч|вдруг|почему|кто такая|чей|не могла/i.test(hook);
+  const family = /mother|father|son|daughter|husband|wife|family|мать|отец|сын|дочь|муж|жена|семь|свекров|брат|сестр/i.test(hook);
   const question = /\?/.test(hook);
-  const goodLength = length >= 70 && length <= 240;
-  return clampStyleScore(22 + (concreteObject ? 22 : 0) + (hiddenTruth ? 24 : 0) + (family ? 16 : 0) + (question ? 8 : 0) + (goodLength ? 10 : 0));
+  const directDialogue = /^\s*[-—]|["“«]/.test(hook);
+  const immediateConflict = /don't|do not|why|whose|not true|не выключай|почему|чей|не могла|правда|подпись|имя|другая семья/i.test(hook);
+  const goodLength = length >= 45 && length <= 240;
+  return clampStyleScore(18 + (concreteObject ? 22 : 0) + (hiddenTruth ? 22 : 0) + (family ? 14 : 0) + (question ? 8 : 0) + (directDialogue ? 18 : 0) + (immediateConflict ? 14 : 0) + (goodLength ? 8 : 0));
 }
 
 function styleBrainTwistStrength(text = "") {
-  return scoreFromMatches(text, ["secret", "truth", "found", "letter", "envelope", "turned out", "actually", "will", "confession", "неожиданно", "правда", "тайна"], 28, 8);
+  return scoreFromMatches(text, ["secret", "truth", "found", "letter", "envelope", "turned out", "actually", "will", "confession", "неожиданно", "оказалось", "правда", "тайна", "письмо", "документ", "признался", "выяснилось"], 28, 7);
 }
 
 function styleBrainEndingStrength(text = "") {
   const paragraphs = styleBrainParagraphs(text);
   const ending = paragraphs[paragraphs.length - 1] || String(text || "").slice(-420);
   return clampStyleScore(
-    scoreFromMatches(ending, ["forgive", "hope", "understood", "truth", "stayed", "returned", "простил", "надежда", "поняла", "вернулся"], 34, 8)
+    scoreFromMatches(ending, ["forgive", "hope", "understood", "truth", "stayed", "returned", "простил", "надежда", "поняла", "вернулся", "честность", "правду", "вместе", "помнить", "помощь"], 34, 7)
     - (/moral|lesson|вывод|урок/i.test(ending) ? 6 : 0)
   );
 }
@@ -4699,7 +4703,7 @@ function styleBrainProfileFromText({ source_type, source_reference, text, score_
     dialogue_density: dialogueDensity,
     sentence_rhythm: styleBrainSentenceRhythm(styleBrainAverageSentenceWords(sentences)),
     paragraph_rhythm: styleBrainParagraphRhythm(paragraphs),
-    emotional_intensity: scoreFromMatches(clean, ["secret", "betrayal", "truth", "tears", "silent", "shame", "hope", "family", "тайна", "слез", "молч", "надежда"], 34, 7),
+    emotional_intensity: scoreFromMatches(clean, ["secret", "betrayal", "truth", "tears", "silent", "shame", "hope", "family", "тайна", "правда", "слез", "молч", "стыд", "страх", "боль", "обман", "надежда", "семья", "помощь", "плакала"], 34, 6),
     emotion_curve: storyDnaEmotionCurve(clean, emotion),
     conflict_speed: conflictSpeed,
     twist_strength: twistStrength,
@@ -5766,10 +5770,11 @@ function editorialCountPatterns(text = "", patterns = []) {
 function editorialWeakestParagraph(paragraphs = []) {
   if (!paragraphs.length) return { index: 0, text: "", reason: "No paragraphs were available." };
   const scored = paragraphs.map((paragraph, index) => {
-    const lengthPenalty = paragraph.length > 520 ? 28 : paragraph.length < 80 ? 18 : 0;
-    const dialogueBoost = /["“”]/.test(paragraph) ? 12 : 0;
-    const detailBoost = editorialCountPatterns(paragraph, [/kitchen/i, /table/i, /letter/i, /cup/i, /door/i, /hands/i, /tea/i, /room/i]) * 4;
-    const tensionBoost = editorialCountPatterns(paragraph, [/secret/i, /silent/i, /truth/i, /afraid/i, /blamed/i, /confession/i, /шок/i, /тайн/i, /молч/i]) * 5;
+    const hasDialogue = /["“”«»]|^\s*[-—]\s+/.test(paragraph);
+    const lengthPenalty = paragraph.length > 520 ? 28 : paragraph.length < 45 && !hasDialogue ? 18 : 0;
+    const dialogueBoost = hasDialogue ? 12 : 0;
+    const detailBoost = editorialCountPatterns(paragraph, [/kitchen/i, /table/i, /letter/i, /cup/i, /door/i, /hands/i, /tea/i, /room/i, /кухн/i, /стол/i, /письм/i, /чашк/i, /двер/i, /ладон/i, /чай/i, /комнат/i]) * 4;
+    const tensionBoost = editorialCountPatterns(paragraph, [/secret/i, /silent/i, /truth/i, /afraid/i, /blamed/i, /confession/i, /шок/i, /тайн/i, /молч/i, /правд/i, /боял/i, /обман/i, /подпись/i]) * 5;
     return {
       index,
       text: paragraph,
@@ -5779,7 +5784,7 @@ function editorialWeakestParagraph(paragraphs = []) {
   const weakest = scored.sort((a, b) => a.score - b.score)[0];
   const reason = weakest.text.length > 520
     ? "Too dense for mobile reading."
-    : /["“”]/.test(weakest.text)
+    : /["“”«»]|^\s*[-—]\s+/.test(weakest.text)
       ? "Dialogue is present, but the paragraph can carry more consequence."
       : "Needs a sharper concrete detail, dialogue beat or emotional turn.";
   return { index: weakest.index + 1, text: weakest.text, reason };
@@ -5872,9 +5877,9 @@ async function createEditorialReviewForDraft(ref = "1", options = {}) {
   const endingParagraph = paragraphs[paragraphs.length - 1] || "";
   const hookScore = clampStyleScore(
     Number(styleProfile.hook_strength || 0) * 0.55
-    + (firstParagraph.length >= 80 && firstParagraph.length <= 420 ? 18 : 6)
-    + (/[?"“”]/.test(firstParagraph) ? 10 : 0)
-    + editorialCountPatterns(firstParagraph, [/secret/i, /silent/i, /truth/i, /letter/i, /money/i, /family/i, /тайн/i, /молч/i]) * 4
+    + (firstParagraph.length >= 45 && firstParagraph.length <= 420 ? 18 : 6)
+    + (/[?"“”«»]|^\s*[-—]\s+/.test(firstParagraph) ? 10 : 0)
+    + editorialCountPatterns(firstParagraph, [/secret/i, /silent/i, /truth/i, /letter/i, /money/i, /family/i, /тайн/i, /молч/i, /правд/i, /письм/i, /деньг/i, /семь/i, /подпись/i, /фото/i, /сообщен/i]) * 4
   );
   const openingScore = clampStyleScore(
     hookScore * 0.55
@@ -5888,7 +5893,7 @@ async function createEditorialReviewForDraft(ref = "1", options = {}) {
     + Number(emotionTimeline?.emotion_volatility || 0) * 0.15
     + editorialCountPatterns(text, [/shock/i, /betrayal/i, /hope/i, /relief/i, /anger/i, /sadness/i, /truth/i, /боль/i, /надеж/i, /правд/i]) * 3
   );
-  const dialogueScore = clampStyleScore(dialogueDensity * 1.2 + (/["“”]/.test(text) ? 18 : 0));
+  const dialogueScore = clampStyleScore(dialogueDensity * 1.2 + (/["“”«»]|(?:^|[:\n])\s*[-—]\s+/m.test(text) ? 18 : 0));
   const rhythmScore = clampStyleScore(
     (paragraphs.length >= 5 ? 28 : paragraphs.length * 5)
     + (averageSentenceWords >= 7 && averageSentenceWords <= 19 ? 28 : 14)
@@ -5897,19 +5902,19 @@ async function createEditorialReviewForDraft(ref = "1", options = {}) {
   );
   const twistScore = clampStyleScore(
     Number(styleProfile.twist_strength || 0) * 0.5
-    + editorialCountPatterns(text, [/then/i, /finally/i, /suddenly/i, /secret/i, /truth/i, /confession/i, /nobody expected/i, /оказалось/i, /вдруг/i, /тайн/i]) * 7
+    + editorialCountPatterns(text, [/then/i, /finally/i, /suddenly/i, /secret/i, /truth/i, /confession/i, /nobody expected/i, /оказалось/i, /вдруг/i, /тайн/i, /выяснилось/i, /признал/i, /документ/i, /письм/i]) * 7
     + (paragraphs.length >= 6 ? 12 : 5)
   );
   const endingScore = clampStyleScore(
     Number(styleProfile.ending_strength || 0) * 0.5
     + Number(emotionTimeline?.reader_recovery || 0) * 0.2
     + (endingParagraph.length >= 80 && endingParagraph.length <= 420 ? 18 : 8)
-    + (editorialCountPatterns(endingParagraph, [/relief/i, /hope/i, /truth/i, /stayed/i, /forgive/i, /надеж/i, /прост/i, /правд/i]) * 5)
+    + (editorialCountPatterns(endingParagraph, [/relief/i, /hope/i, /truth/i, /stayed/i, /forgive/i, /надеж/i, /прост/i, /правд/i, /честност/i, /вместе/i, /помнить/i, /помощ/i]) * 5)
   );
   const humanScore = clampStyleScore(
     Number(styleProfile.human_realism_score || 0) * 0.65
     + dialogueScore * 0.15
-    + editorialCountPatterns(text, [/tea/i, /table/i, /cup/i, /hands/i, /kitchen/i, /chair/i, /rain/i, /door/i, /чай/i, /стол/i, /рук/i, /кухн/i]) * 3
+    + editorialCountPatterns(text, [/tea/i, /table/i, /cup/i, /hands/i, /kitchen/i, /chair/i, /rain/i, /door/i, /чай/i, /стол/i, /чашк/i, /ладон/i, /рук/i, /кухн/i, /стул/i, /дожд/i, /двер/i, /коридор/i]) * 3
   );
   const facebookScore = clampStyleScore(
     Number(styleProfile.facebook_readability_score || 0) * 0.6
@@ -8569,6 +8574,156 @@ function buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, k
   };
 }
 
+function buildRussianGeneratedStoryText({ diversity, emotion, length }) {
+  const frames = {
+    first_person_confession: {
+      title: "Лариса услышала голосовое сообщение мужа и потребовала всей правды",
+      paragraphs: [
+        "- Не выключай, - сказала Лариса. - Я хочу услышать до конца.",
+        "На кухне остывал борщ, у батареи сохли детские варежки, а телефон лежал между ними экраном вверх. Чужой женский голос благодарил Виктора за деньги и просил больше не звонить после девяти.",
+        "Последние полгода муж задерживался и снимал наличные. Лариса уже приготовилась услышать признание в измене, но Виктор ответил: - Это моя сестра. Та, о которой отец запретил говорить.",
+        "Он достал квитанции из онкологического центра. Все переводы уходили на лечение женщины, которую семья когда-то вычеркнула из жизни за брак без родительского разрешения.",
+        "Ларису обожгло не то, что муж помогал сестре. Больнее было другое: он решил, что её доверие проще обмануть, чем попросить о помощи.",
+        "Они не помирились за один вечер. Сначала позвонили сестре, затем вместе составили план лечения и только после этого вернулись к разговору о лжи.",
+        "Перед сном Лариса положила квитанции рядом с семейными фотографиями. - Завтра начнём с правды, - сказала она. - Без неё дальше не будет ничего."
+      ],
+      moral: "Доверие возвращают не обещаниями, а правдой и поступками."
+    },
+    family_secret_dialogue: {
+      title: "За семейным ужином Тамара назвала одно имя, и свекровь уронила ложку",
+      paragraphs: [
+        "- Кто такая Анна Сергеевна? - спросила Тамара, положив на стол старый календарь.",
+        "За окном гремел дождь. На клеёнке стояла миска с тёплой картошкой, но никто больше не ел. Напротив каждого первого числа двадцать лет подряд стояла одна и та же буква.",
+        "Свекровь всегда говорила, что её сын был единственным ребёнком. Однако в коробке нашлось свидетельство о рождении девочки с той же фамилией.",
+        "Анна оказалась старшей дочерью, которую в молодости отдали бездетной тётке. После ссоры ей запретили возвращаться, но мать тайно переводила деньги.",
+        "Сын решил, что неизвестной сестре оставили наследство. Но в папке лежал её отказ от доли в квартире. Анна просила лишь одну встречу и фотографию отца.",
+        "Свекровь впервые плакала не от обиды, а от стыда. Тамара придвинула к ней телефон и набрала номер, написанный на обороте календаря.",
+        "Когда ответили, свекровь не стала оправдываться. Она сказала только: - Аня, это мама. Если ещё не поздно, я хочу тебя услышать."
+      ],
+      moral: "Иногда семье нужна смелость произнести забытое имя."
+    },
+    object_reveal: {
+      title: "Софья нашла гостиничный ключ, но правда оказалась сложнее измены",
+      paragraphs: [
+        "Пластиковая карточка с номером гостиницы выпала из пальто мужа прямо на пол.",
+        "Софья подняла её двумя пальцами. В прихожей пахло мокрой шерстью, а Геннадий замер у двери, не успев снять ботинки.",
+        "Последние недели он возвращался поздно. - Теперь доказательство есть, - сказала она. - Чей это номер? Геннадий побледнел: - Моего сына.",
+        "Сын от первого брака потерял работу и документы, а теперь пытался справиться с зависимостью. Геннадий снимал ему дешёвый номер и скрывал это по его просьбе.",
+        "Помощь сыну не была предательством. Но ложь каждый вечер делала Софью чужой в собственном доме.",
+        "Наутро они поехали в гостиницу вместе. Софья нашла врача и поставила условие: лечение, честные разговоры и никаких тайных денег.",
+        "Карточку она оставила у зеркала. Не как улику измены, а как напоминание: страх за близкого не даёт права лгать другому близкому."
+      ],
+      moral: "Сочувствие не отменяет честности, а честность не отменяет помощи."
+    },
+    courtroom_memory: {
+      title: "В коридоре суда Ольга увидела подпись брата под старым документом",
+      paragraphs: [
+        "- Это твоя подпись? - спросила Ольга и развернула копию так, чтобы брат не мог отвести взгляд.",
+        "По коридору ходили люди с папками и стаканчиками кофе. Документ лишал их мать права на половину дома, хотя Сергей годами винил во всём старые долги.",
+        "- Мне сказали, что так будет лучше, - ответил брат. - Для всех или для тебя? - спросила Ольга.",
+        "В записке нотариуса говорилось: мать отказывалась от доли временно, пока Сергей оформлял кредит. Дом он продал, но деньги отдал на срочную операцию маленькой дочери Ольги.",
+        "Правда не сделала его поступок честным. Она лишь объяснила, почему мать до смерти защищала сына и запрещала говорить о цене спасённой жизни.",
+        "Ольга вышла на лестницу, затем вернулась. - Долг можно было разделить. Ты разделил только вину.",
+        "Она предложила брату самому рассказать взрослой племяннице правду. На этот раз семья должна была выжить без удобного молчания."
+      ],
+      moral: "Благородная причина не превращает чужое решение в своё."
+    },
+    hospital_or_letter_reveal: {
+      title: "В больничной папке Валентина нашла письмо, которое сын скрывал двенадцать лет",
+      paragraphs: [
+        "- Почему здесь имя моего отца? - спросила Валентина у сына, сжимая выписку.",
+        "В коридоре пахло лекарствами и яблоками из чьей-то сумки. Сын сидел на пластиковом стуле и тёр ладонью лоб.",
+        "Отец якобы ушёл из семьи, когда Валентине было десять. Но в папке лежали квитанции за лечение матери и его письма: он приезжал каждый месяц, а мать запрещала встречаться с дочерью.",
+        "Сын знал правду с шестнадцати лет. Бабушка заставила его пообещать, что он не разрушит её версию прошлого.",
+        "Последнее письмо не просило прощения. В нём был адрес дома и одна фраза: «Пусть Валя хотя бы узнает, что я не забыл».",
+        "По адресу дом оказался пустым, но соседка вынесла коробку с детскими фотографиями Валентины.",
+        "Она взяла одну фотографию и сказала сыну: - Семейные тайны заканчиваются здесь. Моим внукам мы будем говорить правду."
+      ],
+      moral: "Чужая обида не должна становиться наследством для детей."
+    },
+    neighbor_witness: {
+      title: "Соседка рассказала Татьяне, кто на самом деле ухаживал за её матерью",
+      paragraphs: [
+        "- Таня, ты правда думаешь, что брат ухаживал за мамой один? - спросила соседка у лифта.",
+        "Из квартиры уже вынесли мебель, но возле двери оставался старый коврик. После похорон брат потребовал большую часть наследства за три года ухода.",
+        "Соседка достала тетрадь. Она записывала показания счётчиков и дни, когда приходила социальная работница.",
+        "Брат навещал мать раз в неделю, а основную заботу взяла на себя женщина из соседнего района. Но и брат каждый месяц привозил продукты, хотя боялся вида крови и не умел менять повязки.",
+        "Татьяна отказалась делить людей на героев и злодеев. У нотариуса она показала записи и предложила считать только реальные расходы.",
+        "Брат долго молчал, затем убрал из заявления лишнюю сумму. Его заслуга была настоящей, но не такой большой, как его рассказ.",
+        "Уходя, Татьяна вернула соседке тетрадь. - Спасибо. Маме была нужна помощь, а нам теперь нужна честность."
+      ],
+      moral: "Свидетель правды иногда важнее громких семейных заслуг."
+    },
+    child_question_hook: {
+      title: "Один вопрос внука заставил Марту достать старый семейный фотоальбом",
+      paragraphs: [
+        "- Бабушка, почему папа на этой фотографии называет другую женщину мамой? - спросил семилетний Миша.",
+        "Марта замерла с чашкой в руке. На столе остывали сырники, а её взрослый сын Андрей слишком быстро закрыл альбом.",
+        "На снимке рядом с мальчиком стояла молодая женщина, удивительно похожая на Марту. На обороте была дата за год до официального рождения Андрея.",
+        "Женщина оказалась сестрой Марты. Она родила совсем юной, а семья записала ребёнка на Марту, чтобы избежать пересудов. Через несколько лет сестра погибла.",
+        "Андрей знал правду с шестнадцати лет и молчал, чтобы не ранить женщину, которая его вырастила. Но молчание превратило любовь в постоянный страх.",
+        "- Я боялась, что ты перестанешь считать меня мамой, - сказала Марта. - А я боялся, что ты перестанешь считать меня своим, - ответил Андрей.",
+        "Миша снова открыл альбом. - Значит, у папы было две мамы? Марта кивнула: - Да. И сегодня мы наконец можем помнить обеих."
+      ],
+      moral: "Правда не уменьшает любовь, если любовь была настоящей."
+    },
+    inheritance_document_twist: {
+      title: "У нотариуса Наталья заметила исправленную дату в завещании матери",
+      paragraphs: [
+        "- Мама не могла подписать это в четверг. В четверг она была без сознания, - сказала Наталья.",
+        "В кабинете щёлкали старые часы. По завещанию дом переходил брату, хотя мать обещала дочери комнату с семейными письмами.",
+        "Экспертиза подтвердила подпись, но дату дописали другой ручкой. Брат признался, что перенёс число, чтобы документ приняли без новой справки.",
+        "Главная неожиданность была в приложении: мать оставила дом сыну, потому что Наталье раньше тайно купила квартиру после развода.",
+        "Подделанная дата оставалась нарушением. Однако спор о любви оказался сложнее спора о собственности.",
+        "Наталья предложила оформить всё законно и передать ей коробки с письмами. Брат впервые за вечер посмотрел ей в глаза и согласился.",
+        "У выхода она сказала: - Дом остаётся тебе. Но больше не исправляй прошлое ручкой. Оно всё равно проступает через бумагу."
+      ],
+      moral: "Наследство показывает не только цену вещей, но и цену семейной честности."
+    },
+    old_photo_reveal: {
+      title: "Дата на старой фотографии изменила память Нины об отце",
+      paragraphs: [
+        "Дата на обороте фотографии была написана почерком отца. В тот день он якобы находился в другом городе.",
+        "Нина сидела у старого шкафа. На снимке отец держал за руку мальчика, а старшая сестра просила убрать фотографию обратно.",
+        "- У папы была другая семья? - спросила Нина. Сестра ответила: - У него был сын до брака с мамой.",
+        "Мальчик тяжело болел. Отец ездил к нему много лет и скрывал это, потому что мать Нины поставила условие: новая семья или прошлое.",
+        "Сестра рассказала, что мальчик умер подростком, а отец после этого больше никогда не праздновал день рождения.",
+        "Они написали его матери без обвинений. Через неделю пришёл конверт с копией той же фотографии и коротким спасибо за память.",
+        "Нина поставила снимок на полку. Отец оказался не безупречным, но впервые стал для неё живым человеком."
+      ],
+      moral: "Правда о близком иногда не разрушает память, а возвращает ей человеческое лицо."
+    },
+    missed_call_or_voice_message: {
+      title: "Пропущенный звонок вывел Елену на тайну, которую муж скрывал несколько месяцев",
+      paragraphs: [
+        "Телефон мужа снова высветил незнакомый номер. На этот раз Елена услышала голосовое сообщение.",
+        "Женщина просила срочно привезти документы на ребёнка. В комнате работал телевизор, но Елена слышала только собственное дыхание.",
+        "- Сколько лет ребёнку? - спросила она, когда муж вошёл. Он прислонился к двери. - Двенадцать.",
+        "Это была дочь погибшего друга. Муж когда-то обещал помогать семье, но скрывал переводы, боясь, что Елена будет против.",
+        "Елена попросила показать переписку и познакомить её с матерью девочки. Та пыталась вернуть часть денег, а муж отказывался.",
+        "Тайная история оказалась не романом, а плохо устроенной добротой. Но добрый поступок не отменял месяцев лжи.",
+        "Домой Елена вернулась поздно. - Помогать будем вместе. Но следующую тайну ты будешь объяснять уже закрытой двери."
+      ],
+      moral: "Добрый поступок перестаёт быть добрым к семье, если ради него приходится лгать."
+    }
+  };
+  const frame = frames[diversity.frame_id] || frames.object_reveal;
+  const paragraphCount = length === "short" ? 5 : frame.paragraphs.length;
+  const selected = frame.paragraphs.slice(0, paragraphCount);
+  if (selected[selected.length - 1] !== frame.paragraphs[frame.paragraphs.length - 1]) {
+    selected[selected.length - 1] = frame.paragraphs[frame.paragraphs.length - 1];
+  }
+  return {
+    title: frame.title,
+    hook: frame.paragraphs.slice(0, 2).join("\n\n"),
+    full_story: selected.join("\n\n"),
+    moral: frame.moral,
+    target_length: storyLengthPlan(length).target,
+    keyword_note: "",
+    emotion
+  };
+}
+
 function storyCategoryProfile(category, seed) {
   const normalized = normalizeResearchCategory(category);
   const profiles = {
@@ -8676,8 +8831,11 @@ function researchKeywordBlend(signals) {
   return words.slice(0, 10);
 }
 
-function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance = {}, emotionGuidance = {}, diversity = null }) {
+function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, styleGuidance = {}, emotionGuidance = {}, diversity = null, language = "ru" }) {
   if (diversity?.frame_id) {
+    if (String(language || "ru").toLowerCase().startsWith("ru")) {
+      return buildRussianGeneratedStoryText({ diversity, emotion, length });
+    }
     return buildDiverseGeneratedStoryText({ profile, diversity, emotion, length, keywords, styleGuidance, emotionGuidance });
   }
   const plan = storyLengthPlan(length);
@@ -9718,6 +9876,7 @@ function viralPredictionScore(researchSignals, facebookSignals, length) {
 async function generateOriginalStoryV2(payload = {}) {
   const category = normalizeResearchCategory(payload.category || "betrayal");
   const length = normalizeGeneratedLength(payload.length || "medium");
+  const language = String(payload.language || "ru").toLowerCase().startsWith("en") ? "en" : "ru";
   let researchSignals = topResearchSignalsForStory(category, 8);
   if (!researchSignals.some((item) => item.source_status === "live_search")) {
     await runInternetStoryResearch({ category, limit: 20 });
@@ -9760,7 +9919,8 @@ async function generateOriginalStoryV2(payload = {}) {
       keywords,
       styleGuidance,
       emotionGuidance,
-      diversity
+      diversity,
+      language
     });
     const generationSimilarity = {
       ...generatedStorySimilarityCheck({
@@ -9798,6 +9958,7 @@ async function generateOriginalStoryV2(payload = {}) {
     category,
     emotion,
     length,
+    language,
     hook: draft.hook,
     full_story: draft.full_story,
     moral: draft.moral,

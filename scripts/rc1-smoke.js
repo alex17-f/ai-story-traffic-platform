@@ -93,6 +93,8 @@ async function run() {
     count: 1
   });
   check("story generation", generated.status === 200 && generated.data.ok && generated.data.story?.id);
+  check("Russian story language", generated.data.story?.language === "ru");
+  check("Russian story content", /\p{Script=Cyrillic}/u.test(`${generated.data.story?.title || ""} ${generated.data.story?.full_story || ""}`));
   const draftId = generated.data.story.id;
 
   const editorial = await post("/api/editorial-board/review", { draft_id: draftId });
