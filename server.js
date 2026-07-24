@@ -2736,7 +2736,9 @@ function metaConfigSummary(req) {
       connected: config.configured,
       oauth_connected: config.oauth_connected,
       page_id: config.page_id,
-      page_name: config.page_name
+      page_name: config.page_name,
+      page_category: config.page_category,
+      object_type: config.object_type
     }
   };
 }
