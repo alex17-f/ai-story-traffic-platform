@@ -1,6 +1,7 @@
 .env
 .env.*
 !.env.example
+.vercel/
 data/facebook_connection.local.json
 node_modules/
 work/

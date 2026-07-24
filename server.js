@@ -18,6 +18,7 @@ const STORY_IDEAS_FILE = path.join(ROOT, "data", "story_ideas.json");
 const IMAGE_QUEUE_FILE = path.join(ROOT, "data", "image_queue.json");
 const GENERATED_IMAGES_FILE = path.join(ROOT, "data", "generated_images.json");
 const VISUAL_CONCEPTS_FILE = path.join(ROOT, "data", "visual_concepts.json");
+const VISUAL_QUALITY_REVIEWS_FILE = path.join(ROOT, "data", "visual_quality_reviews.json");
 const CONTENT_PLAN_FILE = path.join(ROOT, "data", "content_plan.json");
 const SCHEDULED_POSTS_FILE = path.join(ROOT, "data", "scheduled_posts.json");
 const PUBLISHING_PACKAGES_FILE = path.join(ROOT, "data", "publishing_packages.json");
@@ -361,6 +362,17 @@ async function writeVisualConcepts(items) {
   return items;
 }
 
+function readVisualQualityReviews() {
+  return storageCache.visualQualityReviews || [];
+}
+
+async function writeVisualQualityReviews(items) {
+  storageCache.visualQualityReviews = items;
+  writeJsonBackup(VISUAL_QUALITY_REVIEWS_FILE, items);
+  await persistVisualQualityReviews(items);
+  return items;
+}
+
 function readContentPlan() {
   return readAutopilotV1Collection("contentPlan", "content_plan");
 }
@@ -509,6 +521,7 @@ const storageCache = {
   imageQueue: readJsonArray(IMAGE_QUEUE_FILE),
   generatedImages: readJsonArray(GENERATED_IMAGES_FILE),
   visualConcepts: readJsonArray(VISUAL_CONCEPTS_FILE),
+  visualQualityReviews: readJsonArray(VISUAL_QUALITY_REVIEWS_FILE),
   contentPlan: readJsonArray(CONTENT_PLAN_FILE),
   scheduledPosts: readJsonArray(SCHEDULED_POSTS_FILE),
   publishingPackages: readJsonArray(PUBLISHING_PACKAGES_FILE),
@@ -591,6 +604,7 @@ async function initializeStorage() {
     await ensureImageQueueTable();
     await ensureGeneratedImagesTable();
     await ensureVisualConceptsTable();
+    await ensureVisualQualityReviewsTable();
     await ensureScheduledPostsTable();
     await ensurePublishingPackagesTable();
     await ensurePrepublishPreviewsTable();
@@ -615,6 +629,7 @@ async function initializeStorage() {
     storageCache.imageQueue = (await pgPool.query("select * from image_queue order by created_at desc limit 300")).rows.map(normalizeImageQueueRow);
     storageCache.generatedImages = (await pgPool.query("select * from generated_images order by created_at desc limit 300")).rows.map(normalizeGeneratedImageRow);
     storageCache.visualConcepts = (await pgPool.query("select * from visual_concepts order by created_at desc limit 500")).rows.map(normalizeVisualConceptRow);
+    storageCache.visualQualityReviews = (await pgPool.query("select * from visual_quality_reviews order by created_at desc limit 500")).rows.map(normalizeVisualQualityReviewRow);
     storageCache.scheduledPosts = (await pgPool.query("select * from scheduled_posts order by scheduled_time asc, created_at desc limit 300")).rows;
     storageCache.publishingPackages = (await pgPool.query("select * from publishing_packages order by created_at desc limit 300")).rows;
     storageCache.prepublishPreviews = (await pgPool.query("select * from prepublish_previews order by created_at desc limit 300")).rows.map(normalizePrepublishPreviewRow);
@@ -851,6 +866,32 @@ async function ensureVisualConceptsTable() {
   `);
 }
 
+async function ensureVisualQualityReviewsTable() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    create table if not exists visual_quality_reviews (
+      id text primary key,
+      visual_concept_id text not null,
+      package_id text,
+      draft_id text,
+      visual_quality_score integer not null default 0,
+      artifact_risk text not null default 'medium',
+      thumbnail_strength integer not null default 0,
+      emotion_clarity integer not null default 0,
+      recommendation text not null default 'needs_prompt_edit',
+      issues_json jsonb not null default '[]'::jsonb,
+      suggestions_json jsonb not null default '[]'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists visual_quality_reviews_concept_idx on visual_quality_reviews (visual_concept_id);
+    create index if not exists visual_quality_reviews_package_idx on visual_quality_reviews (package_id);
+    create index if not exists visual_quality_reviews_draft_idx on visual_quality_reviews (draft_id);
+    create index if not exists visual_quality_reviews_recommendation_idx on visual_quality_reviews (recommendation);
+    create index if not exists visual_quality_reviews_score_idx on visual_quality_reviews (visual_quality_score desc);
+    create index if not exists visual_quality_reviews_created_at_idx on visual_quality_reviews (created_at desc);
+  `);
+}
+
 async function ensureScheduledPostsTable() {
   if (!pgPool) return;
   await pgPool.query(`
@@ -904,6 +945,9 @@ async function ensurePrepublishPreviewsTable() {
       image_prompt_id text,
       visual_concept_id text,
       preferred_image_prompt text,
+      visual_quality_review_id text,
+      visual_quality_score integer not null default 0,
+      visual_quality_recommendation text,
       scheduled_time timestamptz,
       safety_score integer not null default 0,
       editorial_score integer not null default 0,
@@ -915,8 +959,12 @@ async function ensurePrepublishPreviewsTable() {
     );
     alter table prepublish_previews add column if not exists visual_concept_id text;
     alter table prepublish_previews add column if not exists preferred_image_prompt text;
+    alter table prepublish_previews add column if not exists visual_quality_review_id text;
+    alter table prepublish_previews add column if not exists visual_quality_score integer not null default 0;
+    alter table prepublish_previews add column if not exists visual_quality_recommendation text;
     create index if not exists prepublish_previews_package_idx on prepublish_previews (package_id);
     create index if not exists prepublish_previews_visual_concept_idx on prepublish_previews (visual_concept_id);
+    create index if not exists prepublish_previews_visual_quality_idx on prepublish_previews (visual_quality_score desc);
     create index if not exists prepublish_previews_created_at_idx on prepublish_previews (created_at desc);
     create index if not exists prepublish_previews_readiness_idx on prepublish_previews (readiness_score desc);
   `);
@@ -1588,6 +1636,60 @@ async function persistVisualConcepts(items) {
   }
 }
 
+function normalizeVisualQualityReviewRow(row = {}) {
+  return {
+    ...row,
+    visual_quality_score: Number(row.visual_quality_score || 0),
+    thumbnail_strength: Number(row.thumbnail_strength || 0),
+    emotion_clarity: Number(row.emotion_clarity || 0),
+    issues_json: Array.isArray(row.issues_json) ? row.issues_json : [],
+    suggestions_json: Array.isArray(row.suggestions_json) ? row.suggestions_json : []
+  };
+}
+
+async function persistVisualQualityReviews(items) {
+  if (!pgPool) return;
+  try {
+    await ensureVisualQualityReviewsTable();
+    for (const item of items) {
+      await pgPool.query(
+        `insert into visual_quality_reviews (
+          id, visual_concept_id, package_id, draft_id, visual_quality_score,
+          artifact_risk, thumbnail_strength, emotion_clarity, recommendation,
+          issues_json, suggestions_json, created_at
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        on conflict (id) do update set
+          visual_concept_id = excluded.visual_concept_id,
+          package_id = excluded.package_id,
+          draft_id = excluded.draft_id,
+          visual_quality_score = excluded.visual_quality_score,
+          artifact_risk = excluded.artifact_risk,
+          thumbnail_strength = excluded.thumbnail_strength,
+          emotion_clarity = excluded.emotion_clarity,
+          recommendation = excluded.recommendation,
+          issues_json = excluded.issues_json,
+          suggestions_json = excluded.suggestions_json`,
+        [
+          item.id || crypto.randomUUID(),
+          item.visual_concept_id || "",
+          item.package_id || "",
+          item.draft_id || "",
+          Number(item.visual_quality_score || 0),
+          item.artifact_risk || "medium",
+          Number(item.thumbnail_strength || 0),
+          Number(item.emotion_clarity || 0),
+          item.recommendation || "needs_prompt_edit",
+          JSON.stringify(Array.isArray(item.issues_json) ? item.issues_json : []),
+          JSON.stringify(Array.isArray(item.suggestions_json) ? item.suggestions_json : []),
+          pgColumnDate(item.created_at)
+        ]
+      );
+    }
+  } catch (error) {
+    console.warn(`PostgreSQL visual_quality_reviews persist failed: ${error.message}`);
+  }
+}
+
 async function persistScheduledPosts(items) {
   if (!pgPool) return;
   try {
@@ -1682,6 +1784,7 @@ function normalizePrepublishPreviewRow(row = {}) {
     safety_score: Number(row.safety_score || 0),
     editorial_score: Number(row.editorial_score || 0),
     readiness_score: Number(row.readiness_score || 0),
+    visual_quality_score: Number(row.visual_quality_score || 0),
     risk_warnings_json: Array.isArray(row.risk_warnings_json) ? row.risk_warnings_json : [],
     checklist_json: Array.isArray(row.checklist_json) ? row.checklist_json : []
   };
@@ -1694,16 +1797,21 @@ async function persistPrepublishPreviews(items) {
     for (const item of items) {
       await pgPool.query(
         `insert into prepublish_previews (
-          id, package_id, post_text, image_prompt_id, visual_concept_id, preferred_image_prompt, scheduled_time, safety_score,
+          id, package_id, post_text, image_prompt_id, visual_concept_id, preferred_image_prompt,
+          visual_quality_review_id, visual_quality_score, visual_quality_recommendation,
+          scheduled_time, safety_score,
           editorial_score, readiness_score, expected_reaction, risk_warnings_json,
           checklist_json, created_at
-        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
         on conflict (id) do update set
           package_id = excluded.package_id,
           post_text = excluded.post_text,
           image_prompt_id = excluded.image_prompt_id,
           visual_concept_id = excluded.visual_concept_id,
           preferred_image_prompt = excluded.preferred_image_prompt,
+          visual_quality_review_id = excluded.visual_quality_review_id,
+          visual_quality_score = excluded.visual_quality_score,
+          visual_quality_recommendation = excluded.visual_quality_recommendation,
           scheduled_time = excluded.scheduled_time,
           safety_score = excluded.safety_score,
           editorial_score = excluded.editorial_score,
@@ -1718,6 +1826,9 @@ async function persistPrepublishPreviews(items) {
           item.image_prompt_id || "",
           item.visual_concept_id || "",
           item.preferred_image_prompt || "",
+          item.visual_quality_review_id || "",
+          Number(item.visual_quality_score || 0),
+          item.visual_quality_recommendation || "",
           item.scheduled_time || null,
           Number(item.safety_score || 0),
           Number(item.editorial_score || 0),
@@ -8609,6 +8720,184 @@ function buildVisualIntelligenceDashboardData() {
   };
 }
 
+function latestVisualQualityReviews(limit = 20) {
+  return [...readVisualQualityReviews()]
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+    .slice(0, limit);
+}
+
+function visualQualityReviewByRef(ref = "1") {
+  const index = Number(ref);
+  if (Number.isInteger(index) && index >= 1) return latestVisualQualityReviews(50)[index - 1] || null;
+  return readVisualQualityReviews().find((item) => item.id === ref || item.visual_concept_id === ref) || null;
+}
+
+function latestVisualQualityReviewForConcept(conceptId = "") {
+  return latestVisualQualityReviews(200).find((item) => item.visual_concept_id === conceptId) || null;
+}
+
+function visualQualityRiskLevel(points = 0) {
+  if (points >= 42) return "high";
+  if (points >= 22) return "medium";
+  return "low";
+}
+
+function visualQualityRecommendation(score = 0, artifactRisk = "medium", issues = []) {
+  const blocking = issues.some((item) => item.severity === "high");
+  if (score >= 78 && artifactRisk !== "high" && !blocking) return "approved_for_generation";
+  if (score >= 55 && !blocking) return "needs_prompt_edit";
+  return "reject_visual_concept";
+}
+
+function visualQualityCheckConcept(ref = "1") {
+  const concept = visualConceptByRef(ref);
+  if (!concept) {
+    return {
+      ok: false,
+      module: "Visual Quality Checker v1",
+      code: "visual_concept_not_found",
+      message: "Visual concept not found. Use /visuals or /визуалы.",
+      safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+    };
+  }
+  const prompt = String(concept.prompt || "");
+  if (!prompt.trim()) {
+    return {
+      ok: false,
+      module: "Visual Quality Checker v1",
+      code: "visual_concept_prompt_missing",
+      message: "Visual concept has no prompt to review.",
+      safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+    };
+  }
+  const lower = prompt.toLowerCase();
+  const commaCount = (prompt.match(/,/g) || []).length;
+  const issues = [];
+  const suggestions = [];
+  let thumbnailPenalty = 0;
+  let realismPenalty = 0;
+  let artifactPoints = 0;
+  let emotionPenalty = 0;
+  let policyPenalty = 0;
+
+  const addIssue = (area, severity, message, suggestion, weights = {}) => {
+    issues.push({ area, severity, message });
+    suggestions.push(suggestion);
+    thumbnailPenalty += Number(weights.thumbnail || 0);
+    realismPenalty += Number(weights.realism || 0);
+    artifactPoints += Number(weights.artifact || 0);
+    emotionPenalty += Number(weights.emotion || 0);
+    policyPenalty += Number(weights.policy || 0);
+  };
+
+  if (prompt.length > 950 || commaCount > 18) {
+    addIssue("facebook_thumbnail", "medium", "Prompt has too much detail for a clean Facebook thumbnail.", "Shorten the prompt and keep one main subject, one object and one emotion.", { thumbnail: 12, artifact: 6 });
+  }
+  if (!/foreground|central|clear central|close-up|focal|object visible/i.test(prompt)) {
+    addIssue("facebook_thumbnail", "medium", "Focal point may be weak on a small screen.", "Name one foreground object and one central face as the focal point.", { thumbnail: 14, emotion: 4 });
+  }
+  if (!/emotion|shock|anger|sad|tension|fear|hope|tears|betrayal|facial/i.test(lower)) {
+    addIssue("emotional_clarity", "medium", "Emotion is not explicit enough for one-second recognition.", "Add one clear facial emotion such as shock, restrained anger, sadness or hope.", { thumbnail: 8, emotion: 18 });
+  }
+  if (/two or three|three|crowd|many people|several people|family dinner/i.test(lower)) {
+    addIssue("visual_realism", "medium", "Too many characters can make faces small and emotion unclear.", "Limit the image to one or two visible people.", { thumbnail: 10, realism: 5, artifact: 8, emotion: 8 });
+  }
+  if (/hands visible|hands|fingers|holding/i.test(lower)) {
+    addIssue("artifact_prediction", "medium", "Visible hands increase artifact risk.", "Keep hands simple, partially visible, or holding one clear object without finger detail.", { artifact: 14 });
+  }
+  if (/text|subtitle|lettering|logo|watermark/i.test(lower) && !/no text|no logos|no watermark/i.test(lower)) {
+    addIssue("artifact_prediction", "high", "Prompt may invite text inside the image.", "Explicitly add: no text, no logos, no watermark.", { artifact: 22, policy: 8 });
+  }
+  if (/complex background|busy background|crowded room|many objects/i.test(lower)) {
+    addIssue("artifact_prediction", "medium", "Complex background may reduce thumbnail readability.", "Use an uncluttered lived-in background with one clear object.", { thumbnail: 10, artifact: 10 });
+  }
+  if (/surreal|fantasy|dream|impossible|floating|glowing/i.test(lower)) {
+    addIssue("visual_realism", "high", "Scene may look unrealistic for a life-story audience.", "Keep the scene documentary, ordinary and physically believable.", { realism: 22, policy: 4 });
+  }
+  if (/graphic|blood|dead body|violence|injury/i.test(lower)) {
+    addIssue("visual_policy", "high", "Visual concept may be too disturbing or graphic.", "Avoid graphic content; show emotional aftermath instead.", { thumbnail: 8, realism: 6, policy: 28 });
+  }
+  if (/real celebrity|known person|public figure|politician/i.test(lower)) {
+    addIssue("visual_policy", "high", "Prompt risks misleading real-person depiction.", "Use fictional ordinary people only; do not imply a real public figure.", { policy: 26 });
+  }
+  if (/sensational|shocking|scandal/i.test(lower)) {
+    addIssue("visual_policy", "medium", "Visual tone may feel sensational rather than human.", "Use restrained documentary emotion instead of exaggerated scandal framing.", { thumbnail: 5, policy: 10 });
+  }
+  if (concept.status !== "selected") {
+    addIssue("workflow", "medium", "Concept is not selected yet.", "Select the concept with /select_visual 1 or /выбрать_визуал 1 before generation.", { thumbnail: 3 });
+  }
+
+  if (!issues.length) {
+    suggestions.push("Keep the prompt focused on one face, one object, natural light and an uncluttered background.");
+  }
+
+  const thumbnailStrength = clampStyleScore(Number(concept.ctr_score || 65) - thumbnailPenalty);
+  const emotionClarity = clampStyleScore(Number(concept.emotion_score || 65) - emotionPenalty);
+  const realismScore = clampStyleScore(Number(concept.realism_score || 70) - realismPenalty);
+  const policyScore = clampStyleScore(100 - policyPenalty);
+  const artifactRisk = visualQualityRiskLevel(artifactPoints);
+  const visualQualityScore = clampStyleScore(
+    thumbnailStrength * 0.32 +
+    emotionClarity * 0.28 +
+    realismScore * 0.22 +
+    policyScore * 0.18 -
+    (artifactRisk === "high" ? 14 : artifactRisk === "medium" ? 6 : 0)
+  );
+  const recommendation = visualQualityRecommendation(visualQualityScore, artifactRisk, issues);
+  const review = {
+    id: crypto.randomUUID(),
+    visual_concept_id: concept.id,
+    package_id: concept.package_id || "",
+    draft_id: concept.draft_id || "",
+    visual_quality_score: visualQualityScore,
+    artifact_risk: artifactRisk,
+    thumbnail_strength: thumbnailStrength,
+    emotion_clarity: emotionClarity,
+    recommendation,
+    issues_json: issues,
+    suggestions_json: [...new Set(suggestions.filter(Boolean))],
+    created_at: new Date().toISOString()
+  };
+  return {
+    ok: true,
+    module: "Visual Quality Checker v1",
+    visual_concept: concept,
+    review,
+    suggested_prompt_improvements: review.suggestions_json,
+    safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+  };
+}
+
+async function createVisualQualityReview(ref = "1") {
+  const result = visualQualityCheckConcept(ref);
+  if (!result.ok) return result;
+  const next = [result.review, ...readVisualQualityReviews()].slice(0, 500);
+  await writeVisualQualityReviews(next);
+  return {
+    ...result,
+    saved: true,
+    reviews_count: next.length
+  };
+}
+
+function buildVisualQualityDashboardData() {
+  const reviews = latestVisualQualityReviews(50);
+  const avg = reviews.length
+    ? Math.round(reviews.reduce((sum, item) => sum + Number(item.visual_quality_score || 0), 0) / reviews.length)
+    : 0;
+  return {
+    ok: true,
+    module: "Visual Quality Checker v1",
+    latest_reviews: reviews,
+    reviews_count: readVisualQualityReviews().length,
+    approved_concepts: reviews.filter((item) => item.recommendation === "approved_for_generation"),
+    needs_prompt_edit: reviews.filter((item) => item.recommendation === "needs_prompt_edit"),
+    rejected_concepts: reviews.filter((item) => item.recommendation === "reject_visual_concept"),
+    average_quality_score: avg,
+    safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+  };
+}
+
 function imageGenerationConfigStatus() {
   return {
     configured: Boolean(process.env.OPENAI_API_KEY),
@@ -9800,6 +10089,7 @@ async function createPrepublishPreviewForPackage(ref = "1") {
   const imagePrompt = details?.image_prompt || {};
   const schedule = details?.schedule || {};
   const selectedVisual = selectedVisualConceptForPackage(readiness.package_id, draft.id || "");
+  const visualQuality = selectedVisual ? latestVisualQualityReviewForConcept(selectedVisual.id) : null;
   const preview = {
     id: crypto.randomUUID(),
     package_id: readiness.package_id,
@@ -9807,6 +10097,9 @@ async function createPrepublishPreviewForPackage(ref = "1") {
     image_prompt_id: imagePrompt.id || "",
     visual_concept_id: selectedVisual?.id || "",
     preferred_image_prompt: selectedVisual?.prompt || imagePrompt.prompt || "",
+    visual_quality_review_id: visualQuality?.id || "",
+    visual_quality_score: Number(visualQuality?.visual_quality_score || 0),
+    visual_quality_recommendation: visualQuality?.recommendation || "",
     scheduled_time: schedule.scheduled_time || readiness.details?.scheduled_time || null,
     safety_score: Number(readiness.safety_review?.safety_score || 0),
     editorial_score: Number(readiness.editorial?.final_editorial_score || 0),
@@ -9838,6 +10131,8 @@ async function createPrepublishPreviewForPackage(ref = "1") {
       id: imagePrompt.id || "",
       status: imagePrompt.status || "",
       preferred_visual_concept_id: selectedVisual?.id || "",
+      visual_quality_score: Number(visualQuality?.visual_quality_score || 0),
+      visual_quality_recommendation: visualQuality?.recommendation || "",
       prompt: selectedVisual?.prompt || imagePrompt.prompt || "",
       original_prompt: imagePrompt.prompt || "",
       generated_image_url: imagePrompt.generated_image_url || ""
@@ -10497,6 +10792,7 @@ function renderAutopilotV1Dashboard() {
   const readinessGate = buildReadinessGateDashboardData();
   const prepublish = buildPrepublishDashboardData();
   const visualIntelligence = buildVisualIntelligenceDashboardData();
+  const visualQuality = buildVisualQualityDashboardData();
   const emotionEngine = buildEmotionEngineRecommendations(readEmotionTimelines());
   const plan = readContentPlan().slice(0, 8);
   const research = readInternetResearchItems().slice(0, 6);
@@ -10535,6 +10831,7 @@ function renderAutopilotV1Dashboard() {
           ${card("Readiness Gate", `${readinessGate.average_readiness_score}%`, `${readinessGate.ready_count} ready, ${readinessGate.blocked_count} blocked`)}
           ${card("Pre-Publish", prepublish.preview_status.previews_count, `${prepublish.preview_status.ready_without_preview_count} ready packages need preview`)}
           ${card("Visual Intelligence", visualIntelligence.concepts_count, `${visualIntelligence.selected_count} selected, avg CTR ${visualIntelligence.average_ctr_score}`)}
+          ${card("Visual Quality", `${visualQuality.average_quality_score}%`, `${visualQuality.approved_concepts.length} approved, ${visualQuality.needs_prompt_edit.length} need edit`)}
           ${card("Image Generator v3", imageV3.generated_images, `${imageV3.needs_review} needs review, ${imageV3.approved_images} approved`)}
           ${card("Emotion Engine", `${emotionEngine.statistics.average_ending_satisfaction}%`, `${emotionEngine.timelines_count} timelines, peak ${emotionEngine.ideal_peak_position}`)}
           ${card("Publishing", status.system.autopublishing, "Approval is required before any publishing step.")}
@@ -10640,6 +10937,23 @@ function renderAutopilotV1Dashboard() {
       </section>
 
       <section class="insight-card">
+        <h2>Visual Quality Checker v1</h2>
+        <div class="autopilot-status-grid">
+          ${card("Latest Reviews", visualQuality.reviews_count, "Checks selected concepts before image generation")}
+          ${card("Average Quality", `${visualQuality.average_quality_score}%`, "Thumbnail, emotion, realism, artifact and policy risk")}
+          ${card("Approved", visualQuality.approved_concepts.length, "Allowed for future generation after human review")}
+          ${card("Needs Prompt Edit", visualQuality.needs_prompt_edit.length, "Prompt should be simplified before generation")}
+          ${card("Rejected", visualQuality.rejected_concepts.length, "Visual concept should be replaced")}
+        </div>
+        <div class="facebook-table-wrap">
+          <table class="facebook-table">
+            <thead><tr><th>Score</th><th>Risk</th><th>Recommendation</th><th>Top Issue</th></tr></thead>
+            <tbody>${rows(visualQuality.latest_reviews.slice(0, 8), "No visual quality reviews yet. Run /check_visual 1 or /проверить_визуал 1.", (item) => `<tr><td>${Number(item.visual_quality_score || 0)}</td><td>${escapeHtml(item.artifact_risk || "medium")}</td><td>${escapeHtml(item.recommendation || "")}</td><td>${escapeHtml(item.issues_json?.[0]?.message || "No major issues")}</td></tr>`)}</tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="insight-card">
         <h2>Image Generator v3</h2>
         <div class="autopilot-status-grid">
           ${card("Generated Images", imageV3.generated_images, imageV3.config.configured ? `Provider: ${imageV3.config.provider}` : "OPENAI_API_KEY missing")}
@@ -10718,7 +11032,7 @@ function renderAutopilotV1Dashboard() {
         <div class="facebook-table-wrap">
           <table class="facebook-table">
             <thead><tr><th>Package</th><th>Scheduled</th><th>Scores</th><th>Visual</th></tr></thead>
-            <tbody>${rows(prepublish.latest_previews.slice(0, 8), "No pre-publish previews yet.", (item) => `<tr><td>${escapeHtml(item.package_id)}</td><td>${item.scheduled_time ? escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU")) : "missing"}</td><td>safety ${Number(item.safety_score || 0)} / editorial ${Number(item.editorial_score || 0)} / ready ${Number(item.readiness_score || 0)}</td><td>${item.visual_concept_id ? `visual concept selected<br>${escapeHtml(shortText(item.preferred_image_prompt || "", 120))}` : escapeHtml(shortText(item.expected_reaction || "", 150))}</td></tr>`)}</tbody>
+            <tbody>${rows(prepublish.latest_previews.slice(0, 8), "No pre-publish previews yet.", (item) => `<tr><td>${escapeHtml(item.package_id)}</td><td>${item.scheduled_time ? escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU")) : "missing"}</td><td>safety ${Number(item.safety_score || 0)} / editorial ${Number(item.editorial_score || 0)} / ready ${Number(item.readiness_score || 0)} / visual ${Number(item.visual_quality_score || 0)}</td><td>${item.visual_concept_id ? `visual concept selected<br>${escapeHtml(item.visual_quality_recommendation || "quality not checked")}<br>${escapeHtml(shortText(item.preferred_image_prompt || "", 100))}` : escapeHtml(shortText(item.expected_reaction || "", 150))}</td></tr>`)}</tbody>
           </table>
         </div>
       </section>
@@ -11391,6 +11705,61 @@ async function telegramSelectVisualConcept(chatId, numberText = "1") {
         "No real image generation. No Facebook posting."
       ].join("\n")
     : "Visual concept not found. Use /визуалы or /visuals.", mainTelegramKeyboard());
+}
+
+async function telegramCheckVisualQuality(chatId, numberText = "1") {
+  const result = await createVisualQualityReview(numberText || "1");
+  if (!result.ok) {
+    return sendTelegramMessage(chatId, [
+      "<b>Visual Quality Checker v1</b>",
+      "",
+      escapeHtml(result.message || "Visual concept not found."),
+      "",
+      "No image generation. No Facebook posting."
+    ].join("\n"), mainTelegramKeyboard());
+  }
+  const review = result.review || {};
+  const issues = (review.issues_json || []).slice(0, 5).map((item) => `• ${item.area}: ${item.message}`).join("\n") || "• No major issues";
+  const suggestions = (review.suggestions_json || []).slice(0, 5).map((item) => `• ${item}`).join("\n") || "• Keep the current focused prompt.";
+  return sendTelegramLongMessage(chatId, [
+    "<b>Visual Quality Checker v1</b>",
+    "",
+    `Visual Quality Score: ${Number(review.visual_quality_score || 0)}/100`,
+    `Artifact Risk: ${escapeHtml(review.artifact_risk || "medium")}`,
+    `Thumbnail Strength: ${Number(review.thumbnail_strength || 0)}/100`,
+    `Emotion Clarity: ${Number(review.emotion_clarity || 0)}/100`,
+    `Recommendation: ${escapeHtml(review.recommendation || "")}`,
+    "",
+    "<b>Issues</b>",
+    escapeHtml(issues),
+    "",
+    "<b>Suggestions</b>",
+    escapeHtml(suggestions),
+    "",
+    "No OpenAI Images call. No Facebook posting."
+  ].join("\n"), mainTelegramKeyboard());
+}
+
+async function telegramVisualQuality(chatId) {
+  const data = buildVisualQualityDashboardData();
+  const reviews = data.latest_reviews.slice(0, 8).map((item, index) => [
+    `${index + 1}. score ${Number(item.visual_quality_score || 0)}/100`,
+    `risk: ${item.artifact_risk || "medium"}`,
+    `recommendation: ${item.recommendation || ""}`,
+    `concept: ${shortText(item.visual_concept_id || "", 32)}`
+  ].join("\n")).join("\n\n") || "Visual quality reviews пока нет. Используйте /проверить_визуал 1.";
+  return sendTelegramLongMessage(chatId, [
+    "<b>Visual Quality Checker v1</b>",
+    "",
+    `Average Quality Score: ${Number(data.average_quality_score || 0)}/100`,
+    `Approved: ${data.approved_concepts.length}`,
+    `Needs prompt edit: ${data.needs_prompt_edit.length}`,
+    `Rejected: ${data.rejected_concepts.length}`,
+    "",
+    escapeHtml(reviews),
+    "",
+    "No image generation. No publishing."
+  ].join("\n"), mainTelegramKeyboard());
 }
 
 async function telegramAudience(chatId) {
@@ -12407,7 +12776,7 @@ async function telegramHelp(chatId) {
     "/готовность 1 - editorial readiness status",
     "",
     "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /preview 1, /previews, /versions 1, /compare 1 2, /image 1, /images, /visual 1, /visuals, /select_visual 1, /generate_image 1, /generated_images, /approve_generated_image 1, /reject_generated_image 1, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /preview 1, /previews, /versions 1, /compare 1 2, /image 1, /images, /visual 1, /visuals, /select_visual 1, /check_visual 1, /visual_quality, /generate_image 1, /generated_images, /approve_generated_image 1, /reject_generated_image 1, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -12438,6 +12807,8 @@ function telegramCommandList() {
     { command: "visual", description: "Create 5 visual concepts" },
     { command: "visuals", description: "Latest visual concepts" },
     { command: "select_visual", description: "Select preferred visual concept" },
+    { command: "check_visual", description: "Check selected visual concept quality" },
+    { command: "visual_quality", description: "Latest visual quality reviews" },
     { command: "schedule", description: "План публикаций" },
     { command: "queue", description: "Очередь расписания" },
     { command: "packages", description: "Пакеты публикаций" },
@@ -12627,6 +12998,8 @@ async function handleTelegramMessage(message) {
   if (command === "/visual" || command === "/визуал") return telegramCreateVisualConcepts(chatId, args[0] || "1");
   if (command === "/visuals" || command === "/визуалы") return telegramVisualConcepts(chatId);
   if (command === "/select_visual" || command === "/выбрать_визуал") return telegramSelectVisualConcept(chatId, args[0] || "1");
+  if (command === "/check_visual" || command === "/проверить_визуал") return telegramCheckVisualQuality(chatId, args[0] || "1");
+  if (command === "/visual_quality" || command === "/качество_визуала") return telegramVisualQuality(chatId);
   if (command === "/audience") return telegramAudience(chatId);
   if (command === "/competitors") return telegramCompetitors(chatId);
   if (command === "/autopilot") return telegramAutopilot(chatId);
@@ -13080,6 +13453,7 @@ const productionPersistenceTables = [
   "image_queue",
   "generated_images",
   "visual_concepts",
+  "visual_quality_reviews",
   "scheduled_posts",
   "publishing_packages",
   "prepublish_previews",
@@ -13127,6 +13501,7 @@ async function buildStorageStatus() {
       image_queue: readImageQueue().length,
       generated_images: readGeneratedImages().length,
       visual_concepts: readVisualConcepts().length,
+      visual_quality_reviews: readVisualQualityReviews().length,
       scheduled_posts: readScheduledPosts().length,
       publishing_packages: readPublishingPackages().length,
       prepublish_previews: readPrepublishPreviews().length,
@@ -15051,6 +15426,49 @@ async function handleApi(req, res, pathname) {
       selected_concept: selected,
       safety: { real_image_generation: false, facebook_posting: false, autopublishing: false }
     });
+  }
+
+  if (pathname === "/api/visual-quality/v1/check" && req.method === "POST") {
+    const payload = await parseBody(req);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return sendJson(res, 400, {
+        ok: false,
+        module: "Visual Quality Checker v1",
+        code: "invalid_request_body",
+        message: "Request body must be a JSON object.",
+        safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+      });
+    }
+    const ref = payload.visual_concept_id ?? payload.concept ?? payload.index;
+    if (!["string", "number"].includes(typeof ref) || !String(ref).trim()) {
+      return sendJson(res, 400, {
+        ok: false,
+        module: "Visual Quality Checker v1",
+        code: "visual_concept_reference_required",
+        message: "visual_concept_id, concept or index is required.",
+        safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+      });
+    }
+    const result = await createVisualQualityReview(String(ref).trim());
+    return sendJson(res, result.ok ? 200 : result.code === "visual_concept_not_found" ? 404 : 400, result);
+  }
+
+  if (pathname === "/api/visual-quality/v1/reviews" && req.method === "GET") {
+    return sendJson(res, 200, buildVisualQualityDashboardData());
+  }
+
+  if (pathname.startsWith("/api/visual-quality/v1/review/") && req.method === "GET") {
+    const ref = decodeURIComponent(pathname.replace("/api/visual-quality/v1/review/", ""));
+    const review = visualQualityReviewByRef(ref || "1");
+    return sendJson(res, review ? 200 : 404, review
+      ? {
+          ok: true,
+          module: "Visual Quality Checker v1",
+          review,
+          visual_concept: readVisualConcepts().find((item) => item.id === review.visual_concept_id) || null,
+          safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
+        }
+      : { ok: false, code: "visual_quality_review_not_found" });
   }
 
   if (pathname === "/api/autopilot/v1/plan" && ["GET", "POST"].includes(req.method)) {
