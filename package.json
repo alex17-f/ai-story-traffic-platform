@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "check": "node scripts/check-syntax.js",
+    "test:rc1": "node scripts/rc1-smoke.js",
     "db:migrate": "node scripts/migrate.js",
     "db:import-json": "node scripts/import-json-to-postgres.js"
   },

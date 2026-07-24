@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+!.env.example
+.vercel
+node_modules
+work
+outputs
+*.zip
+data/facebook_connection.local.json

@@ -20,7 +20,7 @@ The old JSON files remain as backup/export files:
 - `data/competitors.json`
 - `data/project_brain.json`
 
-If `DATABASE_URL` is missing, the app runs in JSON backup mode for local development.
+If `DATABASE_URL` is missing, the app runs in an explicitly labelled JSON fallback only for local development. On Vercel, missing or failed PostgreSQL is reported as `unavailable`; bundled JSON/demo data is not silently served as production data.
 
 ## Environment
 
@@ -28,6 +28,8 @@ Copy `.env.example` to `.env` locally and fill values there:
 
 ```bash
 DATABASE_URL=
+DATABASE_SSL=
+PUBLIC_BASE_URL=http://127.0.0.1:4173
 META_APP_ID=
 META_APP_SECRET=
 FACEBOOK_REDIRECT_URI=http://127.0.0.1:4173/auth/facebook/callback
@@ -35,8 +37,15 @@ FACEBOOK_LOGIN_CONFIG_ID=
 FACEBOOK_PAGE_ID=
 FACEBOOK_PAGE_ACCESS_TOKEN=
 FACEBOOK_SYNC_MAX_PAGES=25
+FACEBOOK_SYNC_MAX_POSTS=625
+FACEBOOK_SYNC_TIMEOUT_MS=25000
 BOT_TOKEN=
 CHAT_ID=
+TELEGRAM_WEBHOOK_URL=
+TELEGRAM_WEBHOOK_SECRET=
+TAVILY_API_KEY=
+OPENAI_API_KEY=
+ENABLE_OPENAI_IMAGES=false
 ```
 
 Never commit `.env`.
@@ -45,7 +54,14 @@ Never commit `.env`.
 
 Facebook Live is prepared for read-only historical analysis.
 
-It can check the Page connection, load latest posts, refresh data, and run a historical sync through Graph API pagination. It stores posts, images, reactions, comments, shares, reach, link clicks, detected topics, emotions, image signals, and ranking data.
+It can check the Page connection, load latest posts, refresh data, and run a historical sync through Graph API pagination. It stores posts, images, reactions, comments, shares, available reach/link-click metrics, detected topics, emotions, image signals, and ranking data.
+
+The read flow uses the working Page-owned edges in this order:
+
+1. `/{page-id}/published_posts`
+2. `/{page-id}/posts`
+
+It does not use `/{page-id}/feed`. Historical rows without available Insights keep reach/link clicks at `0` and are reported as unavailable rather than estimated.
 
 Automatic Facebook publishing is still disabled.
 
@@ -65,7 +81,7 @@ For Page permissions, the Meta app must include the **Manage everything on your 
 
 The app only requests read-only Page permissions: `pages_show_list`, `pages_read_engagement`, and `read_insights`.
 
-After login, Page access is stored locally in `data/facebook_connection.local.json`. This file is ignored by git and must not be shared.
+After login, Page access is stored in PostgreSQL in production. The local fallback file is `data/facebook_connection.local.json`; it is ignored by git and must not be shared.
 
 ## Telegram Control Center
 
@@ -73,7 +89,9 @@ Telegram is prepared as a private control center for notifications, review, appr
 
 It does not publish anything automatically.
 
-To enable it later, add `BOT_TOKEN` and `CHAT_ID` only to your local `.env` or hosting environment variables. Do not send real tokens in chat.
+Set `BOT_TOKEN`, `CHAT_ID`, `TELEGRAM_WEBHOOK_URL`, and a random `TELEGRAM_WEBHOOK_SECRET` only in local/hosting environment variables. `CHAT_ID` limits commands and callback buttons to the owner. Telegram `update_id` values are stored for idempotency, without message text or chat identifiers.
+
+Approval buttons only change workflow state. They never publish to Facebook.
 
 ## Create PostgreSQL Database
 
@@ -149,6 +167,11 @@ This creates:
 - `style_brain_profiles`
 - `content_safety_reviews`
 - `emotion_timeline`
+- `visual_concepts`
+- `visual_quality_reviews`
+- `prepublish_previews`
+- `website_events`
+- `telegram_updates`
 
 All migrations are written to be safe to rerun with `create table if not exists`, `alter table add column if not exists`, and `create index if not exists`.
 
@@ -168,6 +191,8 @@ It returns:
 - `migrations_status`
 - `tables_present`
 - `current_counts`
+- `cache_counts`
+- `consistency`
 
 It never returns the actual database URL or secrets.
 
@@ -195,3 +220,21 @@ npm start
 ```
 
 The app reads `PORT` from the hosting provider. Locally it defaults to `4173`.
+
+## RC-1 Smoke Test
+
+```bash
+npm run check
+npm run test:rc1
+```
+
+The RC-1 test uses a temporary data directory, disables local `.env` loading, PostgreSQL, Facebook, Telegram delivery, OpenAI Images, and publishing. It checks generation, Editorial, Safety, Visual Intelligence, Visual Quality, Scheduler, Approval Pipeline, Readiness, Preview, Telegram idempotency, and persistence after a local restart.
+
+## RC-1 Safety State
+
+- Facebook Publishing: disabled
+- Automatic Publishing: disabled
+- OpenAI Images: disabled unless `ENABLE_OPENAI_IMAGES=true` is explicitly set
+- Approval: required
+- Full website stories created by the package flow remain drafts until a human publishes them
+- Facebook fragments contain no link; the tracked continuation link is generated only for the first comment
