@@ -19,8 +19,10 @@ function startServer() {
       DATA_DIR: dataDir,
       LOAD_LOCAL_ENV: "false",
       DATABASE_URL: "",
-      BOT_TOKEN: "",
-      CHAT_ID: "",
+      BOT_TOKEN: "dry-run-token",
+      CHAT_ID: "1",
+      TELEGRAM_DRY_RUN: "true",
+      TELEGRAM_WEBHOOK_SECRET: "smoke-secret",
       META_APP_ID: "",
       META_APP_SECRET: "",
       FACEBOOK_PAGE_ID: "",
@@ -86,10 +88,17 @@ async function run() {
   check("explicit local JSON fallback", storage.data.storage_mode === "json_local_fallback");
   check("production publishing disabled", storage.data.safety?.publishing_enabled === false);
 
+  const webhookSetup = await request("/api/telegram/set-webhook");
+  check("Telegram webhook configured", webhookSetup.data.ok === true && webhookSetup.data.configured === true);
+  check("Russian Telegram profile configured", webhookSetup.data.set_profile?.ok === true);
+  check("Russian Telegram commands configured", webhookSetup.data.set_commands?.ok === true);
+  const webhookInfo = await request("/api/telegram/webhook-info");
+  check("Telegram webhook diagnostics", webhookInfo.data.ok === true && webhookInfo.data.webhook?.pending_update_count === 0);
+
   const generated = await post("/api/autopilot/v1/generate-story", {
     category: "betrayal",
     emotion: "hope",
-    length: "medium",
+    length: "long",
     count: 1
   });
   check("story generation", generated.status === 200 && generated.data.ok && generated.data.story?.id);
@@ -145,32 +154,85 @@ async function run() {
   const packageId = packageResult.data.package.id;
   check("tracked first comment", /\/s\//.test(packageResult.data.package.comment_text || ""));
   check("Facebook fragment has no link", !/https?:\/\//i.test(packageResult.data.package.facebook_fragment || ""));
+  const trackedUrl = (packageResult.data.package.comment_text || "").match(/https?:\/\/\S+/i)?.[0] || "";
+  const trackedPage = await fetch(trackedUrl);
+  check(
+    "tracked comment link opens exact story",
+    Boolean(trackedUrl) && trackedPage.status === 200,
+    JSON.stringify({ tracked_url: trackedUrl, status: trackedPage.status, final_url: trackedPage.url })
+  );
 
   const packageApproval = await post("/api/autopilot/v1/package-status", {
     package: packageId,
     status: "approved"
   });
   check("package approval remains manual", packageApproval.data.package?.publish_allowed === false);
+  check("package approval blocked without actual image", packageApproval.data.package?.approval_blocked === true);
+  check("blocked package remains in review", packageApproval.data.package?.status === "review");
 
   const readiness = await post("/api/readiness-gate/v1/check-package", { package_id: packageId });
   check("readiness gate", readiness.data.ok && readiness.data.package_id === packageId);
+  check("readiness blocks prompt-only package", readiness.data.status === "blocked");
+  check("actual image is required", readiness.data.blockers_json?.some((item) => item.code === "actual_image_missing"));
+  check("prompt is not treated as image", readiness.data.checks?.image_approved === false && readiness.data.details?.actual_image_ready === false);
+  check("story paragraphs are not duplicated", readiness.data.details?.content_checks?.duplicate_paragraphs?.length === 0);
+  check("story sentences are not duplicated", readiness.data.details?.content_checks?.duplicate_sentences?.length === 0);
 
   const preview = await post("/api/prepublish/v1/preview-package", { package_id: packageId });
-  check("prepublish simulator responds", preview.status === 200 && typeof preview.data.ok === "boolean");
+  check("prepublish blocks incomplete package", preview.status === 200 && preview.data.ok === false && preview.data.code === "package_not_ready");
 
   const storyPreview = await fetch(`${baseUrl}/story-preview/${encodeURIComponent(packageId)}`);
   check("website preview", storyPreview.status === 200);
 
-  const firstUpdate = await post("/api/telegram/webhook", {
+  const telegramHeaders = { "x-telegram-bot-api-secret-token": "smoke-secret" };
+  const firstUpdate = await request("/api/telegram/webhook", {
+    method: "POST",
+    headers: telegramHeaders,
+    body: JSON.stringify({
     update_id: 910000001,
     message: { chat: { id: 1 }, text: "/status" }
+    })
   });
-  const duplicateUpdate = await post("/api/telegram/webhook", {
+  const duplicateUpdate = await request("/api/telegram/webhook", {
+    method: "POST",
+    headers: telegramHeaders,
+    body: JSON.stringify({
     update_id: 910000001,
     message: { chat: { id: 1 }, text: "/status" }
+    })
   });
   check("Telegram update handled", firstUpdate.data.ok && firstUpdate.data.duplicate === false);
   check("Telegram update idempotency", duplicateUpdate.data.ok && duplicateUpdate.data.duplicate === true);
+
+  const telegramPackage = packageResult.data.telegram_delivery || {};
+  check("Telegram package delivered automatically", telegramPackage.ok === true, JSON.stringify(telegramPackage));
+  check("Telegram story delivered completely", telegramPackage.delivery?.story_integrity?.complete === true);
+  check("Telegram package uses multiple messages", telegramPackage.delivery?.message_ids?.length >= 5);
+  check(
+    "Telegram long story split into ordered parts",
+    telegramPackage.delivery?.story_parts >= 2,
+    JSON.stringify(telegramPackage.delivery?.story_integrity || {})
+  );
+  check("Telegram package language guard", Object.values(telegramPackage.delivery?.language_checks || {}).every(Boolean));
+
+  const callbackActions = ["story", "facebook", "comment", "approve", "edit", "rewrite", "image", "time", "queue", "reject"];
+  for (let index = 0; index < callbackActions.length; index += 1) {
+    const action = callbackActions[index];
+    const callbackData = action === "queue" ? "pkg:queue" : `pkg:${action}:${packageId}`;
+    const callback = await request("/api/telegram/webhook", {
+      method: "POST",
+      headers: telegramHeaders,
+      body: JSON.stringify({
+        update_id: 910000100 + index,
+        callback_query: {
+          id: `callback-${index}`,
+          data: callbackData,
+          message: { chat: { id: 1 } }
+        }
+      })
+    });
+    check(`Telegram package button ${action}`, callback.status === 200 && callback.data.ok === true);
+  }
 
   const imageGeneration = await post("/api/images/v3/generate", { image_prompt_id: imagePromptId });
   check("OpenAI Images disabled", imageGeneration.data.code === "image_generation_disabled");
@@ -188,6 +250,8 @@ async function run() {
     ok: true,
     checks,
     package_id: packageId,
+    telegram_message_ids: telegramPackage.delivery?.message_ids,
+    telegram_story_parts: telegramPackage.delivery?.story_parts,
     readiness_status: readiness.data.status,
     readiness_score: readiness.data.readiness_score,
     temp_data_dir: dataDir,

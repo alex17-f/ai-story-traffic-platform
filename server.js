@@ -3800,9 +3800,9 @@ function audienceGuidance() {
   const insights = buildAudienceInsights();
   const competitor = competitorGuidance();
   if (!insights.posts_count) {
-    return `Audience Analyst: пока нет загруженных Facebook-постов, используйте базовую гипотезу: семейный конфликт, сильная эмоция, бытовая фотореалистичная сцена. ${competitor}`;
+    return `Анализ аудитории: пока нет загруженных публикаций Facebook. Используйте базовую гипотезу: семейный конфликт, сильная эмоция, бытовая фотореалистичная сцена. ${competitor}`;
   }
-  return `Audience Analyst: приоритетная тема "${insights.best_topics[0]?.name || "Жизненные истории"}", эмоция "${insights.best_emotions[0]?.name || "тревога"}", лучшее время "${insights.best_time}", длина "${insights.best_length}", изображение "${insights.best_image_type}". ${competitor}`;
+  return `Анализ аудитории: приоритетная тема «${insights.best_topics[0]?.name || "Жизненные истории"}», эмоция «${insights.best_emotions[0]?.name || "тревога"}», рекомендуемое время «${insights.best_time}», длина «${insights.best_length}», изображение «${insights.best_image_type}». ${competitor}`;
 }
 
 function competitorSignals(competitor) {
@@ -3889,9 +3889,9 @@ function buildCompetitorAnalysis() {
 function competitorGuidance() {
   const analysis = buildCompetitorAnalysis();
   if (!analysis.competitors.length) {
-    return "Competitor Analyst: конкуренты пока не добавлены; избегайте копирования, используйте оригинальные сюжеты.";
+    return "Анализ конкурентов: конкуренты пока не добавлены; избегайте копирования и используйте оригинальные сюжеты.";
   }
-  return `Competitor Analyst: рыночная гипотеза — тема "${analysis.popular_topics[0]?.name || "Семья"}", эмоция "${analysis.popular_emotions[0]?.name || "тревога"}", изображение "${analysis.best_images[0]?.name || "бытовая семейная сцена"}"; не копировать тексты и изображения.`;
+  return `Анализ конкурентов: рыночная гипотеза — тема «${analysis.popular_topics[0]?.name || "Семья"}», эмоция «${analysis.popular_emotions[0]?.name || "тревога"}», изображение «${analysis.best_images[0]?.name || "бытовая семейная сцена"}»; не копировать тексты и изображения.`;
 }
 
 function readProjectBrain() {
@@ -5444,9 +5444,9 @@ function contentSafetyFacebookRisk(text = "", draft = {}) {
     /срочно/i,
     /ставь лайк/i
   ]);
-  if (sensational) issues.push("В тексте есть слишком агрессивные или clickbait-фразы.");
-  if (/\b(read more|link in comments|continue here|продолжение здесь|ссылка в комментар)/i.test(text)) issues.push("Facebook-пост/история не должны звучать как engagement bait.");
-  if ((draft.title || "").length > 130) issues.push("Заголовок слишком длинный и может выглядеть как clickbait.");
+  if (sensational) issues.push("В тексте есть слишком агрессивные или кликбейтные фразы.");
+  if (/\b(read more|link in comments|continue here|продолжение здесь|ссылка в комментар)/i.test(text)) issues.push("Публикация Facebook или история не должны провоцировать искусственную активность.");
+  if ((draft.title || "").length > 130) issues.push("Заголовок слишком длинный и может выглядеть как кликбейт.");
   const excludedDraftIds = contentSafetyExcludedDraftIds(draft.id || "", draft);
   const recentSameCategory = readGeneratedStories().slice(0, 12).filter((item) => !excludedDraftIds.has(item.id) && item.category === draft.category).length;
   const isEditorialRewrite = draft.revision_type === "editorial_rewrite";
@@ -5496,7 +5496,7 @@ function contentSafetyQualityRisk(text = "", draft = {}) {
     suggestions.push("Показать вывод через действие персонажа, а не объяснять его в лоб.");
   }
   if (genericAi >= 2) {
-    issues.push("Есть признаки generic AI wording.");
+    issues.push("Есть признаки шаблонного машинного стиля.");
     suggestions.push("Заменить общие эмоции на бытовые детали: чай, чек, старая дверь, дрожащие руки.");
   }
   const riskScore = Math.min(100, (100 - hookStrength) * 0.2 + Math.max(0, 24 - dialogue) * 1.2 + boringRisk * 0.45 + moralizing * 10 + genericAi * 12);
@@ -5512,12 +5512,12 @@ function contentSafetyPolicyRisk(text = "") {
   const graphic = /\bgraphic blood|mutilated|gore|кишки|расчлен/i.test(text);
   const fakeReal = /\bthis is a real story about|true story about [A-Z][a-z]+ [A-Z][a-z]+|реальная история известного/i.test(text);
   const exploitation = /\bchild abuse details|sexual assault details|подробности насилия над ребенком/i.test(text);
-  if (hate) issues.push("Возможный hate/dehumanizing контент.");
-  if (harassment) issues.push("Возможное оскорбление/harassment.");
+  if (hate) issues.push("Возможны ненависть или обесчеловивание.");
+  if (harassment) issues.push("Возможны оскорбления или травля.");
   if (dangerous) issues.push("Возможные опасные инструкции или утверждения.");
-  if (graphic) issues.push("Слишком explicit graphic content.");
-  if (fakeReal) issues.push("Есть риск fake real-person claim / impersonation.");
-  if (exploitation) issues.push("Риск exploitation sensitive topic.");
+  if (graphic) issues.push("Сцена описана слишком натуралистично.");
+  if (fakeReal) issues.push("Есть риск ложного утверждения о реальном человеке или выдачи себя за него.");
+  if (exploitation) issues.push("Есть риск эксплуатации чувствительной темы.");
   if (issues.length) suggestions.push("Переписать сцену без оскорблений, опасных деталей, графики и заявлений о реальных людях.");
   const score = Math.min(100, issues.length * 28);
   return { score, risk: contentSafetyRiskLevel(score, 20, 50), issues, suggestions };
@@ -5532,10 +5532,10 @@ function contentSafetyOriginalityRisk(text = "", draft = {}) {
   const maxScore = Math.max(research.score, competitors.score, drafts.score, posts.score);
   const issues = [];
   const suggestions = [];
-  if (research.score >= 34) issues.push(`Похоже на research source (${research.score}%).`);
-  if (competitors.score >= 32) issues.push(`Похоже на competitor pattern (${competitors.score}%).`);
-  if (drafts.score >= 38) issues.push(`Похоже на предыдущий generated draft (${drafts.score}%).`);
-  if (posts.score >= 36) issues.push(`Похоже на наш недавний Facebook post (${posts.score}%).`);
+  if (research.score >= 34) issues.push(`Высокое сходство с исследовательским источником (${research.score}%).`);
+  if (competitors.score >= 32) issues.push(`Высокое сходство со структурой конкурента (${competitors.score}%).`);
+  if (drafts.score >= 38) issues.push(`Высокое сходство с предыдущим созданным черновиком (${drafts.score}%).`);
+  if (posts.score >= 36) issues.push(`Высокое сходство с нашей недавней публикацией Facebook (${posts.score}%).`);
   if (issues.length) {
     suggestions.push("Сменить персонажей, место действия, ключевой предмет, поворот и финальную развязку.");
     suggestions.push("Использовать источники только как сигналы темы/структуры, не повторять формулировки.");
@@ -5674,31 +5674,34 @@ function readinessArray(value) {
 
 function readinessSafetyBlockingIssues(review = {}) {
   if (!review?.id) {
-    return [readinessIssue("safety_missing", "hard", "Content Safety review is missing.", "Run /check_package 1 or /проверить_пакет 1.")];
+    return [readinessIssue("safety_missing", "hard", "Проверка безопасности отсутствует.", "Запустите /проверить_пакет 1.")];
   }
   const blockers = [];
   const safetyScore = Number(review.safety_score || 0);
   const originalityScore = Number(review.originality_score || 0);
   if (review.recommendation === "reject") {
-    blockers.push(readinessIssue("safety_reject", "hard", "Content Safety recommendation is reject.", "Rewrite the draft and run package safety again."));
+    blockers.push(readinessIssue("safety_reject", "hard", "Проверка безопасности отклонила материал.", "Перепишите черновик и снова проверьте пакет."));
+  }
+  if (review.recommendation === "needs_edit") {
+    blockers.push(readinessIssue("safety_needs_edit", "hard", "Проверка безопасности требует правок.", "Внесите предложенные правки и снова проверьте пакет."));
   }
   if (review.policy_risk === "high") {
-    blockers.push(readinessIssue("policy_risk_high", "hard", "Policy risk is high.", "Remove unsafe or sensitive policy-risk content."));
+    blockers.push(readinessIssue("policy_risk_high", "hard", "Обнаружен высокий риск нарушения правил.", "Удалите небезопасные или чувствительные формулировки."));
   }
   if (review.facebook_risk === "high") {
-    blockers.push(readinessIssue("facebook_risk_high", "hard", "Facebook risk is high.", "Remove spammy, misleading or aggressive Facebook wording."));
+    blockers.push(readinessIssue("facebook_risk_high", "hard", "Обнаружен высокий риск для Facebook.", "Уберите спам, вводящие в заблуждение и агрессивные формулировки."));
   }
   if (safetyScore && safetyScore < 65) {
-    blockers.push(readinessIssue("safety_score_low", "hard", `Safety score is ${safetyScore}/100.`, "Improve safety and originality before final readiness."));
+    blockers.push(readinessIssue("safety_score_low", "hard", `Оценка безопасности: ${safetyScore}/100.`, "Улучшите безопасность и оригинальность."));
   }
   if (originalityScore && originalityScore < 50) {
-    blockers.push(readinessIssue("originality_score_low", "hard", `Originality score is ${originalityScore}/100.`, "Change characters, setting, twist and ending before approval."));
+    blockers.push(readinessIssue("originality_score_low", "hard", `Оценка оригинальности: ${originalityScore}/100.`, "Измените героев, место, поворот и финал."));
   }
   for (const issue of readinessArray(review.issues_json)) {
     const type = String(issue.type || "").toLowerCase();
     const message = String(issue.message || "").toLowerCase();
     if (type === "policy" || /hate|harassment|dangerous|graphic|impersonation|exploitation/.test(message)) {
-      blockers.push(readinessIssue("blocking_safety_issue", "hard", issue.message || "Blocking safety issue detected.", "Resolve the blocking safety issue and check again."));
+      blockers.push(readinessIssue("blocking_safety_issue", "hard", issue.message || "Обнаружено блокирующее замечание безопасности.", "Исправьте замечание и повторите проверку."));
     }
   }
   return blockers;
@@ -5706,9 +5709,7 @@ function readinessSafetyBlockingIssues(review = {}) {
 
 function readinessSafetyGateAllows(review = {}) {
   if (!review?.id) return false;
-  if (review.recommendation === "safe") return true;
-  if (review.recommendation === "needs_edit") return readinessSafetyBlockingIssues(review).length === 0;
-  return false;
+  return review.recommendation === "safe" && readinessSafetyBlockingIssues(review).length === 0;
 }
 
 function contentSafetyPackageIsSafe(pkg = {}) {
@@ -5768,7 +5769,7 @@ function editorialCountPatterns(text = "", patterns = []) {
 }
 
 function editorialWeakestParagraph(paragraphs = []) {
-  if (!paragraphs.length) return { index: 0, text: "", reason: "No paragraphs were available." };
+  if (!paragraphs.length) return { index: 0, text: "", reason: "Абзацы для проверки отсутствуют." };
   const scored = paragraphs.map((paragraph, index) => {
     const hasDialogue = /["“”«»]|^\s*[-—]\s+/.test(paragraph);
     const lengthPenalty = paragraph.length > 520 ? 28 : paragraph.length < 45 && !hasDialogue ? 18 : 0;
@@ -5783,10 +5784,10 @@ function editorialWeakestParagraph(paragraphs = []) {
   });
   const weakest = scored.sort((a, b) => a.score - b.score)[0];
   const reason = weakest.text.length > 520
-    ? "Too dense for mobile reading."
+    ? "Абзац слишком плотный для чтения на телефоне."
     : /["“”«»]|^\s*[-—]\s+/.test(weakest.text)
-      ? "Dialogue is present, but the paragraph can carry more consequence."
-      : "Needs a sharper concrete detail, dialogue beat or emotional turn.";
+      ? "Диалог есть, но последствия реплик нужно сделать заметнее."
+      : "Нужна более точная бытовая деталь, реплика или эмоциональный поворот.";
   return { index: weakest.index + 1, text: weakest.text, reason };
 }
 
@@ -5825,31 +5826,31 @@ function editorialFeedbackFromScores({ draft, paragraphs, weakest, scores, safet
   const weaknesses = [];
   const improvement = [];
   const firstParagraph = paragraphs[0] || draft.hook || "";
-  if (scores.hook_score >= 78) strengths.push("Good: the first lines create a clear question and a reason to keep reading.");
-  if (scores.emotion_score >= 76) strengths.push("Good: the emotional curve has a visible rise instead of staying flat.");
-  if (scores.dialogue_score >= 70) strengths.push("Good: dialogue gives the story a more human voice.");
-  if (scores.human_score >= 76) strengths.push("Good: ordinary details make the scene feel believable.");
-  if (!strengths.length) strengths.push("Good: the draft has a clear family conflict and can be improved without changing the core idea.");
+  if (scores.hook_score >= 78) strengths.push("Первые строки создают ясный вопрос и дают причину читать дальше.");
+  if (scores.emotion_score >= 76) strengths.push("Эмоциональная кривая заметно нарастает и не остаётся плоской.");
+  if (scores.dialogue_score >= 70) strengths.push("Диалоги делают голос истории более живым.");
+  if (scores.human_score >= 76) strengths.push("Бытовые детали помогают поверить в сцену.");
+  if (!strengths.length) strengths.push("В черновике есть понятный семейный конфликт; основную идею можно сохранить при доработке.");
 
-  if (scores.hook_score < 72) weaknesses.push("Weak: the first paragraph should create a stronger unanswered question in the first 1-2 lines.");
-  if (scores.dialogue_score < 62) weaknesses.push("Weak: readers may feel too much summary and not enough real conversation.");
-  if (scores.rhythm_score < 66) weaknesses.push("Weak: paragraph rhythm may feel heavy on a phone.");
-  if (scores.twist_score < 62) weaknesses.push("Weak: the twist needs a clearer reveal or a more specific hidden fact.");
-  if (scores.ending_score < 68) weaknesses.push("Weak: the ending may feel generic; it needs one memorable final action or sentence.");
-  if (safetyReview?.recommendation && safetyReview.recommendation !== "safe") weaknesses.push(`Safety: Content Safety recommends ${safetyReview.recommendation}. Fix those issues before publishing.`);
-  weaknesses.push(`Where readers may stop reading: paragraph ${weakest.index}, because ${weakest.reason}`);
-  weaknesses.push(`Weakest paragraph: ${shortText(weakest.text || firstParagraph, 260)}`);
-  weaknesses.push(`Why this recommendation: editorial score is ${scores.editorial_score}/100 and readiness is ${scores.publication_readiness}.`);
+  if (scores.hook_score < 72) weaknesses.push("Первому абзацу нужен более сильный вопрос без ответа уже в первых двух строках.");
+  if (scores.dialogue_score < 62) weaknesses.push("Читатель может почувствовать избыток пересказа и нехватку живого разговора.");
+  if (scores.rhythm_score < 66) weaknesses.push("Ритм абзацев может быть тяжёлым для чтения на телефоне.");
+  if (scores.twist_score < 62) weaknesses.push("Повороту нужен более ясный момент раскрытия или конкретный скрытый факт.");
+  if (scores.ending_score < 68) weaknesses.push("Финал выглядит слишком общим; нужно запоминающееся действие или последняя фраза.");
+  if (safetyReview?.recommendation && safetyReview.recommendation !== "safe") weaknesses.push(`Проверка безопасности: ${telegramRuLabel(safetyReview.recommendation)}. Замечания нужно исправить до одобрения.`);
+  weaknesses.push(`Читатель может остановиться на абзаце ${weakest.index}: ${weakest.reason}`);
+  weaknesses.push(`Самый слабый абзац: ${shortText(weakest.text || firstParagraph, 260)}`);
+  weaknesses.push(`Основание рекомендации: редакционная оценка ${scores.editorial_score}/100, готовность «${telegramRuLabel(scores.publication_readiness)}».`);
 
-  if (scores.hook_score < 80) improvement.push("Strengthen the first paragraph with a concrete object, a short question and immediate family silence.");
-  if (scores.dialogue_score < 70) improvement.push("Add 2-4 short dialogue lines after paragraph 2 so the conflict feels lived, not summarized.");
-  if (scores.emotion_score < 78) improvement.push("Increase emotional tension before the climax: curiosity -> tension -> shock -> quiet relief.");
-  if (scores.rhythm_score < 72) improvement.push("Split long paragraphs and keep most mobile paragraphs under 350 characters.");
-  if (scores.twist_score < 72) improvement.push("Make the plot twist depend on a specific date, object, payment, letter or family promise.");
-  if (scores.ending_score < 75) improvement.push("Replace generic moralizing with one emotional final sentence or a small action at the table.");
-  if (scores.human_score < 76) improvement.push("Add ordinary human details: tired hands, cold tea, a chair moving, someone avoiding eye contact.");
-  if (safetyReview?.recommendation !== "safe") improvement.push("Apply Content Safety suggestions before moving the package toward ready status.");
-  if (!improvement.length) improvement.push("Keep the original structure; only polish the last paragraph and verify the final Facebook post manually.");
+  if (scores.hook_score < 80) improvement.push("Усилить первый абзац конкретным предметом, коротким вопросом и мгновенной семейной паузой.");
+  if (scores.dialogue_score < 70) improvement.push("Добавить после второго абзаца 2-4 короткие реплики, чтобы конфликт проживался, а не пересказывался.");
+  if (scores.emotion_score < 78) improvement.push("Усилить напряжение до кульминации: любопытство, тревога, потрясение, тихое облегчение.");
+  if (scores.rhythm_score < 72) improvement.push("Разделить длинные абзацы; большинство мобильных абзацев держать короче 350 знаков.");
+  if (scores.twist_score < 72) improvement.push("Связать поворот с конкретной датой, предметом, платежом, письмом или семейным обещанием.");
+  if (scores.ending_score < 75) improvement.push("Заменить прямую мораль одной эмоциональной последней фразой или небольшим действием.");
+  if (scores.human_score < 76) improvement.push("Добавить бытовые детали: усталые руки, холодный чай, движение стула, отведённый взгляд.");
+  if (safetyReview?.recommendation !== "safe") improvement.push("Выполнить рекомендации проверки безопасности до перехода пакета к одобрению.");
+  if (!improvement.length) improvement.push("Сохранить структуру, доработать последний абзац и вручную проверить итоговый текст для Facebook.");
 
   return { strengths, weaknesses, improvement };
 }
@@ -6192,8 +6193,19 @@ function editorialRewriteOpening({ hero, object, relation }) {
   ].join("\n\n");
 }
 
-function buildEditorialRewriteText({ draft, review, styleGuidance, emotionGuidance, safetyReview, diversity = null }) {
+function buildEditorialRewriteText({ draft, review, styleGuidance, emotionGuidance, safetyReview, diversity = null, language = "ru" }) {
   if (diversity?.frame_id) {
+    if (String(language || "ru").toLowerCase().startsWith("ru")) {
+      const rewritten = buildRussianGeneratedStoryText({
+        diversity,
+        emotion: draft.emotion || "надежда",
+        length: draft.length || "medium"
+      });
+      return {
+        ...rewritten,
+        rewrite_reason: "Глубокая редакционная переработка на русском языке: изменены начальная сцена, диалог, предмет конфликта, эмоциональное нарастание и поворот сюжета. Основной смысл сохранён."
+      };
+    }
     const profile = {
       object: diversity.object || editorialRewriteExtractObject(draft),
       setting: diversity.setting || "small apartment kitchen",
@@ -6360,7 +6372,7 @@ async function updateGeneratedDraftRecord(id = "", patch = {}) {
   return updated.find((item) => item.id === id) || null;
 }
 
-async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = "") {
+async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = "", options = {}) {
   await refreshGeneratedStoriesFromDatabase();
   await refreshEditorialReviewsFromDatabase();
   const original = generatedDraftByRef(ref) || readGeneratedStories().find((item) => item.id === ref);
@@ -6394,7 +6406,8 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
       styleGuidance,
       emotionGuidance,
       safetyReview: originalSafety,
-      diversity
+      diversity,
+      language: options.language || original.language || "ru"
     });
     const similarity = {
       ...editorialRewriteSimilarityCheck(candidate, original),
@@ -6445,6 +6458,7 @@ async function rewriteDraftFromEditorialReview(ref = "1", editorialReviewId = ""
     pre_safety_similarity_score: similarityCheck.similarity_score,
     previous_editorial_score: previousScore,
     expected_editorial_score: expectedScore,
+    language: String(options.language || original.language || "ru").toLowerCase().startsWith("ru") ? "ru" : (original.language || "en"),
     status: "needs_approval",
     approval_required: true,
     publish_allowed: false,
@@ -9002,11 +9016,11 @@ function buildGeneratedStoryText({ profile, emotion, length, seed, keywords, sty
 
 function imagePromptForGeneratedStory(story, profile) {
   return [
-    "Photorealistic everyday documentary photo, not cinematic fantasy.",
-    `Scene: ${profile.setting}, emotional ${story.emotion} moment, ordinary family conflict.`,
-    "Characters: realistic people aged 45-70, natural faces, modest clothes, believable home interior.",
-    `Key object: ${profile.object}.`,
-    "Mood: tense but human, warm practical light, 35mm lens, no text, no watermark, no cartoon, no plastic AI skin."
+    "Фотореалистичная бытовая документальная фотография без сказочной постановочности.",
+    `Сцена: ${telegramRuLabel(profile.setting)}, эмоциональный момент «${telegramRuLabel(story.emotion)}», обычный семейный конфликт.`,
+    "Персонажи: правдоподобные люди 45-70 лет, естественные лица, скромная одежда, жилой домашний интерьер.",
+    `Ключевой предмет: ${telegramRuLabel(profile.object)}.`,
+    "Настроение: напряжённое, но человечное; тёплый бытовой свет; объектив 35 мм; без текста, водяных знаков, мультяшности и пластиковой кожи."
   ].join(" ");
 }
 
@@ -9025,34 +9039,34 @@ function generatedDraftByRef(ref) {
 
 function extractImageSceneSignals(story = {}) {
   const text = `${story.title || ""} ${story.hook || ""} ${story.full_story || ""} ${story.image_prompt || ""}`.toLowerCase();
-  const setting = /kitchen|tea|kettle|table/.test(text)
-    ? "modest apartment kitchen"
+  const setting = /kitchen|tea|kettle|table|кухн|чай|стол/.test(text)
+    ? "скромная кухня в квартире"
     : /hospital|corridor/.test(text)
-      ? "hospital corridor"
+      ? "больничный коридор"
       : /station|train|platform/.test(text)
-        ? "train station platform"
+        ? "железнодорожная платформа"
         : /house|home|apartment|room/.test(text)
-          ? "ordinary family apartment"
-          : "real everyday home interior";
+          ? "обычная семейная квартира"
+          : "живой бытовой домашний интерьер";
   const timeOfDay = /midnight|night/.test(text)
-    ? "late evening"
+    ? "поздний вечер"
     : /morning/.test(text)
-      ? "early morning"
+      ? "раннее утро"
       : /rain|evening/.test(text)
-        ? "rainy evening"
-        : "soft evening light";
+        ? "дождливый вечер"
+        : "мягкий вечерний свет";
   const emotion = story.emotion || detectResearchEmotion(text, story.category || "");
   const characters = /mother-in-law|daughter-in-law/.test(text)
-    ? "older mother-in-law and younger daughter-in-law, ordinary realistic faces"
+    ? "пожилая свекровь и молодая невестка с естественными лицами"
     : /husband|wife/.test(text)
-      ? "middle-aged husband and wife sitting apart with visible tension"
+      ? "муж и жена среднего возраста сидят поодаль с заметным напряжением"
       : /son|daughter/.test(text)
-        ? "older woman and adult child in a tense family moment"
-        : "two or three ordinary adults aged 45-70 in a family conflict";
+        ? "пожилая женщина и взрослый ребёнок в напряжённый семейный момент"
+        : "двое или трое обычных взрослых 45-70 лет во время семейного конфликта";
   const visualConflict = /receipt|phone|card|letter|envelope|will|key|photo/.test(text)
-    ? "a small discovered object on the table becomes the emotional focus"
-    : "silent family confrontation, people avoiding eye contact";
-  const mainScene = `${characters} in ${setting}, ${visualConflict}`;
+    ? "небольшой найденный предмет на столе становится эмоциональным центром"
+    : "молчаливое семейное противостояние, герои избегают взгляда друг друга";
+  const mainScene = `${characters}; место: ${setting}; ${visualConflict}`;
   return {
     main_scene: mainScene,
     characters,
@@ -9065,21 +9079,21 @@ function extractImageSceneSignals(story = {}) {
 
 function imagePromptVariant(story, signals, style) {
   const styleText = {
-    realistic_cinematic: "realistic cinematic documentary photo, natural color grade, 35mm lens, believable skin texture",
-    dramatic_facebook_cover: "dramatic Facebook story cover, strong emotional hook, clear readable composition, high attention thumbnail",
-    emotional_close_up: "emotional close-up, expressive eyes, restrained tears, shallow depth of field, intimate domestic realism"
+    realistic_cinematic: "реалистичная кинематографичная документальная фотография, естественные цвета, объектив 35 мм, правдоподобная кожа",
+    dramatic_facebook_cover: "драматичная обложка истории для Facebook, сильный эмоциональный крючок, ясная композиция, заметная миниатюра",
+    emotional_close_up: "эмоциональный крупный план, выразительный взгляд, сдержанные слёзы, малая глубина резкости, камерный бытовой реализм"
   }[style] || style;
   return [
     styleText,
-    `Story title: ${story.title}.`,
-    `Main scene: ${signals.main_scene}.`,
-    `Characters: ${signals.characters}.`,
-    `Emotion: ${signals.emotion}.`,
-    `Setting: ${signals.setting}.`,
-    `Time of day: ${signals.time_of_day}.`,
-    `Visual conflict: ${signals.visual_conflict}.`,
-    "Photorealistic, ordinary people aged 40-70, modest clothes, real home details, natural imperfect faces.",
-    "No text, no subtitles, no logo, no watermark, no cartoon, no glossy plastic AI faces, no extra fingers."
+    `Заголовок истории: ${story.title}.`,
+    `Главная сцена: ${signals.main_scene}.`,
+    `Персонажи: ${signals.characters}.`,
+    `Эмоция: ${telegramRuLabel(signals.emotion)}.`,
+    `Место: ${signals.setting}.`,
+    `Время суток: ${signals.time_of_day}.`,
+    `Визуальный конфликт: ${signals.visual_conflict}.`,
+    "Фотореализм, обычные люди 40-70 лет, скромная одежда, настоящие домашние детали, естественные несовершенные лица.",
+    "Без текста, субтитров, логотипа, водяного знака, мультяшности, глянцевых пластиковых лиц и лишних пальцев."
   ].join(" ");
 }
 
@@ -9089,7 +9103,7 @@ async function createImagePromptsForGeneratedDraft(ref = "1") {
     return {
       ok: false,
       code: "draft_not_found",
-      message: "Generated draft not found. Use /drafts to see draft numbers."
+      message: "Черновик не найден. Используйте /черновики, чтобы увидеть номера."
     };
   }
   const signals = extractImageSceneSignals(draft);
@@ -9219,23 +9233,23 @@ function visualStoryText(draft = {}) {
 
 function visualDetectLocation(text = "") {
   const lower = String(text || "").toLowerCase();
-  if (/hospital|clinic|corridor|ward|больниц|коридор/i.test(lower)) return "hospital corridor";
-  if (/kitchen|tea|table|кухн|чай|стол/i.test(lower)) return "modest apartment kitchen";
-  if (/village|yard|garden|деревн|двор|сад/i.test(lower)) return "village yard near an old house";
-  if (/notary|court|office|document|will|нотари|суд|офис|завещ/i.test(lower)) return "small notary office with family documents";
-  if (/train|station|platform|bus|вокзал|станц|автобус/i.test(lower)) return "rainy station platform";
-  return "ordinary lived-in apartment";
+  if (/hospital|clinic|corridor|ward|больниц|коридор/i.test(lower)) return "больничный коридор";
+  if (/kitchen|tea|table|кухн|чай|стол/i.test(lower)) return "скромная кухня в квартире";
+  if (/village|yard|garden|деревн|двор|сад/i.test(lower)) return "деревенский двор у старого дома";
+  if (/notary|court|office|document|will|нотари|суд|офис|завещ/i.test(lower)) return "небольшая нотариальная контора с семейными документами";
+  if (/train|station|platform|bus|вокзал|станц|автобус/i.test(lower)) return "дождливая платформа вокзала";
+  return "обычная жилая квартира";
 }
 
 function visualDetectObject(text = "") {
   const lower = String(text || "").toLowerCase();
-  if (/letter|envelope|письм|конверт/i.test(lower)) return "old envelope in trembling hands";
-  if (/photo|picture|фото|снимок/i.test(lower)) return "old family photograph";
-  if (/will|inheritance|document|завещ|наслед|документ/i.test(lower)) return "folded inheritance document";
-  if (/phone|message|call|телефон|сообщ|звон/i.test(lower)) return "phone with an unread message";
-  if (/key|ключ/i.test(lower)) return "old apartment key";
-  if (/cup|tea|чашк|чай/i.test(lower)) return "cold cup of tea on the table";
-  return "small personal object that reveals the secret";
+  if (/letter|envelope|письм|конверт/i.test(lower)) return "старый конверт в дрожащих руках";
+  if (/photo|picture|фото|снимок/i.test(lower)) return "старая семейная фотография";
+  if (/will|inheritance|document|завещ|наслед|документ/i.test(lower)) return "сложенный документ о наследстве";
+  if (/phone|message|call|телефон|сообщ|звон/i.test(lower)) return "телефон с непрочитанным сообщением";
+  if (/key|ключ/i.test(lower)) return "старый ключ от квартиры";
+  if (/cup|tea|чашк|чай/i.test(lower)) return "остывшая чашка чая на столе";
+  return "небольшой личный предмет, раскрывающий тайну";
 }
 
 function visualImageDirector(draft = {}, pkg = null) {
@@ -9250,31 +9264,31 @@ function visualImageDirector(draft = {}, pkg = null) {
       ? "45-65"
       : "40-65";
   const characters = /mother-in-law|daughter-in-law|свекров|невест/i.test(lower)
-    ? "mother-in-law and daughter-in-law"
+    ? "свекровь и невестка"
     : /son|daughter|сын|дочь/i.test(lower)
-      ? "mother and adult child"
+      ? "мать и взрослый ребёнок"
       : /husband|wife|муж|жена/i.test(lower)
-        ? "husband and wife"
-        : "two ordinary family members";
+        ? "муж и жена"
+        : "два обычных члена семьи";
   const facialEmotion = /betray|измен|предател/i.test(lower)
-    ? "betrayal, restrained anger, wounded silence"
+    ? "предательство, сдержанная злость, раненое молчание"
     : /inherit|наслед|завещ/i.test(lower)
-      ? "shock, suspicion, quiet fear"
+      ? "потрясение, подозрение, тихий страх"
       : /love|любов/i.test(lower)
-        ? "sad tenderness and hope"
-        : "tense curiosity and emotional restraint";
+        ? "грустная нежность и надежда"
+        : "напряжённое любопытство и эмоциональная сдержанность";
   const timeOfDay = /night|midnight|ноч/i.test(lower)
-    ? "late evening"
+    ? "поздний вечер"
     : /morning|утр/i.test(lower)
-      ? "early morning"
-      : "warm evening";
-  const mainScene = `${characters} aged ${ageGroup} in ${location}, focused on ${object}`;
+      ? "раннее утро"
+      : "тёплый вечер";
+  const mainScene = `${characters}, возраст ${ageGroup}, место: ${location}, внимание сосредоточено на предмете: ${object}`;
   const emotionalMoment = /secret|тайн|truth|правд/i.test(lower)
-    ? "the second the hidden truth becomes visible"
+    ? "секунда, когда скрытая правда становится явной"
     : /argument|fight|ссор|конфликт/i.test(lower)
-      ? "the silent pause after a family accusation"
-      : "the first moment when ordinary life turns into a family revelation";
-  const bestVisualHook = `${object} placed between people who can no longer pretend nothing happened`;
+      ? "молчаливая пауза после семейного обвинения"
+      : "первый момент, когда обычная жизнь превращается в семейное откровение";
+  const bestVisualHook = `${object} лежит между людьми, которые больше не могут делать вид, будто ничего не произошло`;
   return {
     main_scene: mainScene,
     emotional_moment: emotionalMoment,
@@ -9285,10 +9299,10 @@ function visualImageDirector(draft = {}, pkg = null) {
     time_of_day: timeOfDay,
     objects: [object],
     facial_emotion: facialEmotion,
-    camera_angle: "eye-level 35mm documentary angle, close enough for facial emotion",
-    lighting: location.includes("kitchen") ? "warm practical kitchen light" : "natural soft window light",
-    composition: "one clear central emotional subject, object visible in foreground, uncluttered background",
-    facebook_thumbnail_strength: clampStyleScore(70 + (object ? 8 : 0) + (facialEmotion.includes("shock") ? 8 : 4)),
+    camera_angle: "документальный ракурс на уровне глаз, объектив 35 мм, лица достаточно близко для считывания эмоций",
+    lighting: location.includes("кухн") ? "тёплый бытовой свет кухни" : "мягкий естественный свет из окна",
+    composition: "один ясный эмоциональный центр, значимый предмет на переднем плане, незагромождённый фон",
+    facebook_thumbnail_strength: clampStyleScore(70 + (object ? 8 : 0) + (facialEmotion.includes("потрясение") ? 8 : 4)),
     package_id: pkg?.id || "",
     draft_id: draft.id || ""
   };
@@ -9296,35 +9310,35 @@ function visualImageDirector(draft = {}, pkg = null) {
 
 function visualConceptPrompt(director, conceptType) {
   const styleMap = {
-    cinematic_realism: "photorealistic cinematic realism, documentary family drama, natural faces, believable skin texture",
-    emotional_close_up: "photorealistic emotional close-up, expressive eyes, hands visible, shallow realistic depth of field",
-    family_conflict_scene: "photorealistic family conflict scene, two people at a table, tension in body language",
-    mysterious_object_reveal: "photorealistic mysterious object reveal, discovered object in foreground, shocked faces behind it",
-    facebook_cover_style: "photorealistic Facebook story cover, strong thumbnail composition, high emotional clarity"
+    cinematic_realism: "фотореалистичный кинематографичный реализм, документальная семейная драма, естественные лица и правдоподобная кожа",
+    emotional_close_up: "фотореалистичный эмоциональный крупный план, выразительный взгляд, видимые руки, реалистичная малая глубина резкости",
+    family_conflict_scene: "фотореалистичная сцена семейного конфликта, два человека за столом, напряжение в языке тела",
+    mysterious_object_reveal: "фотореалистичное раскрытие тайны через предмет: находка на переднем плане, потрясённые лица позади",
+    facebook_cover_style: "фотореалистичная обложка истории для Facebook, сильная композиция миниатюры, ясная эмоция"
   };
   return [
     styleMap[conceptType],
-    `Scene: ${director.main_scene}.`,
-    `Emotional moment: ${director.emotional_moment}.`,
-    `Visual hook: ${director.best_visual_hook}.`,
-    `Characters: ${director.characters}, age group ${director.age_group}.`,
-    `Location: ${director.location}, ${director.time_of_day}.`,
-    `Facial emotion: ${director.facial_emotion}.`,
-    `Camera angle: ${director.camera_angle}.`,
-    `Lighting: ${director.lighting}.`,
-    `Composition: ${director.composition}.`,
-    "Audience: Facebook readers age 40-65+.",
-    "No text, no logos, no watermark, no cartoon, no glossy AI skin, no distorted hands, no fake smiles."
+    `Сцена: ${director.main_scene}.`,
+    `Эмоциональный момент: ${director.emotional_moment}.`,
+    `Визуальный крючок: ${director.best_visual_hook}.`,
+    `Персонажи: ${director.characters}, возрастная группа ${director.age_group}.`,
+    `Место: ${director.location}, ${director.time_of_day}.`,
+    `Эмоция на лицах: ${director.facial_emotion}.`,
+    `Ракурс: ${director.camera_angle}.`,
+    `Освещение: ${director.lighting}.`,
+    `Композиция: ${director.composition}.`,
+    "Аудитория: читатели Facebook 40-65+.",
+    "Без текста, логотипов, водяного знака, мультяшности, глянцевой кожи, искажённых рук и неестественных улыбок."
   ].join(" ");
 }
 
 function buildVisualConceptsFromDirector(director) {
   const types = [
-    ["cinematic_realism", "Cinematic realism", "A realistic domestic story frame with strong atmosphere and believable faces."],
-    ["emotional_close_up", "Emotional close-up", "A tight human moment centered on facial emotion and the discovered object."],
-    ["family_conflict_scene", "Family conflict scene", "A wider table or room scene showing relationship tension between characters."],
-    ["mysterious_object_reveal", "Mysterious object reveal", "The secret-bearing object becomes the visual hook that stops the scroll."],
-    ["facebook_cover_style", "Facebook cover style", "A clear high-contrast feed image designed for fast mobile recognition."]
+    ["cinematic_realism", "Кинематографичный реализм", "Правдоподобная бытовая сцена с живыми лицами и сильной атмосферой."],
+    ["emotional_close_up", "Эмоциональный крупный план", "Близкий человеческий момент, в центре которого эмоция лица и найденный предмет."],
+    ["family_conflict_scene", "Сцена семейного конфликта", "Более широкий план комнаты или стола, показывающий напряжение между героями."],
+    ["mysterious_object_reveal", "Раскрытие тайны через предмет", "Предмет, хранящий тайну, становится главным визуальным крючком."],
+    ["facebook_cover_style", "Обложка для Facebook", "Чёткое контрастное изображение, которое легко считывается на экране телефона."]
   ];
   return types.map(([conceptType, title, description]) => {
     const objectBoost = conceptType === "mysterious_object_reveal" ? 10 : 0;
@@ -9367,18 +9381,18 @@ function visualCriticRankConcepts(concepts = [], director = {}) {
       rank: index + 1,
       critic_notes: {
         why: index === 0
-          ? `Strongest because it combines ${director.best_visual_hook || "a clear visual hook"} with readable emotion for a mobile Facebook thumbnail.`
-          : "Weaker because it has less immediate scroll-stopping clarity, lower emotional proximity, or higher staged-cover risk.",
+          ? `Самая сильная концепция: она объединяет понятный визуальный крючок и хорошо читаемую эмоцию для ленты Facebook.`
+          : "Концепция слабее: в ней менее ясный фокус, слабее эмоциональная близость или выше риск постановочного кадра.",
         attractors: [
           director.objects?.[0] || "revealing object",
           director.facial_emotion || "visible emotion",
           director.location || "ordinary domestic location"
         ],
         avoid: [
-          "overly glossy advertising look",
-          "plastic AI faces",
-          "too many people in the frame",
-          "text written inside the image"
+          "слишком глянцевый рекламный вид",
+          "пластмассовые лица",
+          "слишком много людей в кадре",
+          "текст внутри изображения"
         ],
         critic_total: Math.round(item.critic_total)
       }
@@ -9491,7 +9505,7 @@ function visualQualityCheckConcept(ref = "1") {
       ok: false,
       module: "Visual Quality Checker v1",
       code: "visual_concept_not_found",
-      message: "Visual concept not found. Use /visuals or /визуалы.",
+      message: "Визуальная концепция не найдена. Используйте /визуалы.",
       safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
     };
   }
@@ -9501,7 +9515,7 @@ function visualQualityCheckConcept(ref = "1") {
       ok: false,
       module: "Visual Quality Checker v1",
       code: "visual_concept_prompt_missing",
-      message: "Visual concept has no prompt to review.",
+      message: "У визуальной концепции нет промпта для проверки.",
       safety: { real_image_generation: false, openai_images_called: false, facebook_posting: false, autopublishing: false }
     };
   }
@@ -9526,44 +9540,44 @@ function visualQualityCheckConcept(ref = "1") {
   };
 
   if (prompt.length > 950 || commaCount > 18) {
-    addIssue("facebook_thumbnail", "medium", "Prompt has too much detail for a clean Facebook thumbnail.", "Shorten the prompt and keep one main subject, one object and one emotion.", { thumbnail: 12, artifact: 6 });
+    addIssue("facebook_thumbnail", "medium", "В промпте слишком много деталей для понятной миниатюры Facebook.", "Сократите промпт: оставьте одного главного героя, один предмет и одну эмоцию.", { thumbnail: 12, artifact: 6 });
   }
   if (!/foreground|central|clear central|close-up|focal|object visible/i.test(prompt)) {
-    addIssue("facebook_thumbnail", "medium", "Focal point may be weak on a small screen.", "Name one foreground object and one central face as the focal point.", { thumbnail: 14, emotion: 4 });
+    addIssue("facebook_thumbnail", "medium", "Главный объект может быть плохо заметен на маленьком экране.", "Укажите один предмет на переднем плане и одно лицо как главный фокус.", { thumbnail: 14, emotion: 4 });
   }
   if (!/emotion|shock|anger|sad|tension|fear|hope|tears|betrayal|facial/i.test(lower)) {
-    addIssue("emotional_clarity", "medium", "Emotion is not explicit enough for one-second recognition.", "Add one clear facial emotion such as shock, restrained anger, sadness or hope.", { thumbnail: 8, emotion: 18 });
+    addIssue("emotional_clarity", "medium", "Эмоция недостаточно ясна для мгновенного считывания.", "Добавьте одну понятную эмоцию лица: потрясение, сдержанную злость, грусть или надежду.", { thumbnail: 8, emotion: 18 });
   }
   if (/two or three|three|crowd|many people|several people|family dinner/i.test(lower)) {
-    addIssue("visual_realism", "medium", "Too many characters can make faces small and emotion unclear.", "Limit the image to one or two visible people.", { thumbnail: 10, realism: 5, artifact: 8, emotion: 8 });
+    addIssue("visual_realism", "medium", "Из-за большого числа героев лица станут мелкими, а эмоция неясной.", "Оставьте в кадре одного или двух видимых людей.", { thumbnail: 10, realism: 5, artifact: 8, emotion: 8 });
   }
   if (/hands visible|hands|fingers|holding/i.test(lower)) {
-    addIssue("artifact_prediction", "medium", "Visible hands increase artifact risk.", "Keep hands simple, partially visible, or holding one clear object without finger detail.", { artifact: 14 });
+    addIssue("artifact_prediction", "medium", "Видимые руки повышают риск артефактов.", "Покажите руки частично или занятыми одним простым предметом без акцента на пальцах.", { artifact: 14 });
   }
   if (/text|subtitle|lettering|logo|watermark/i.test(lower) && !/no text|no logos|no watermark/i.test(lower)) {
-    addIssue("artifact_prediction", "high", "Prompt may invite text inside the image.", "Explicitly add: no text, no logos, no watermark.", { artifact: 22, policy: 8 });
+    addIssue("artifact_prediction", "high", "Промпт может привести к появлению текста внутри изображения.", "Явно добавьте запрет на текст, логотипы и водяные знаки.", { artifact: 22, policy: 8 });
   }
   if (/complex background|busy background|crowded room|many objects/i.test(lower)) {
-    addIssue("artifact_prediction", "medium", "Complex background may reduce thumbnail readability.", "Use an uncluttered lived-in background with one clear object.", { thumbnail: 10, artifact: 10 });
+    addIssue("artifact_prediction", "medium", "Сложный фон может ухудшить читаемость миниатюры.", "Используйте простой жилой фон с одним заметным предметом.", { thumbnail: 10, artifact: 10 });
   }
   if (/surreal|fantasy|dream|impossible|floating|glowing/i.test(lower)) {
-    addIssue("visual_realism", "high", "Scene may look unrealistic for a life-story audience.", "Keep the scene documentary, ordinary and physically believable.", { realism: 22, policy: 4 });
+    addIssue("visual_realism", "high", "Сцена может выглядеть неправдоподобно для аудитории жизненных историй.", "Сделайте сцену бытовой, документальной и физически правдоподобной.", { realism: 22, policy: 4 });
   }
   if (/graphic|blood|dead body|violence|injury/i.test(lower)) {
-    addIssue("visual_policy", "high", "Visual concept may be too disturbing or graphic.", "Avoid graphic content; show emotional aftermath instead.", { thumbnail: 8, realism: 6, policy: 28 });
+    addIssue("visual_policy", "high", "Визуальная концепция может быть слишком тяжёлой или натуралистичной.", "Уберите графические детали и покажите эмоциональные последствия.", { thumbnail: 8, realism: 6, policy: 28 });
   }
   if (/real celebrity|known person|public figure|politician/i.test(lower)) {
-    addIssue("visual_policy", "high", "Prompt risks misleading real-person depiction.", "Use fictional ordinary people only; do not imply a real public figure.", { policy: 26 });
+    addIssue("visual_policy", "high", "Промпт создаёт риск вводящего в заблуждение изображения реального человека.", "Используйте только вымышленных обычных людей без намёка на публичную персону.", { policy: 26 });
   }
   if (/sensational|shocking|scandal/i.test(lower)) {
-    addIssue("visual_policy", "medium", "Visual tone may feel sensational rather than human.", "Use restrained documentary emotion instead of exaggerated scandal framing.", { thumbnail: 5, policy: 10 });
+    addIssue("visual_policy", "medium", "Визуальный тон может выглядеть сенсационным, а не человеческим.", "Используйте сдержанную документальную эмоцию без преувеличенного скандала.", { thumbnail: 5, policy: 10 });
   }
   if (concept.status !== "selected") {
-    addIssue("workflow", "medium", "Concept is not selected yet.", "Select the concept with /select_visual 1 or /выбрать_визуал 1 before generation.", { thumbnail: 3 });
+    addIssue("workflow", "medium", "Концепция ещё не выбрана.", "Перед генерацией выберите концепцию командой /выбрать_визуал 1.", { thumbnail: 3 });
   }
 
   if (!issues.length) {
-    suggestions.push("Keep the prompt focused on one face, one object, natural light and an uncluttered background.");
+    suggestions.push("Сохраните фокус на одном лице, одном предмете, естественном свете и простом фоне.");
   }
 
   const thumbnailStrength = clampStyleScore(Number(concept.ctr_score || 65) - thumbnailPenalty);
@@ -10089,12 +10103,12 @@ async function generateOriginalStoriesV2(payload = {}) {
 
 function imagePromptForIdea(idea) {
   return [
-    "Photorealistic everyday family photo for a life story.",
-    `Story title: ${idea.title}.`,
-    `Scene: ${idea.topic}, ${idea.emotion}, ${idea.hook_pattern}.`,
-    "Characters: realistic people aged 40-70, ordinary clothes, believable faces, natural skin texture.",
-    "Place: modest kitchen or apartment, warm natural light, tense emotional moment, documentary 35mm look.",
-    "No text, no logo, no watermark, no cartoon style, no plastic AI faces."
+    "Фотореалистичная бытовая семейная фотография для жизненной истории.",
+    `Заголовок истории: ${idea.title}.`,
+    `Сцена: ${telegramRuLabel(idea.topic)}, ${telegramRuLabel(idea.emotion)}, ${telegramRuLabel(idea.hook_pattern)}.`,
+    "Персонажи: правдоподобные люди 40-70 лет, обычная одежда, естественные лица и текстура кожи.",
+    "Место: скромная кухня или квартира, тёплый естественный свет, напряжённый эмоциональный момент, документальный вид объектива 35 мм.",
+    "Без текста, логотипа, водяного знака, мультяшности и пластиковых лиц."
   ].join(" ");
 }
 
@@ -10243,8 +10257,8 @@ function scheduledDateAt(baseDate, timeText) {
 function parseMoveScheduleTime(dayText = "tomorrow", timeText = "19:30") {
   const base = new Date();
   const cleanDay = String(dayText || "tomorrow").toLowerCase();
-  if (cleanDay === "tomorrow") base.setDate(base.getDate() + 1);
-  if (cleanDay === "today") base.setDate(base.getDate());
+  if (cleanDay === "tomorrow" || cleanDay === "завтра") base.setDate(base.getDate() + 1);
+  if (cleanDay === "today" || cleanDay === "сегодня") base.setDate(base.getDate());
   base.setHours(0, 0, 0, 0);
   return scheduledDateAt(base, timeText).toISOString();
 }
@@ -10499,18 +10513,114 @@ async function ensureWebsiteStoryForDraft(draft, { packageId, campaignId, facebo
   return { story, tracked_url: trackedUrl };
 }
 
+function generatedImageForPublishingPackage(pkg = {}, imagePrompt = null) {
+  return [...readGeneratedImages()]
+    .filter((item) => {
+      if (!item?.image_url || item.status === "failed") return false;
+      return (pkg.id && item.package_id === pkg.id)
+        || (imagePrompt?.id && item.image_prompt_id === imagePrompt.id)
+        || (pkg.draft_id && item.draft_id === pkg.draft_id);
+    })
+    .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))[0] || null;
+}
+
+function packageImageReadiness(pkg = {}, imagePrompt = null) {
+  const generatedImage = generatedImageForPublishingPackage(pkg, imagePrompt);
+  const promptReady = Boolean(imagePrompt?.id && imagePrompt.status === "approved");
+  const imageUploaded = Boolean(generatedImage?.image_url);
+  const imageChecked = Boolean(generatedImage && ["approved", "rejected"].includes(generatedImage.status));
+  const imageReady = Boolean(generatedImage?.image_url && generatedImage.status === "approved");
+  let state = "image_prompt_missing";
+  if (promptReady) state = "image_prompt_ready";
+  if (imageUploaded) state = "image_uploaded";
+  if (imageChecked) state = generatedImage.status === "approved" ? "image_checked" : "image_rejected";
+  if (imageReady) state = "image_ready_for_publishing";
+  return {
+    prompt_ready: promptReady,
+    image_uploaded: imageUploaded,
+    image_checked: imageChecked,
+    image_ready: imageReady,
+    state,
+    generated_image: generatedImage
+  };
+}
+
+function normalizedPackageParagraphs(text = "") {
+  return String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split(/\n{2,}/)
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function packageDuplicateContent(text = "") {
+  const duplicateValues = (values) => {
+    const seen = new Set();
+    const duplicates = new Set();
+    for (const value of values) {
+      const key = value.toLocaleLowerCase("ru-RU").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+      if (key.length < 35) continue;
+      if (seen.has(key)) duplicates.add(value);
+      seen.add(key);
+    }
+    return [...duplicates];
+  };
+  const paragraphs = normalizedPackageParagraphs(text);
+  const sentences = String(text || "")
+    .replace(/\r\n?/g, "\n")
+    .split(/(?<=[.!?])\s+/u)
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  return {
+    duplicate_paragraphs: duplicateValues(paragraphs),
+    duplicate_sentences: duplicateValues(sentences)
+  };
+}
+
+function packageContentChecks(pkg = {}, draft = null, story = null) {
+  const fullStory = String(draft?.full_story || story?.website_text || "").trim();
+  const facebookFragment = String(pkg.facebook_fragment || "").trim();
+  const commentText = String(pkg.comment_text || "").trim();
+  const trackedUrl = String(pkg.tracked_url || "").trim();
+  let trackedUrlValid = false;
+  try {
+    const parsed = new URL(trackedUrl);
+    trackedUrlValid = /^https?:$/.test(parsed.protocol) && parsed.pathname.startsWith("/s/");
+  } catch {
+    trackedUrlValid = false;
+  }
+  const duplicates = packageDuplicateContent(fullStory);
+  return {
+    full_story_present: Boolean(fullStory),
+    facebook_fragment_present: Boolean(facebookFragment),
+    facebook_fragment_has_no_link: Boolean(facebookFragment) && !/https?:\/\//i.test(facebookFragment),
+    comment_present: Boolean(commentText),
+    tracked_url_valid: trackedUrlValid,
+    comment_contains_tracked_url: Boolean(trackedUrl && commentText.includes(trackedUrl)),
+    story_linked: Boolean(story?.id && pkg.story_id && story.id === pkg.story_id),
+    no_duplicate_paragraphs: duplicates.duplicate_paragraphs.length === 0,
+    no_duplicate_sentences: duplicates.duplicate_sentences.length === 0,
+    duplicate_paragraphs: duplicates.duplicate_paragraphs,
+    duplicate_sentences: duplicates.duplicate_sentences
+  };
+}
+
 function publishingPackageDetails(pkg) {
   if (!pkg) return null;
   const draft = readGeneratedStories().find((item) => item.id === pkg.draft_id) || null;
   const imagePrompt = readImageQueue().find((item) => item.id === pkg.image_prompt_id) || null;
   const schedule = readScheduledPosts().find((item) => item.id === pkg.schedule_id) || null;
   const story = readStories().find((item) => item.id === pkg.story_id || item.source_draft_id === pkg.draft_id) || null;
+  const imageReadiness = packageImageReadiness(pkg, imagePrompt);
   return {
     package: pkg,
     draft,
     image_prompt: imagePrompt,
+    generated_image: imageReadiness.generated_image,
+    image_readiness: imageReadiness,
     schedule,
     story,
+    content_checks: packageContentChecks(pkg, draft, story),
     tracking: packageTrackingSummary(pkg),
     safety: {
       publish_allowed: false,
@@ -10605,7 +10715,7 @@ async function updatePublishingPackageStatus(numberText, status) {
   if (!allowed.has(status)) return null;
   const pkg = publishingPackageByNumber(numberText) || readPublishingPackages().find((item) => item.id === numberText);
   if (!pkg) return null;
-  if (pkg.status === status && (status !== "approved" || latestContentSafetyReviewForPackage(pkg.id))) {
+  if (pkg.status === status && status !== "approved") {
     return { ...pkg, idempotent_replay: true };
   }
   const now = new Date().toISOString();
@@ -10643,6 +10753,30 @@ async function updatePublishingPackageStatus(numberText, status) {
         readiness_blockers: readinessSafetyBlockingIssues(review)
       };
     }
+    const readiness = readinessGateCheckPackageSync({ ...pkg, status: "approved", approved_at: now });
+    if (readiness.status !== "ready") {
+      const updated = readPublishingPackages().map((item) => item.id === pkg.id
+        ? {
+            ...item,
+            status: "review",
+            publish_allowed: false,
+            approval_required: true,
+            approved_at: null,
+            safety_blocked: false,
+            approval_blocked: true,
+            safety_review_id: review.id,
+            updated_at: now
+          }
+        : item);
+      await writePublishingPackages(updated);
+      return {
+        ...(updated.find((item) => item.id === pkg.id) || pkg),
+        approval_blocked: true,
+        safety_review: review,
+        readiness_blockers: readiness.blockers_json,
+        readiness
+      };
+    }
   }
   const updated = readPublishingPackages().map((item) => item.id === pkg.id
     ? {
@@ -10652,6 +10786,7 @@ async function updatePublishingPackageStatus(numberText, status) {
         approval_required: true,
         approved_at: status === "approved" ? now : item.approved_at || null,
         safety_blocked: false,
+        approval_blocked: false,
         safety_review_id: status === "approved" ? latestContentSafetyReviewForPackage(pkg.id)?.id || item.safety_review_id || "" : item.safety_review_id || "",
         updated_at: now
       }
@@ -10693,7 +10828,7 @@ function readinessStatusFromBlockers(blockers = [], score = 0) {
 function readinessGateCheckPackageSync(ref = "1") {
   const pkg = typeof ref === "object" && ref?.id ? ref : readinessPackageByRef(ref);
   if (!pkg) {
-    const blockers = [readinessIssue("package_missing", "hard", "Publishing package does not exist.", "Create a package with /create_package 1 or /создать_пакет 1.")];
+    const blockers = [readinessIssue("package_missing", "hard", "Публикационный пакет не существует.", "Создайте пакет командой /создать_пакет 1.")];
     return {
       ok: false,
       module: "Final Readiness Gate v1",
@@ -10708,7 +10843,10 @@ function readinessGateCheckPackageSync(ref = "1") {
   const details = publishingPackageDetails(pkg);
   const draft = details?.draft || null;
   const imagePrompt = details?.image_prompt || null;
+  const imageReadiness = details?.image_readiness || packageImageReadiness(pkg, imagePrompt);
+  const generatedImage = imageReadiness.generated_image || null;
   const schedule = details?.schedule || null;
+  const contentChecks = details?.content_checks || packageContentChecks(pkg, draft, details?.story || null);
   const safetyReview = latestContentSafetyReviewForPackage(pkg.id);
   const editorialReview = draft ? latestEditorialReviewForDraft(draft.id) : null;
   const editorialScore = Math.max(
@@ -10719,41 +10857,65 @@ function readinessGateCheckPackageSync(ref = "1") {
   const finalSafetyRecommendation = String(draft?.final_safety_recommendation || safetyReview?.recommendation || "pending");
   const blockers = [];
 
-  if (!draft) blockers.push(readinessIssue("draft_missing", "hard", "Package draft is missing.", "Create a new package from an existing draft."));
+  if (!draft) blockers.push(readinessIssue("draft_missing", "hard", "В пакете отсутствует черновик.", "Создайте новый пакет из существующего черновика."));
 
   const safetyBlockers = readinessSafetyBlockingIssues(safetyReview || {});
   if (!safetyReview) blockers.push(...safetyBlockers);
   if (safetyReview && !readinessSafetyGateAllows(safetyReview)) blockers.push(...safetyBlockers);
 
   if (!editorialReview && !draft?.final_editorial_score) {
-    blockers.push(readinessIssue("editorial_missing", "work", "Editorial Board review is missing.", "Run /review_story 1 or /проверить_историю 1."));
+    blockers.push(readinessIssue("editorial_missing", "work", "Редакционная проверка отсутствует.", "Запустите /проверить_историю 1."));
   }
   if (editorialScore < 75) {
-    blockers.push(readinessIssue("editorial_score_low", "work", `Final editorial score is ${editorialScore}/100.`, "Run /improve_to_ready 1 or /улучшить_до_готовности 1."));
+    blockers.push(readinessIssue("editorial_score_low", "work", `Итоговая редакционная оценка: ${editorialScore}/100.`, "Запустите /улучшить_до_готовности 1."));
   }
   if (finalSafetyRecommendation === "reject") {
-    blockers.push(readinessIssue("final_safety_reject", "hard", "Final draft safety recommendation is reject.", "Rewrite the draft before package readiness."));
+    blockers.push(readinessIssue("final_safety_reject", "hard", "Итоговая проверка безопасности отклонила черновик.", "Перепишите черновик до повторной проверки."));
+  }
+  if (!contentChecks.full_story_present) {
+    blockers.push(readinessIssue("full_story_missing", "hard", "Полный текст рассказа отсутствует.", "Восстановите полный рассказ до одобрения."));
+  }
+  if (!contentChecks.facebook_fragment_present) {
+    blockers.push(readinessIssue("facebook_fragment_missing", "hard", "Текст для Facebook отсутствует.", "Создайте Facebook-фрагмент до одобрения."));
+  } else if (!contentChecks.facebook_fragment_has_no_link) {
+    blockers.push(readinessIssue("facebook_fragment_contains_link", "hard", "Текст для Facebook содержит ссылку.", "Оставьте ссылку только в первом комментарии."));
+  }
+  if (!contentChecks.comment_present) {
+    blockers.push(readinessIssue("first_comment_missing", "hard", "Первый комментарий отсутствует.", "Создайте первый комментарий с отслеживаемой ссылкой."));
+  }
+  if (!contentChecks.tracked_url_valid || !contentChecks.comment_contains_tracked_url || !contentChecks.story_linked) {
+    blockers.push(readinessIssue("tracked_link_invalid", "hard", "Ссылка на продолжение отсутствует, некорректна или ведёт на другую историю.", "Пересоздайте ссылку для этого пакета."));
+  }
+  if (!contentChecks.no_duplicate_paragraphs || !contentChecks.no_duplicate_sentences) {
+    blockers.push(readinessIssue("duplicate_story_content", "hard", "В полном рассказе найдены повторяющиеся предложения или абзацы.", "Удалите повторы и повторите проверку."));
   }
   if (!pkg.image_prompt_id || !imagePrompt) {
-    blockers.push(readinessIssue("image_missing", "hard", "Approved image prompt is not attached.", "Create image prompts and approve one with /image 1 then /approve_image 1."));
+    blockers.push(readinessIssue("image_missing", "hard", "Одобренный промпт изображения не прикреплён.", "Создайте промпты командой /картинка 1 и одобрите один."));
   } else if (imagePrompt.status !== "approved") {
-    blockers.push(readinessIssue("image_not_approved", "hard", `Image prompt status is ${imagePrompt.status || "missing"}.`, "Approve the image prompt before readiness."));
+    blockers.push(readinessIssue("image_not_approved", "hard", `Промпт изображения имеет статус «${telegramRuLabel(imagePrompt.status || "отсутствует")}».`, "Одобрите промпт изображения."));
+  }
+  if (!imageReadiness.image_uploaded) {
+    blockers.push(readinessIssue("actual_image_missing", "hard", "Есть только промпт: само изображение ещё не загружено и не создано.", "Загрузите или создайте изображение, затем проверьте его."));
+  } else if (!imageReadiness.image_checked) {
+    blockers.push(readinessIssue("actual_image_not_checked", "hard", "Реальное изображение ещё не проверено.", "Проверьте и одобрите реальное изображение."));
+  } else if (!imageReadiness.image_ready) {
+    blockers.push(readinessIssue("actual_image_not_approved", "hard", "Реальное изображение не одобрено.", "Выберите и одобрите другое изображение."));
   }
   if (!pkg.schedule_id || !schedule) {
-    blockers.push(readinessIssue("schedule_missing", "hard", "Scheduled post slot is missing.", "Create a schedule with /schedule or /schedule week."));
+    blockers.push(readinessIssue("schedule_missing", "hard", "В пакете отсутствует время публикации.", "Создайте расписание командой /план."));
   }
   if (pkg.status !== "approved") {
-    blockers.push(readinessIssue("package_not_approved", "hard", `Package status is ${pkg.status || "review"}.`, "Approve the package with /approve_package 1."));
+    blockers.push(readinessIssue("package_not_approved", "hard", `Пакет имеет статус «${telegramRuLabel(pkg.status || "review")}».`, "Одобрите пакет командой /одобрить_пакет 1."));
   }
   if (pkg.publish_allowed !== false) {
-    blockers.push(readinessIssue("publish_allowed_true", "hard", "publish_allowed is not false.", "Keep publishing disabled and fix package safety flags."));
+    blockers.push(readinessIssue("publish_allowed_true", "hard", "Защитный флаг публикации имеет неверное значение.", "Оставьте публикацию отключённой и исправьте защитные настройки."));
   }
 
   const checks = {
     package_exists: true,
     safety_passed: Boolean(safetyReview && readinessSafetyGateAllows(safetyReview)),
     editorial_passed: editorialScore >= 75 && finalSafetyRecommendation !== "reject",
-    image_approved: Boolean(imagePrompt && imagePrompt.status === "approved"),
+    image_approved: Boolean(imageReadiness.image_ready),
     schedule_exists: Boolean(schedule),
     package_approved: pkg.status === "approved",
     publish_disabled: pkg.publish_allowed === false
@@ -10787,11 +10949,16 @@ function readinessGateCheckPackageSync(ref = "1") {
     },
     details: {
       image_prompt_id: imagePrompt?.id || "",
-      image_status: imagePrompt?.status || "missing",
+      image_prompt_status: imagePrompt?.status || "missing",
+      generated_image_id: generatedImage?.id || "",
+      generated_image_status: generatedImage?.status || "missing",
+      actual_image_ready: Boolean(imageReadiness.image_ready),
+      image_state: imageReadiness.state,
       schedule_id: schedule?.id || "",
       scheduled_time: schedule?.scheduled_time || "",
       package_status: pkg.status || "review",
-      publish_allowed: pkg.publish_allowed === true
+      publish_allowed: pkg.publish_allowed === true,
+      content_checks: contentChecks
     },
     safety: { publish_allowed: false, facebook_publishing: false, approval_required: true }
   };
@@ -10855,51 +11022,52 @@ function prepublishFacebookPostText(draft = {}) {
 }
 
 function prepublishExpectedReaction({ draft = {}, editorialScore = 0, readinessScore = 0, safetyScore = 0 }) {
-  const emotion = draft.emotion || "emotional curiosity";
-  const category = draft.category || "life story";
+  const emotion = telegramRuLabel(draft.emotion || "любопытство");
+  const category = telegramRuLabel(draft.category || "жизненная история");
   if (readinessScore >= 95 && editorialScore >= 78 && safetyScore >= 74) {
-    return `Likely strong curiosity and comments: ${category} with ${emotion} has enough hook strength, safety and editorial readiness for a manual test post.`;
+    return `Вероятны интерес и комментарии: тема «${category}» и эмоция «${emotion}» имеют достаточную силу начала, безопасность и редакционную готовность для ручного теста.`;
   }
   if (readinessScore >= 75) {
-    return `Moderate reaction expected: the story is structurally ready, but manual review should watch the hook and first comments.`;
+    return "Ожидается умеренная реакция: структура готова, но начало и первые комментарии требуют ручной проверки.";
   }
-  return "Weak or risky reaction expected: package is not fully ready and should not move toward publishing.";
+  return "Реакция может быть слабой или рискованной: пакет не готов и не должен переходить к публикации.";
 }
 
 function prepublishRiskWarnings(readiness = {}, details = {}) {
   const warnings = [];
-  if (readiness.status !== "ready") warnings.push(`Readiness status is ${readiness.status}; preview is blocked from publishing.`);
+  if (readiness.status !== "ready") warnings.push(`Статус готовности: ${telegramRuLabel(readiness.status)}. Переход к публикации заблокирован.`);
   if ((readiness.blockers_json || []).length) {
-    warnings.push(...readiness.blockers_json.slice(0, 4).map((item) => `${item.code}: ${item.message}`));
+    warnings.push(...readiness.blockers_json.slice(0, 4).map((item) => item.message));
   }
-  if (readiness.safety_review?.facebook_risk && readiness.safety_review.facebook_risk !== "low") warnings.push(`Facebook risk is ${readiness.safety_review.facebook_risk}.`);
-  if (readiness.safety_review?.policy_risk && readiness.safety_review.policy_risk !== "low") warnings.push(`Policy risk is ${readiness.safety_review.policy_risk}.`);
-  if (!details.image_prompt?.id) warnings.push("Approved image prompt reference is missing.");
-  if (!details.schedule?.scheduled_time) warnings.push("Scheduled time is missing.");
-  if (!details.story?.id) warnings.push("Website story draft is missing.");
-  if (details.story?.id && details.story.status !== "published") warnings.push("Website story must be published manually before the Facebook fragment and first comment.");
-  warnings.push("Simulation only: no Facebook post, no write permission, no autopublishing.");
+  if (readiness.safety_review?.facebook_risk && readiness.safety_review.facebook_risk !== "low") warnings.push(`Риск для Facebook: ${telegramRuLabel(readiness.safety_review.facebook_risk)}.`);
+  if (readiness.safety_review?.policy_risk && readiness.safety_review.policy_risk !== "low") warnings.push(`Риск нарушения правил: ${telegramRuLabel(readiness.safety_review.policy_risk)}.`);
+  if (!details.image_prompt?.id) warnings.push("Одобренный промпт изображения отсутствует.");
+  if (!details.image_readiness?.image_ready) warnings.push("Одобренное реальное изображение отсутствует: промпт не является изображением.");
+  if (!details.schedule?.scheduled_time) warnings.push("Время публикации не назначено.");
+  if (!details.story?.id) warnings.push("Черновик истории для сайта отсутствует.");
+  if (details.story?.id && details.story.status !== "published") warnings.push("Перед ручным размещением во Facebook историю на сайте нужно опубликовать отдельно.");
+  warnings.push("Это только моделирование: публикация и права записи в Facebook отключены.");
   return [...new Set(warnings)].map((message) => ({ message }));
 }
 
 function prepublishChecklist(readiness = {}, details = {}) {
   return [
-    { item: "Package exists", passed: Boolean(readiness.package_id) },
-    { item: "Package approved", passed: readiness.details?.package_status === "approved" },
-    { item: "Content Safety passed", passed: Boolean(readiness.checks?.safety_passed) },
-    { item: "Editorial score >= 75", passed: Boolean(readiness.checks?.editorial_passed) },
-    { item: "Approved image prompt attached", passed: Boolean(readiness.checks?.image_approved) },
-    { item: "Schedule exists", passed: Boolean(readiness.checks?.schedule_exists) },
-    { item: "Readiness score 100", passed: Number(readiness.readiness_score || 0) >= 100 },
-    { item: "Website story draft linked", passed: Boolean(details.story?.id) },
-    { item: "Tracked continuation link created", passed: Boolean(readiness.package?.tracked_url) },
-    { item: "Website story published manually before Facebook", passed: details.story?.status === "published" },
-    { item: "publish_allowed remains false", passed: readiness.package?.publish_allowed === false },
-    { item: "No Facebook write action", passed: true },
-    { item: "Manual human approval still required", passed: true }
+    { item: "Пакет существует", passed: Boolean(readiness.package_id) },
+    { item: "Пакет одобрен", passed: readiness.details?.package_status === "approved" },
+    { item: "Проверка безопасности пройдена", passed: Boolean(readiness.checks?.safety_passed) },
+    { item: "Редакционная оценка не ниже 75", passed: Boolean(readiness.checks?.editorial_passed) },
+    { item: "Одобренное реальное изображение прикреплено", passed: Boolean(readiness.checks?.image_approved) },
+    { item: "Время публикации назначено", passed: Boolean(readiness.checks?.schedule_exists) },
+    { item: "Оценка готовности равна 100", passed: Number(readiness.readiness_score || 0) >= 100 },
+    { item: "Черновик истории на сайте связан с пакетом", passed: Boolean(details.story?.id) },
+    { item: "Отслеживаемая ссылка создана", passed: Boolean(readiness.package?.tracked_url) },
+    { item: "История на сайте опубликована вручную до Facebook", passed: details.story?.status === "published" },
+    { item: "Автоматическая публикация остаётся отключённой", passed: readiness.package?.publish_allowed === false },
+    { item: "Запись в Facebook не выполнялась", passed: true },
+    { item: "Решение владельца по-прежнему обязательно", passed: true }
   ].map((row) => ({
     ...row,
-    note: row.passed ? "ok" : "needs attention"
+    note: row.passed ? "выполнено" : "требует внимания"
   }));
 }
 
@@ -12046,8 +12214,23 @@ function telegramConfigStatus() {
   };
 }
 
+let telegramDryRunMessageId = 900000;
+
 async function telegramApi(method, payload = {}) {
   if (!process.env.BOT_TOKEN) return null;
+  if (process.env.TELEGRAM_DRY_RUN === "true") {
+    telegramDryRunMessageId += 1;
+    if (method === "getMe") {
+      return { ok: true, result: { id: 1, username: "dry_run_bot", first_name: "ИИ-редакция историй" } };
+    }
+    if (method === "getWebhookInfo") {
+      return { ok: true, result: { url: TELEGRAM_WEBHOOK_URL, pending_update_count: 0, allowed_updates: ["message", "callback_query"] } };
+    }
+    if (method === "getUpdates") {
+      return { ok: true, result: [] };
+    }
+    return { ok: true, result: { message_id: telegramDryRunMessageId, dry_run: true, method } };
+  }
   const response = await fetch(`https://api.telegram.org/bot${process.env.BOT_TOKEN}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -12122,6 +12305,7 @@ async function setTelegramWebhook() {
     };
   }
   const commands = await registerTelegramCommands();
+  const profile = await configureTelegramProfile();
   const webhookPayload = {
     url: TELEGRAM_WEBHOOK_URL,
     allowed_updates: ["message", "callback_query"],
@@ -12136,13 +12320,14 @@ async function setTelegramWebhook() {
     ok: result.ok,
     configured: true,
     webhook_url: TELEGRAM_WEBHOOK_URL,
-    message: result.description || (result.ok ? "Telegram webhook set." : "Telegram webhook was not set."),
+    message: result.description || (result.ok ? "Webhook Telegram установлен." : "Webhook Telegram не установлен."),
     set_webhook: {
       ok: result.ok,
       error_code: result.error_code,
       description: result.description
     },
     set_commands: safeTelegramApiResult(commands),
+    set_profile: profile,
     webhook_info: info
   };
 }
@@ -12162,7 +12347,7 @@ function mainTelegramKeyboard() {
 }
 
 function telegramSafetyFooter() {
-  return "Безопасность: автопубликация отключена, publish_allowed=false, approval_required=true.";
+  return "Безопасность: автоматическая публикация отключена. Любое одобрение меняет только редакционный статус.";
 }
 
 function storyTelegramStatus(story) {
@@ -12182,42 +12367,329 @@ function shortText(text = "", limit = 900) {
   return clean.length > limit ? `${clean.slice(0, limit - 3)}...` : clean;
 }
 
+function telegramRuLabel(value = "") {
+  const key = String(value || "").trim().toLowerCase();
+  const labels = {
+    draft: "черновик",
+    review: "на редакторской проверке",
+    approved: "одобрено",
+    scheduled: "запланировано",
+    published: "опубликовано",
+    rejected: "отклонено",
+    pending: "ожидает проверки",
+    needs_approval: "требуется проверка",
+    needs_more_work: "нужна доработка",
+    safe: "безопасно",
+    needs_edit: "требуются правки",
+    ready: "готово",
+    not_ready: "не готово",
+    blocked: "заблокировано",
+    needs_work: "требуется доработка",
+    generated: "изображение создано",
+    failed: "ошибка",
+    needs_review: "требуется проверка",
+    selected: "выбрано",
+    low: "низкий",
+    medium: "средний",
+    high: "высокий",
+    approved_for_generation: "промпт допущен к генерации",
+    needs_prompt_edit: "промпт требует правок",
+    reject_visual_concept: "визуальная концепция отклонена",
+    engagement_proxy: "предварительная оценка по доступным данным",
+    structure_only: "структурная оценка без метрик",
+    insufficient_data: "недостаточно данных",
+    curiosity: "любопытство",
+    comfort: "спокойствие",
+    tension: "напряжение",
+    anger: "злость",
+    betrayal: "предательство",
+    shock: "потрясение",
+    sadness: "грусть",
+    hopelessness: "безнадёжность",
+    hope: "надежда",
+    love: "любовь",
+    justice: "справедливость",
+    relief: "облегчение",
+    surprise: "удивление",
+    "family warmth": "семейное тепло",
+    family: "семья",
+    inheritance: "наследство",
+    loneliness: "одиночество",
+    revenge: "месть",
+    kindness: "доброта",
+    poverty: "бедность",
+    wealth: "богатство",
+    war: "война",
+    mixed: "смешанный",
+    short: "короткая",
+    long: "длинная",
+    "family conflict": "семейный конфликт",
+    "family moral conflict": "семейный нравственный конфликт",
+    "question hook": "начало с интригующего вопроса",
+    "family conflict hook": "начало с семейного конфликта",
+    "emotional scene hook": "начало с эмоциональной сцены",
+    "hidden truth hook": "начало с раскрытия тайны",
+    "inheritance or money hook": "начало с наследства или денег",
+    "direct emotional confession": "прямое эмоциональное признание",
+    "object-trigger opening": "начало с важного предмета",
+    "family argument opening": "начало с семейного спора",
+    "question opening": "начало с вопроса",
+    "memory opening": "начало с воспоминания",
+    "emotional situation opening": "начало с эмоциональной ситуации",
+    "short punchy rhythm": "короткий энергичный ритм",
+    "mixed human rhythm": "живой смешанный ритм",
+    "steady readable rhythm": "ровный читаемый ритм",
+    "long dense rhythm": "длинный плотный ритм",
+    "short mobile paragraphs": "короткие абзацы для телефона",
+    "balanced story paragraphs": "сбалансированные абзацы",
+    "dense paragraphs": "слишком плотные абзацы",
+    "single-block or underdeveloped rhythm": "один сплошной блок или недостаточно развитый ритм",
+    "add 2-4 short dialogue lines": "добавить 2-4 короткие реплики",
+    "keep natural short dialogue": "сохранить короткий естественный диалог",
+    "hidden object + family silence in the first 2 lines": "скрытый предмет и семейное молчание в первых двух строках",
+    "family conflict + emotional question": "семейный конфликт и эмоциональный вопрос",
+    "open with a specific object, room, smell, sound or gesture": "начать с конкретного предмета, комнаты, запаха, звука или жеста",
+    "put the conflict in the first 3 lines": "показать конфликт в первых трёх строках",
+    "add small imperfect details: cold tea, old slippers, unpaid receipt, shaking hands": "добавить несовершенные бытовые детали: остывший чай, старые тапочки, неоплаченный счёт, дрожащие руки",
+    "use short dialogue where people avoid saying the whole truth": "использовать короткий диалог, в котором герои избегают всей правды",
+    "let the moral appear through action, not a final lecture": "показать смысл через поступок, а не через нравоучение в финале",
+    "It was destiny": "Это была судьба",
+    "everything changed forever": "всё изменилось навсегда",
+    "from that moment on": "с этого момента",
+    "lesson learned": "урок усвоен",
+    "her heart was full of emotions": "её сердце переполняли эмоции",
+    "generic long explanations before the conflict": "длинные общие объяснения до начала конфликта",
+    "moral emotional ending": "эмоциональный финал без прямого нравоучения",
+    "same peak emotion three drafts in a row": "одна и та же пиковая эмоция в трёх черновиках подряд",
+    "flat tension without recovery": "ровное напряжение без эмоционального восстановления",
+    cinematic_realism: "кинематографичный реализм",
+    emotional_close_up: "эмоциональный крупный план",
+    family_conflict_scene: "сцена семейного конфликта",
+    mysterious_object_reveal: "раскрытие тайны через предмет",
+    facebook_cover_style: "обложка для Facebook",
+    original: "оригинал",
+    editorial_rewrite: "редакционная версия",
+    editorial_second_pass: "вторая редакционная версия"
+  };
+  return labels[key] || String(value || "");
+}
+
+function telegramRussianizeVisibleText(text = "") {
+  let result = String(text || "");
+  const replacements = [
+    ["AI Story Traffic Platform", "ИИ-редакция историй"],
+    ["AI Page Analyzer", "Анализ Facebook-страницы"],
+    ["Posts analyzed", "Проанализировано публикаций"],
+    ["Best themes", "Лучшие темы"],
+    ["Best hooks", "Лучшие варианты начала истории"],
+    ["Project Brain updated", "Мозг проекта обновлён"],
+    ["Project Brain", "Мозг проекта"],
+    ["Visual Intelligence", "Визуальный редактор"],
+    ["Visual Quality Checker", "Проверка визуальной концепции"],
+    ["Image Generator", "Редактор изображений"],
+    ["Content Safety AI", "Проверка безопасности"],
+    ["AI Editorial Board", "Редакционная коллегия"],
+    ["Editorial Rewriter", "Редактор текста"],
+    ["Editorial Auto-Pass", "Дополнительная редакционная проверка"],
+    ["Human Emotion Engine", "Анализ эмоциональной кривой"],
+    ["Style Brain", "Анализ стиля"],
+    ["Final Readiness Gate", "Финальная проверка готовности"],
+    ["Pre-Publish Simulator", "Предпросмотр перед публикацией"],
+    ["Pre-Publish Preview", "Предпросмотр перед публикацией"],
+    ["Website Preview", "Предпросмотр на сайте"],
+    ["Editorial Score", "Редакционная оценка"],
+    ["Editorial:", "Редакционная оценка:"],
+    ["Safety Score", "Оценка безопасности"],
+    ["Originality Score", "Оценка оригинальности"],
+    ["Safety:", "Безопасность:"],
+    ["Style realism", "Естественность стиля"],
+    ["Emotion peak", "Эмоциональный пик"],
+    ["Visual Quality Score", "Оценка визуальной концепции"],
+    ["Visual Quality", "Качество визуальной концепции"],
+    ["Readiness", "Готовность"],
+    ["Reader Retention", "Прогноз удержания читателя"],
+    ["Comment Prediction", "Прогноз комментариев"],
+    ["Share Prediction", "Прогноз репостов"],
+    ["Publication Readiness", "Готовность материала"],
+    ["Facebook Risk", "Риск для Facebook"],
+    ["Quality Risk", "Риск качества"],
+    ["Policy Risk", "Риск нарушения правил"],
+    ["Artifact Risk", "Риск артефактов"],
+    ["Thumbnail Strength", "Сила миниатюры"],
+    ["Emotion Clarity", "Ясность эмоции"],
+    ["Recommendation", "Рекомендация"],
+    ["Recommendations", "Рекомендации"],
+    ["Issues", "Замечания"],
+    ["Suggestions", "Предложения"],
+    ["What is good", "Что удалось"],
+    ["What is weak", "Что нужно улучшить"],
+    ["Improvement Plan", "План улучшения"],
+    ["Latest Reviews", "Последние проверки"],
+    ["Scores", "Оценки"],
+    ["Generated Images", "Созданные изображения"],
+    ["Story Generator", "Генератор историй"],
+    ["Internet Research AI", "Исследователь идей"],
+    ["Audience Analyst", "Анализ аудитории"],
+    ["Competitor Analyst", "Анализ конкурентов"],
+    ["AI Autopilot", "Редакционный автопилот"],
+    ["Data Layer", "Слой данных"],
+    ["Daily Content Plan", "Ежедневный план материалов"],
+    ["Scheduler", "Планировщик"],
+    ["Stats", "Статистика"],
+    ["Stories:", "Истории:"],
+    ["Drafts:", "Черновики:"],
+    ["Review:", "На проверке:"],
+    ["Approved:", "Одобрено:"],
+    ["Scheduled:", "Запланировано:"],
+    ["Published:", "Опубликовано:"],
+    ["Rejected:", "Отклонено:"],
+    ["Views:", "Просмотры:"],
+    ["Clicks:", "Переходы:"],
+    ["Loaded:", "Загружено:"],
+    ["Saved new:", "Сохранено новых:"],
+    ["Skipped duplicates:", "Пропущено повторов:"],
+    ["Stored total:", "Всего сохранено:"],
+    ["Generated:", "Создано:"],
+    ["Created:", "Создано:"],
+    ["Analyzed:", "Проанализировано:"],
+    ["Timelines:", "Эмоциональных шкал:"],
+    ["Profiles:", "Профилей:"],
+    ["status:", "статус:"],
+    ["Status:", "Статус:"],
+    ["provider:", "провайдер:"],
+    ["quality_score:", "оценка качества:"],
+    ["quality:", "качество:"],
+    ["image_prompt_id:", "ID промпта:"],
+    ["generated_image_id:", "ID изображения:"],
+    ["image:", "изображение:"],
+    ["rank:", "место:"],
+    ["score:", "оценка:"],
+    ["risk:", "риск:"],
+    ["recommendation:", "рекомендация:"],
+    ["concept:", "концепция:"],
+    ["draft:", "черновик:"],
+    ["package:", "пакет:"],
+    ["title:", "заголовок:"],
+    ["type:", "тип:"],
+    ["revision:", "версия:"],
+    ["length:", "длина:"],
+    ["safety:", "безопасность:"],
+    ["readiness:", "готовность:"],
+    ["scheduled:", "время:"],
+    ["Similarity:", "Сходство:"],
+    ["Hook:", "Начало:"],
+    ["Opening:", "Вступление:"],
+    ["Emotion:", "Эмоции:"],
+    ["Dialogue:", "Диалоги:"],
+    ["Rhythm:", "Ритм:"],
+    ["Twist:", "Поворот:"],
+    ["Ending:", "Финал:"],
+    ["Originality:", "Оригинальность:"],
+    ["Human realism:", "Человечность:"],
+    ["Facebook readability:", "Читаемость для Facebook:"],
+    ["Before:", "До:"],
+    ["After:", "После:"],
+    ["Expected:", "Ожидание:"],
+    ["Revision:", "Версия:"],
+    ["Final score:", "Итоговая оценка:"],
+    ["Second pass used:", "Использована вторая проверка:"],
+    ["Already ready:", "Уже готово:"],
+    ["Best score:", "Лучшая оценка:"],
+    ["Best safety:", "Лучшая оценка безопасности:"],
+    ["not needed", "не требуется"],
+    ["needs edit", "требуются правки"],
+    ["Done.", "Готово."],
+    ["No Facebook posting.", "Публикация в Facebook не выполнялась."],
+    ["No publishing.", "Публикация не выполнялась."],
+    ["No autopublishing.", "Автоматическая публикация отключена."],
+    ["Nothing was published.", "Ничего не опубликовано."],
+    ["Publishing is disabled.", "Публикация отключена."],
+    ["No real image generation.", "Реальное изображение не создавалось."],
+    ["No image generation.", "Изображение не создавалось."],
+    ["No OpenAI Images call.", "Запрос к OpenAI Images не выполнялся."],
+    ["Draft not found.", "Черновик не найден."],
+    ["Package is not ready.", "Пакет не готов."],
+    ["Visual concept not found.", "Визуальная концепция не найдена."],
+    ["Generated image not found.", "Созданное изображение не найдено."],
+    ["Untitled draft", "Черновик без заголовка"],
+    ["Prompt", "Промпт"],
+    ["Preview", "Предпросмотр"],
+    ["Blockers", "Причины блокировки"],
+    ["Next actions", "Следующие действия"],
+    ["None. Package is ready for manual publishing workflow.", "Нет. Пакет прошёл проверку для дальнейшей ручной работы."],
+    ["Manual review only. No Facebook publishing is enabled.", "Требуется ручная проверка. Публикация в Facebook отключена."]
+  ];
+  for (const [from, to] of replacements) result = result.split(from).join(to);
+  const statusValues = [
+    "approved_for_generation", "reject_visual_concept", "needs_prompt_edit", "editorial_second_pass",
+    "editorial_rewrite", "needs_more_work", "needs_approval", "engagement_proxy", "insufficient_data",
+    "structure_only", "not_ready", "needs_edit", "needs_work", "needs_review", "approved", "rejected",
+    "scheduled", "published", "generated", "selected", "blocked", "pending", "failed", "ready", "draft",
+    "low", "medium", "high"
+  ];
+  for (const value of statusValues) {
+    result = result.replace(new RegExp(`\\b${value}\\b`, "gi"), telegramRuLabel(value));
+  }
+  return result;
+}
+
 async function sendTelegramMessage(chatId, text, replyMarkup) {
   return telegramApi("sendMessage", {
     chat_id: chatId,
-    text,
+    text: telegramRussianizeVisibleText(text),
     parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: replyMarkup
   });
 }
 
+function splitTelegramTextSafely(text = "", limit = 3000) {
+  const paragraphs = String(text || "").replace(/\r\n?/g, "\n").split(/\n{2,}/);
+  const chunks = [];
+  let current = "";
+  const pushCurrent = () => {
+    if (current) chunks.push(current);
+    current = "";
+  };
+  for (const paragraph of paragraphs) {
+    if (!paragraph) continue;
+    const candidate = current ? `${current}\n\n${paragraph}` : paragraph;
+    if (candidate.length <= limit) {
+      current = candidate;
+      continue;
+    }
+    pushCurrent();
+    if (paragraph.length <= limit) {
+      current = paragraph;
+      continue;
+    }
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    let wordChunk = "";
+    for (const word of words) {
+      const next = wordChunk ? `${wordChunk} ${word}` : word;
+      if (next.length <= limit) {
+        wordChunk = next;
+      } else {
+        if (wordChunk) chunks.push(wordChunk);
+        wordChunk = word;
+      }
+    }
+    if (wordChunk) current = wordChunk;
+  }
+  pushCurrent();
+  return chunks;
+}
+
 async function sendTelegramLongMessage(chatId, text, replyMarkup, limit = 3400) {
   const source = String(text || "");
   if (source.length <= limit) return sendTelegramMessage(chatId, source, replyMarkup);
-  const chunks = [];
-  let current = "";
-  for (const part of source.split(/\n\n/)) {
-    const next = current ? `${current}\n\n${part}` : part;
-    if (next.length <= limit) {
-      current = next;
-      continue;
-    }
-    if (current) chunks.push(current);
-    if (part.length <= limit) {
-      current = part;
-      continue;
-    }
-    for (let index = 0; index < part.length; index += limit) {
-      chunks.push(part.slice(index, index + limit));
-    }
-    current = "";
-  }
-  if (current) chunks.push(current);
+  const chunks = splitTelegramTextSafely(source, limit);
+  const messageIds = [];
   for (let index = 0; index < chunks.length; index += 1) {
-    await sendTelegramMessage(chatId, chunks[index], index === chunks.length - 1 ? replyMarkup : undefined);
+    const result = await sendTelegramMessage(chatId, chunks[index], index === chunks.length - 1 ? replyMarkup : undefined);
+    if (result?.result?.message_id) messageIds.push(result.result.message_id);
   }
-  return { ok: true, chunks: chunks.length };
+  return { ok: true, chunks: chunks.length, message_ids: messageIds, result: { message_id: messageIds.at(-1) || null } };
 }
 
 async function sendTelegramPhoto(chatId, photo, caption, replyMarkup) {
@@ -12227,7 +12699,7 @@ async function sendTelegramPhoto(chatId, photo, caption, replyMarkup) {
   return telegramApi("sendPhoto", {
     chat_id: chatId,
     photo,
-    caption,
+    caption: telegramRussianizeVisibleText(caption),
     parse_mode: "HTML",
     reply_markup: replyMarkup
   });
@@ -12235,7 +12707,7 @@ async function sendTelegramPhoto(chatId, photo, caption, replyMarkup) {
 
 async function telegramStart(chatId) {
   return sendTelegramMessage(chatId, [
-    "🤖 <b>AI Story Traffic Platform</b>",
+    "🤖 <b>ИИ-редакция историй</b>",
     "",
     "Личный центр управления историями, идеями, картинками, планом и пакетами публикаций.",
     "",
@@ -12261,13 +12733,13 @@ async function telegramButtonGuide(chatId, text = "") {
       "/поиск любовь",
       "/поиск наследство",
       "",
-      "Английский вариант тоже работает: /research betrayal",
+      "Можно указать любую тему после команды /поиск.",
       telegramSafetyFooter()
     ],
     "✍️ Создать истории": [
       "✍️ <b>Создать истории</b>",
       "",
-      "Я создам оригинальные черновики на основе Project Brain, Facebook-аналитики и research signals.",
+      "Я создам оригинальные черновики на основе Мозга проекта, анализа Facebook и найденных исследовательских сигналов.",
       "",
       "Попробуйте:",
       "/создать измена 3",
@@ -12289,7 +12761,7 @@ async function telegramButtonGuide(chatId, text = "") {
       "Попробуйте:",
       "/картинка 1 — создать 3 промпта для черновика #1",
       "/картинки — очередь промптов",
-      "/image_prompt 1 — полный промпт",
+      "/промпт_картинки 1 — полный промпт",
       "/одобрить_картинку 1 — одобрить промпт",
       "",
       telegramSafetyFooter()
@@ -12303,7 +12775,7 @@ async function telegramButtonGuide(chatId, text = "") {
       "/план — план на завтра",
       "/план неделя — план на 7 дней",
       "/очередь — запланированные черновики",
-      "/approve_schedule — одобрить расписание без публикации",
+      "/одобрить_план — одобрить расписание без публикации",
       "",
       telegramSafetyFooter()
     ],
@@ -12342,8 +12814,8 @@ async function telegramStoryDetails(chatId, id) {
   const text = `📖 <b>${escapeHtml(story.title)}</b>\n\nСтатус: ${storyTelegramStatus(story)}\n\n📝 <b>Facebook-пост</b>\n${escapeHtml(shortText(story.facebook_text, 900))}\n\n🌐 <b>Продолжение сайта</b>\n${escapeHtml(shortText(story.website_text, 900))}\n\n🖼 <b>Изображение</b>\n${escapeHtml(story.image || "нет")}`;
   return sendTelegramMessage(chatId, text, {
     inline_keyboard: [
-      [{ text: "✅ Approve", callback_data: `approve:${story.id}` }, { text: "✏ Edit", callback_data: `rewrite:${story.id}` }],
-      [{ text: "❌ Reject", callback_data: `reject:${story.id}` }],
+      [{ text: "✅ Одобрить", callback_data: `approve:${story.id}` }, { text: "✏ Изменить", callback_data: `rewrite:${story.id}` }],
+      [{ text: "❌ Отклонить", callback_data: `reject:${story.id}` }],
       [{ text: "⬅ Истории", callback_data: "menu:stories" }]
     ]
   });
@@ -12364,8 +12836,8 @@ async function telegramImageDetails(chatId, id) {
   const caption = `🖼 <b>${escapeHtml(story.title)}</b>\n\nПромпт:\n${escapeHtml(shortText(story.ai_assistant_notes || "Промпт пока не сохранён.", 900))}`;
   return sendTelegramPhoto(chatId, story.image, caption, {
     inline_keyboard: [
-      [{ text: "🔄 Edit", callback_data: `rewrite:${story.id}` }, { text: "✅ Approve", callback_data: `approve:${story.id}` }],
-      [{ text: "❌ Reject", callback_data: `reject:${story.id}` }],
+      [{ text: "🔄 Изменить", callback_data: `rewrite:${story.id}` }, { text: "✅ Одобрить", callback_data: `approve:${story.id}` }],
+      [{ text: "❌ Отклонить", callback_data: `reject:${story.id}` }],
       [{ text: "⬅ Изображения", callback_data: "menu:images" }]
     ]
   });
@@ -12375,12 +12847,12 @@ async function telegramImageQueueV2(chatId) {
   const items = latestImageQueueItems(10);
   if (!items.length) return sendTelegramMessage(chatId, "Промптов для картинок пока нет. Сначала создайте черновики: /создать измена 3, потом /картинка 1.", mainTelegramKeyboard());
   const text = items.map((item, index) => [
-    `${index + 1}. <b>${escapeHtml(shortText(item.story_title || "Untitled draft", 90))}</b>`,
-    `стиль: ${escapeHtml(item.style || "story_idea_prompt")}`,
-    `статус: ${escapeHtml(item.status || "needs_approval")}`,
+    `${index + 1}. <b>${escapeHtml(shortText(item.story_title || "Черновик без заголовка", 90))}</b>`,
+    `стиль: ${escapeHtml(telegramRuLabel(item.style || "промпт к истории"))}`,
+    `статус: ${escapeHtml(telegramRuLabel(item.status || "needs_approval"))}`,
     `черновик: ${escapeHtml(shortText(item.draft_id || item.story_idea_id || "", 32))}`
   ].join("\n")).join("\n\n");
-  return sendTelegramMessage(chatId, `<b>Очередь промптов для картинок</b>\n\n${text}\n\n/image_prompt 1 — полный промпт\n/одобрить_картинку 1 — одобрить\n/reject_image 1 — отклонить\n\nКартинки автоматически не генерируются.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Очередь промптов для картинок</b>\n\n${text}\n\n/промпт_картинки 1 — полный промпт\n/одобрить_картинку 1 — одобрить\n/отклонить_картинку 1 — отклонить\n\nКартинки автоматически не генерируются.`, mainTelegramKeyboard());
 }
 
 async function telegramImagePromptDetailsV2(chatId, numberText = "1") {
@@ -12390,9 +12862,9 @@ async function telegramImagePromptDetailsV2(chatId, numberText = "1") {
   const text = [
     `<b>Промпт картинки ${escapeHtml(numberText)}</b>`,
     "",
-    `<b>${escapeHtml(item.story_title || "Untitled draft")}</b>`,
-    `стиль: ${escapeHtml(item.style || "story_idea_prompt")}`,
-    `статус: ${escapeHtml(item.status || "needs_approval")}`,
+    `<b>${escapeHtml(item.story_title || "Черновик без заголовка")}</b>`,
+    `стиль: ${escapeHtml(telegramRuLabel(item.style || "промпт к истории"))}`,
+    `статус: ${escapeHtml(telegramRuLabel(item.status || "needs_approval"))}`,
     "",
     `<b>Визуальный анализ</b>`,
     `сцена: ${escapeHtml(visual.main_scene || "")}`,
@@ -12402,7 +12874,7 @@ async function telegramImagePromptDetailsV2(chatId, numberText = "1") {
     `время: ${escapeHtml(visual.time_of_day || "")}`,
     `конфликт: ${escapeHtml(visual.visual_conflict || "")}`,
     "",
-    `<b>Prompt</b>`,
+    `<b>Промпт</b>`,
     escapeHtml(item.prompt || ""),
     "",
     "Это только промпт. Изображение не создаётся автоматически. Публикации нет."
@@ -12414,11 +12886,11 @@ async function telegramCreateImagePrompts(chatId, draftNumber = "1") {
   const result = await createImagePromptsForGeneratedDraft(draftNumber || "1");
   if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Черновик не найден. Используйте /черновики."), mainTelegramKeyboard());
   const text = result.prompts.map((item, index) => [
-    `${index + 1}. ${item.style}`,
-    `статус: ${item.status}`,
+    `${index + 1}. ${telegramRuLabel(item.style)}`,
+    `статус: ${telegramRuLabel(item.status)}`,
     `промпт: ${shortText(item.prompt, 420)}`
   ].join("\n")).join("\n\n");
-  return sendTelegramLongMessage(chatId, `<b>Image Generator v2</b>\n\nЧерновик: ${escapeHtml(result.draft_title)}\nСоздано промптов: ${result.created_count}\n\n${escapeHtml(text)}\n\n/картинки — очередь\n/image_prompt 1 — полный промпт\n/одобрить_картинку 1 — одобрить промпт\n\nИзображения автоматически не создаются.`, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Редактор изображений: промпты</b>\n\nЧерновик: ${escapeHtml(result.draft_title)}\nСоздано промптов: ${result.created_count}\n\n${escapeHtml(text)}\n\n/картинки — очередь\n/промпт_картинки 1 — полный промпт\n/одобрить_картинку 1 — одобрить промпт\n\nИзображения автоматически не создаются.`, mainTelegramKeyboard());
 }
 
 async function telegramApproveImageCommand(chatId, numberText = "1") {
@@ -12435,189 +12907,200 @@ async function telegramGenerateImageV3(chatId, numberText = "1") {
   const result = await generateImageV3(numberText || "1");
   if (!result.ok) {
     return sendTelegramLongMessage(chatId, [
-      "<b>Image Generator v3</b>",
+      "<b>Редактор изображений</b>",
       "",
-      `status: ${escapeHtml(result.status || "failed")}`,
-      `code: ${escapeHtml(result.code || "")}`,
-      escapeHtml(result.message || result.error?.message || "Image generation failed."),
+      `Статус: ${escapeHtml(telegramRuLabel(result.status || "failed"))}`,
+      `Код ошибки: ${escapeHtml(result.code || "")}`,
+      "Изображение создать не удалось. Проверьте настройку сервиса и одобрение промпта.",
       "",
-      "No Facebook posting. No autopublishing."
+      "Публикация в Facebook и автоматическая публикация отключены."
     ].join("\n"), mainTelegramKeyboard());
   }
   const image = result.generated_image || {};
   const imageRef = String(image.image_url || "").startsWith("http")
     ? image.image_url
-    : "stored safely in PostgreSQL as a persistent data URL";
+    : "сохранено в PostgreSQL";
   return sendTelegramLongMessage(chatId, [
-    "<b>Image Generator v3</b>",
+    "<b>Редактор изображений</b>",
     "",
-    `provider: ${escapeHtml(result.provider || "OpenAI Images")}`,
-    `status: ${escapeHtml(image.status || "needs_review")}`,
-    `quality_score: ${Number(image.quality_score || 0)}/100`,
-    `image_prompt_id: ${escapeHtml(image.image_prompt_id || "")}`,
-    `generated_image_id: ${escapeHtml(image.id || "")}`,
-    `image: ${escapeHtml(imageRef)}`,
+    `Провайдер: ${escapeHtml(result.provider || "OpenAI Images")}`,
+    `Статус: ${escapeHtml(telegramRuLabel(image.status || "needs_review"))}`,
+    `Предварительная техническая оценка: ${Number(image.quality_score || 0)}/100`,
+    `ID промпта: ${escapeHtml(image.image_prompt_id || "")}`,
+    `ID изображения: ${escapeHtml(image.id || "")}`,
+    `Изображение: ${escapeHtml(imageRef)}`,
     "",
     "/картинки_готовые - список",
     "/одобрить_готовую_картинку 1 - одобрить",
     "/отклонить_готовую_картинку 1 - отклонить",
     "",
-    "No Facebook posting. No autopublishing."
+    "Публикация в Facebook и автоматическая публикация отключены."
   ].join("\n"), mainTelegramKeyboard());
 }
 
 async function telegramGeneratedImages(chatId) {
   const images = latestGeneratedImages(10);
-  if (!images.length) return sendTelegramMessage(chatId, "Готовых сгенерированных картинок пока нет. Используйте /сгенерировать_картинку 1 для approved prompt.", mainTelegramKeyboard());
+  if (!images.length) return sendTelegramMessage(chatId, "Созданных изображений пока нет. Сначала одобрите промпт, затем используйте /сгенерировать_картинку 1.", mainTelegramKeyboard());
   const text = images.map((image, index) => [
     `${index + 1}. <b>${escapeHtml(shortText(image.image_prompt_id || image.id, 80))}</b>`,
-    `status: ${escapeHtml(image.status || "needs_review")}`,
-    `provider: ${escapeHtml(image.provider || "OpenAI Images")}`,
-    `quality: ${Number(image.quality_score || 0)}/100`,
-    `draft: ${escapeHtml(shortText(image.draft_id || "", 32))}`,
-    `image: ${String(image.image_url || "").startsWith("http") ? escapeHtml(image.image_url) : "stored in PostgreSQL"}`
+    `статус: ${escapeHtml(telegramRuLabel(image.status || "needs_review"))}`,
+    `провайдер: ${escapeHtml(image.provider || "OpenAI Images")}`,
+    `предварительная техническая оценка: ${Number(image.quality_score || 0)}/100`,
+    `черновик: ${escapeHtml(shortText(image.draft_id || "", 32))}`,
+    `изображение: ${String(image.image_url || "").startsWith("http") ? escapeHtml(image.image_url) : "сохранено в PostgreSQL"}`
   ].join("\n")).join("\n\n");
-  return sendTelegramLongMessage(chatId, `<b>Generated Images</b>\n\n${text}\n\n/одобрить_готовую_картинку 1\n/отклонить_готовую_картинку 1\n\nПубликация отключена.`, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Созданные изображения</b>\n\n${text}\n\n/одобрить_готовую_картинку 1\n/отклонить_готовую_картинку 1\n\nПубликация отключена.`, mainTelegramKeyboard());
 }
 
 async function telegramApproveGeneratedImage(chatId, numberText = "1") {
   const image = await updateGeneratedImageStatus(numberText || "1", "approved");
   return sendTelegramMessage(chatId, image
-    ? `Generated image ${escapeHtml(numberText)} approved.\nstatus: ${escapeHtml(image.status)}\nquality_score: ${Number(image.quality_score || 0)}/100\n\nNo Facebook posting.`
-    : "Generated image not found. Use /картинки_готовые.", mainTelegramKeyboard());
+    ? `Созданное изображение ${escapeHtml(numberText)} одобрено.\nСтатус: ${escapeHtml(telegramRuLabel(image.status))}\nПредварительная техническая оценка: ${Number(image.quality_score || 0)}/100\n\nПубликация в Facebook не выполнялась.`
+    : "Созданное изображение не найдено. Используйте /картинки_готовые.", mainTelegramKeyboard());
 }
 
 async function telegramRejectGeneratedImage(chatId, numberText = "1") {
   const image = await updateGeneratedImageStatus(numberText || "1", "rejected");
   return sendTelegramMessage(chatId, image
-    ? `Generated image ${escapeHtml(numberText)} rejected.\nstatus: ${escapeHtml(image.status)}\n\nNo Facebook posting.`
-    : "Generated image not found. Use /картинки_готовые.", mainTelegramKeyboard());
+    ? `Созданное изображение ${escapeHtml(numberText)} отклонено.\nСтатус: ${escapeHtml(telegramRuLabel(image.status))}\n\nПубликация в Facebook не выполнялась.`
+    : "Созданное изображение не найдено. Используйте /картинки_готовые.", mainTelegramKeyboard());
 }
 
 async function telegramCreateVisualConcepts(chatId, numberText = "1") {
   const result = await createVisualConceptsForRef(numberText || "1");
   if (!result.ok) {
     return sendTelegramMessage(chatId, [
-      "<b>Visual Intelligence v1</b>",
+      "<b>Визуальный редактор</b>",
       "",
-      escapeHtml(result.message || "Draft/package not found."),
+      "Черновик или пакет не найден.",
       "",
-      "No real image generation. No Facebook posting."
+      "Реальное изображение не создавалось. Публикация в Facebook не выполнялась."
     ].join("\n"), mainTelegramKeyboard());
   }
   const text = result.concepts.slice(0, 5).map((item, index) => [
     `${index + 1}. <b>${escapeHtml(item.title)}</b>`,
-    `rank: ${Number(item.rank || 0)} | CTR ${Number(item.ctr_score || 0)} | emotion ${Number(item.emotion_score || 0)} | realism ${Number(item.realism_score || 0)} | risk ${Number(item.risk_score || 0)}`,
+    `место: ${Number(item.rank || 0)} | прогноз CTR ${Number(item.ctr_score || 0)} | эмоция ${Number(item.emotion_score || 0)} | реализм ${Number(item.realism_score || 0)} | риск ${Number(item.risk_score || 0)}`,
     escapeHtml(shortText(item.description || "", 160)),
-    `prompt: ${escapeHtml(shortText(item.prompt || "", 360))}`
+    `промпт: ${escapeHtml(shortText(item.prompt || "", 360))}`
   ].join("\n")).join("\n\n");
   return sendTelegramLongMessage(chatId, [
-    "<b>Visual Intelligence v1</b>",
+    "<b>Визуальный редактор</b>",
     "",
-    `draft_id: ${escapeHtml(result.draft_id || "")}`,
-    `package_id: ${escapeHtml(result.package_id || "")}`,
-    `best: ${escapeHtml(result.image_critic.best_concept_title || "")}`,
+    `ID черновика: ${escapeHtml(result.draft_id || "")}`,
+    `ID пакета: ${escapeHtml(result.package_id || "")}`,
+    `Лучшая концепция: ${escapeHtml(result.image_critic.best_concept_title || "")}`,
     "",
     text,
     "",
     "/выбрать_визуал 1 - выбрать лучший концепт",
     "/визуалы - последние концепты",
     "",
-    "No OpenAI Images call. No Facebook posting."
+    "Запрос к OpenAI Images не выполнялся. Публикация в Facebook не выполнялась."
   ].join("\n"), mainTelegramKeyboard());
 }
 
 async function telegramVisualConcepts(chatId) {
   const concepts = latestVisualConcepts(10);
-  if (!concepts.length) return sendTelegramMessage(chatId, "Visual concepts пока нет. Используйте /визуал 1 или /visual 1.", mainTelegramKeyboard());
+  if (!concepts.length) return sendTelegramMessage(chatId, "Визуальных концепций пока нет. Используйте /визуал 1.", mainTelegramKeyboard());
   const text = concepts.map((item, index) => [
     `${index + 1}. <b>${escapeHtml(item.title || item.concept_type)}</b>`,
-    `status: ${escapeHtml(item.status || "draft")} | rank: ${Number(item.rank || 0)}`,
-    `CTR ${Number(item.ctr_score || 0)} | emotion ${Number(item.emotion_score || 0)} | realism ${Number(item.realism_score || 0)} | risk ${Number(item.risk_score || 0)}`,
-    `draft: ${escapeHtml(shortText(item.draft_id || "", 32))}`,
-    `package: ${escapeHtml(shortText(item.package_id || "", 32))}`,
+    `статус: ${escapeHtml(telegramRuLabel(item.status || "draft"))} | место: ${Number(item.rank || 0)}`,
+    `прогноз CTR ${Number(item.ctr_score || 0)} | эмоция ${Number(item.emotion_score || 0)} | реализм ${Number(item.realism_score || 0)} | риск ${Number(item.risk_score || 0)}`,
+    `черновик: ${escapeHtml(shortText(item.draft_id || "", 32))}`,
+    `пакет: ${escapeHtml(shortText(item.package_id || "", 32))}`,
     escapeHtml(shortText(item.description || item.prompt || "", 220))
   ].join("\n")).join("\n\n");
-  return sendTelegramLongMessage(chatId, `<b>Visual Concepts</b>\n\n${text}\n\n/выбрать_визуал 1\n\nNo real image generation. No Facebook posting.`, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Визуальные концепции</b>\n\n${text}\n\n/выбрать_визуал 1\n\nРеальное изображение не создавалось. Публикация в Facebook не выполнялась.`, mainTelegramKeyboard());
 }
 
 async function telegramSelectVisualConcept(chatId, numberText = "1") {
   const selected = await selectVisualConcept(numberText || "1");
   return sendTelegramMessage(chatId, selected
     ? [
-        "<b>Visual concept selected</b>",
+        "<b>Визуальная концепция выбрана</b>",
         "",
-        `title: ${escapeHtml(selected.title || "")}`,
-        `rank: ${Number(selected.rank || 0)} | CTR ${Number(selected.ctr_score || 0)}/100`,
-        `status: ${escapeHtml(selected.status || "")}`,
+        `Название: ${escapeHtml(selected.title || "")}`,
+        `Место: ${Number(selected.rank || 0)} | прогноз CTR ${Number(selected.ctr_score || 0)}/100`,
+        `Статус: ${escapeHtml(telegramRuLabel(selected.status || ""))}`,
         "",
-        "This concept is now preferred for package/prepublish preview. Old image prompts were not deleted.",
-        "No real image generation. No Facebook posting."
+        "Эта концепция выбрана для пакета и предпросмотра. Старые промпты не удалены.",
+        "Реальное изображение не создавалось. Публикация в Facebook не выполнялась."
       ].join("\n")
-    : "Visual concept not found. Use /визуалы or /visuals.", mainTelegramKeyboard());
+    : "Визуальная концепция не найдена. Используйте /визуалы.", mainTelegramKeyboard());
 }
 
 async function telegramCheckVisualQuality(chatId, numberText = "1") {
   const result = await createVisualQualityReview(numberText || "1");
   if (!result.ok) {
     return sendTelegramMessage(chatId, [
-      "<b>Visual Quality Checker v1</b>",
+      "<b>Проверка визуальной концепции</b>",
       "",
-      escapeHtml(result.message || "Visual concept not found."),
+      escapeHtml(result.message || "Визуальная концепция не найдена."),
       "",
-      "No image generation. No Facebook posting."
+      "Изображение не создавалось. Публикация в Facebook не выполнялась."
     ].join("\n"), mainTelegramKeyboard());
   }
   const review = result.review || {};
-  const issues = (review.issues_json || []).slice(0, 5).map((item) => `• ${item.area}: ${item.message}`).join("\n") || "• No major issues";
-  const suggestions = (review.suggestions_json || []).slice(0, 5).map((item) => `• ${item}`).join("\n") || "• Keep the current focused prompt.";
+  const issues = (review.issues_json || []).slice(0, 5).map((item) => `• ${item.message}`).join("\n") || "• Существенных замечаний нет";
+  const suggestions = (review.suggestions_json || []).slice(0, 5).map((item) => `• ${item}`).join("\n") || "• Сохраните текущий фокус промпта.";
   return sendTelegramLongMessage(chatId, [
-    "<b>Visual Quality Checker v1</b>",
+    "<b>Проверка визуальной концепции</b>",
     "",
-    `Visual Quality Score: ${Number(review.visual_quality_score || 0)}/100`,
-    `Artifact Risk: ${escapeHtml(review.artifact_risk || "medium")}`,
-    `Thumbnail Strength: ${Number(review.thumbnail_strength || 0)}/100`,
-    `Emotion Clarity: ${Number(review.emotion_clarity || 0)}/100`,
-    `Recommendation: ${escapeHtml(review.recommendation || "")}`,
+    `Оценка визуальной концепции: ${Number(review.visual_quality_score || 0)}/100`,
+    `Риск артефактов: ${escapeHtml(telegramRuLabel(review.artifact_risk || "medium"))}`,
+    `Сила миниатюры: ${Number(review.thumbnail_strength || 0)}/100`,
+    `Ясность эмоции: ${Number(review.emotion_clarity || 0)}/100`,
+    `Рекомендация: ${escapeHtml(telegramRuLabel(review.recommendation || ""))}`,
     "",
-    "<b>Issues</b>",
+    "<b>Замечания к промпту</b>",
     escapeHtml(issues),
     "",
-    "<b>Suggestions</b>",
+    "<b>Как улучшить промпт</b>",
     escapeHtml(suggestions),
     "",
-    "No OpenAI Images call. No Facebook posting."
+    "Запрос к OpenAI Images не выполнялся. Публикация в Facebook не выполнялась."
   ].join("\n"), mainTelegramKeyboard());
 }
 
 async function telegramVisualQuality(chatId) {
   const data = buildVisualQualityDashboardData();
   const reviews = data.latest_reviews.slice(0, 8).map((item, index) => [
-    `${index + 1}. score ${Number(item.visual_quality_score || 0)}/100`,
-    `risk: ${item.artifact_risk || "medium"}`,
-    `recommendation: ${item.recommendation || ""}`,
-    `concept: ${shortText(item.visual_concept_id || "", 32)}`
-  ].join("\n")).join("\n\n") || "Visual quality reviews пока нет. Используйте /проверить_визуал 1.";
+    `${index + 1}. оценка концепции ${Number(item.visual_quality_score || 0)}/100`,
+    `риск: ${telegramRuLabel(item.artifact_risk || "medium")}`,
+    `рекомендация: ${telegramRuLabel(item.recommendation || "")}`,
+    `концепция: ${shortText(item.visual_concept_id || "", 32)}`
+  ].join("\n")).join("\n\n") || "Проверок визуальных концепций пока нет. Используйте /проверить_визуал 1.";
   return sendTelegramLongMessage(chatId, [
-    "<b>Visual Quality Checker v1</b>",
+    "<b>Проверка визуальных концепций</b>",
     "",
-    `Average Quality Score: ${Number(data.average_quality_score || 0)}/100`,
-    `Approved: ${data.approved_concepts.length}`,
-    `Needs prompt edit: ${data.needs_prompt_edit.length}`,
-    `Rejected: ${data.rejected_concepts.length}`,
+    `Средняя оценка концепций: ${Number(data.average_quality_score || 0)}/100`,
+    `Допущено к генерации: ${data.approved_concepts.length}`,
+    `Требуют правки промпта: ${data.needs_prompt_edit.length}`,
+    `Отклонено: ${data.rejected_concepts.length}`,
     "",
     escapeHtml(reviews),
     "",
-    "No image generation. No publishing."
+    "Проверялся только текст концепции и промпта. Реальное изображение не оценивалось и публикация не выполнялась."
   ].join("\n"), mainTelegramKeyboard());
 }
 
 async function telegramAudience(chatId) {
   const insights = buildAudienceInsights();
+  const posts = readFacebookPosts();
+  const hasEngagementMetrics = posts.some((post) => [
+    post.likes_count,
+    post.comments_count,
+    post.shares_count,
+    post.reach_count,
+    post.link_clicks_count
+  ].some((value) => Number(value || 0) > 0));
   const topics = insights.best_topics.slice(0, 3).map((item, index) => `${index + 1}. ${item.name}`).join("\n") || "Недостаточно данных";
   const emotions = insights.best_emotions.slice(0, 3).map((item) => `• ${item.name}`).join("\n") || "Недостаточно данных";
   const warnings = (insights.data_warnings || []).slice(0, 3).map((item) => `• ${item}`).join("\n") || "Предупреждений нет.";
-  return sendTelegramMessage(chatId, `👨‍👩‍👧 <b>Audience Analyst</b>\n\n${escapeHtml(insights.data_notice)}\n\nЛучшие темы:\n${topics}\n\nЛучшие эмоции:\n${emotions}\n\nЛучшее время:\n${escapeHtml(insights.best_time || "недостаточно данных")}\n\nЧто не хватает:\n${escapeHtml(warnings)}`, mainTelegramKeyboard());
+  const metricNotice = hasEngagementMetrics
+    ? "Показатели вовлечённости доступны: темы и эмоции ранжированы по результатам."
+    : "Meta не предоставила достаточные показатели вовлечённости. Ниже показаны частые темы и эмоции, а не лучшие по результатам.";
+  return sendTelegramMessage(chatId, `👨‍👩‍👧 <b>Анализ аудитории</b>\n\n${escapeHtml(insights.data_notice)}\n${metricNotice}\n\n${hasEngagementMetrics ? "Лучшие темы" : "Часто встречающиеся темы"}:\n${topics}\n\n${hasEngagementMetrics ? "Лучшие эмоции" : "Часто встречающиеся эмоции"}:\n${emotions}\n\n${hasEngagementMetrics ? "Лучшее время" : "Частое окно публикации"}:\n${escapeHtml(insights.best_time || "недостаточно данных")}\n\nКаких данных не хватает:\n${escapeHtml(warnings)}`, mainTelegramKeyboard());
 }
 
 async function telegramCompetitors(chatId) {
@@ -12625,7 +13108,7 @@ async function telegramCompetitors(chatId) {
   const competitors = analysis.competitors.slice(0, 5).map((item) => `• ${escapeHtml(item.name)} — ${Number(item.followers_count || 0)} подписчиков`).join("\n") || "Конкуренты ещё не добавлены.";
   const topics = analysis.popular_topics.slice(0, 4).map((item) => `• ${item.name}`).join("\n") || "Нет данных";
   const images = analysis.best_images.slice(0, 3).map((item) => `• ${item.name}`).join("\n") || "Нет данных";
-  return sendTelegramMessage(chatId, `👥 <b>Competitor Analyst</b>\n\n${competitors}\n\nПопулярные темы:\n${topics}\n\nПопулярные изображения:\n${images}`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `👥 <b>Анализ конкурентов</b>\n\n${competitors}\n\nПопулярные темы:\n${topics}\n\nПопулярные изображения:\n${images}`, mainTelegramKeyboard());
 }
 
 async function telegramAutopilot(chatId) {
@@ -12633,7 +13116,7 @@ async function telegramAutopilot(chatId) {
   const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
   const realData = buildRealDataLayer();
   const warnings = realData.warnings.slice(0, 4).map((item) => `• ${item}`).join("\n") || "Критичных пробелов нет.";
-  return sendTelegramMessage(chatId, `🤖 <b>AI Autopilot</b>\n\n${status}\n\nData Layer:\n${escapeHtml(realData.notice)}\n\nЧего не хватает:\n${escapeHtml(warnings)}\n\nРекомендации:\n${escapeHtml((brain.recommendations || []).slice(0, 4).join("\n"))}`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `🤖 <b>Редакционный автопилот</b>\n\n${status}\n\nСлой данных:\n${escapeHtml(realData.notice)}\n\nЧего не хватает:\n${escapeHtml(warnings)}\n\nРекомендации:\n${escapeHtml((brain.recommendations || []).slice(0, 4).join("\n"))}`, mainTelegramKeyboard());
 }
 
 async function telegramStatus(chatId) {
@@ -12641,7 +13124,8 @@ async function telegramStatus(chatId) {
   const tg = telegramConfigStatus();
   const realData = buildRealDataLayer();
   const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
-  return sendTelegramMessage(chatId, `🧠 <b>Статус системы</b>\n\nTelegram: ${tg.configured ? "подключён" : "не подключён"}\nFacebook: ${fb.configured ? "подключён" : "не подключён"}\nБаза данных: ${escapeHtml(storageMode)}\nProject Brain: ${brain.updated_at ? "активен" : "нужно обновить"}\n\n${escapeHtml(realData.notice)}\n\nСледующие действия:\n/поиск измена — найти идеи\n/создать измена 3 — создать черновики\n/пакеты — проверить пакеты\n\n${telegramSafetyFooter()}`, mainTelegramKeyboard());
+  const storageLabel = storageMode === "postgres" ? "PostgreSQL подключена" : "локальный резервный режим JSON";
+  return sendTelegramMessage(chatId, `🧠 <b>Статус системы</b>\n\nTelegram: ${tg.configured ? "подключён" : "не подключён"}\nFacebook: ${fb.configured ? "подключён" : "не подключён"}\nБаза данных: ${storageLabel}\nМозг проекта: ${brain.updated_at ? "активен" : "нужно обновить"}\n\n${escapeHtml(realData.notice)}\n\nСледующие действия:\n/поиск измена — найти идеи\n/создать измена 3 — создать черновики\n/пакеты — проверить пакеты\n\n${telegramSafetyFooter()}`, mainTelegramKeyboard());
 }
 
 async function telegramStats(chatId) {
@@ -12649,40 +13133,80 @@ async function telegramStats(chatId) {
   const posts = readFacebookPosts();
   const brain = readProjectBrain().updated_at ? readProjectBrain() : rebuildProjectBrain();
   const stats = brain.publication_statistics || {};
-  return sendTelegramMessage(chatId, `📊 <b>Stats</b>\n\nStories: ${stories.length}\nDrafts: ${stats.draft || 0}\nReview: ${stats.review || 0}\nApproved: ${stats.approved || 0}\nScheduled: ${stats.scheduled || 0}\nPublished: ${stats.published || 0}\nRejected: ${stats.rejected || 0}\n\nFacebook posts loaded: ${posts.length}\nViews: ${stats.total_views || 0}\nClicks: ${stats.total_clicks || 0}`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `📊 <b>Статистика</b>\n\nИсторий: ${stories.length}\nЧерновиков: ${stats.draft || 0}\nНа проверке: ${stats.review || 0}\nОдобрено: ${stats.approved || 0}\nЗапланировано: ${stats.scheduled || 0}\nОпубликовано: ${stats.published || 0}\nОтклонено: ${stats.rejected || 0}\n\nЗагружено публикаций Facebook: ${posts.length}\nПросмотры: ${stats.total_views || 0}\nПереходы: ${stats.total_clicks || 0}`, mainTelegramKeyboard());
 }
 
 async function telegramLoadPosts(chatId) {
   const result = await loadFacebookPosts();
   const summary = result.summary || {};
-  return sendTelegramMessage(chatId, `<b>Load Page Posts</b>\n\n${escapeHtml(result.message || "Done.")}\n\nLoaded: ${summary.loaded_posts || summary.loaded || 0}\nSaved new: ${summary.saved_new_posts || 0}\nSkipped duplicates: ${summary.skipped_duplicates || 0}\nStored total: ${readFacebookPosts().length}\n\nNothing was published.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Загрузка публикаций Facebook</b>\n\n${escapeHtml(result.ok ? "Загрузка завершена." : (result.message || "Не удалось загрузить публикации."))}\n\nЗагружено: ${summary.loaded_posts || summary.loaded || 0}\nСохранено новых: ${summary.saved_new_posts || 0}\nПропущено повторов: ${summary.skipped_duplicates || 0}\nВсего сохранено: ${readFacebookPosts().length}\n\nНичего не опубликовано.`, mainTelegramKeyboard());
 }
 
 async function telegramAnalyze(chatId) {
   const analysis = buildAIPageAnalysis();
   await updateProjectBrain();
-  const themes = analysis.best_themes.slice(0, 3).map((item, index) => `${index + 1}. ${item.name} (${item.avg_score})`).join("\n") || "No data yet";
-  const hooks = analysis.best_hooks.slice(0, 3).map((item) => `- ${item.name}`).join("\n") || "No data yet";
-  return sendTelegramMessage(chatId, `<b>AI Page Analyzer</b>\n\nPosts analyzed: ${analysis.posts_analyzed}\n\nBest themes:\n${escapeHtml(themes)}\n\nBest hooks:\n${escapeHtml(hooks)}\n\nProject Brain updated.`, mainTelegramKeyboard());
+  const posts = readFacebookPosts();
+  const hasEngagement = posts.some((item) =>
+    Number(item.total_score || 0) > 0
+    || Number(item.likes_count || 0) > 0
+    || Number(item.comments_count || 0) > 0
+    || Number(item.shares_count || 0) > 0
+    || Number(item.link_clicks_count || 0) > 0
+  );
+  const frequentThemes = countBy(posts, (item) => item.detected_topic || detectTopic(item.message || ""))
+    .slice(0, 3)
+    .map((item, index) => `${index + 1}. ${item.name} (${item.count} публикаций)`)
+    .join("\n") || "Данных пока нет";
+  const engagedThemes = hasEngagement
+    ? analysis.best_themes.filter((item) => Number(item.avg_score || 0) > 0).slice(0, 3).map((item, index) => `${index + 1}. ${item.name} (средняя оценка ${item.avg_score})`).join("\n")
+    : "";
+  const hooks = analysis.best_hooks.slice(0, 3).map((item) => `• ${telegramRuLabel(item.name)}`).join("\n") || "Данных пока нет";
+  return sendTelegramMessage(chatId, [
+    "<b>Анализ Facebook-страницы</b>",
+    "",
+    `Проанализировано публикаций: ${analysis.posts_analyzed}.`,
+    "",
+    "<b>Часто встречающиеся темы</b>",
+    frequentThemes,
+    "",
+    hasEngagement
+      ? `<b>Темы с подтверждённой вовлечённостью</b>\n${engagedThemes || "Недостаточно отличающихся показателей."}`
+      : "Meta не предоставила достаточные показатели вовлечённости, поэтому определить самые успешные темы пока нельзя.",
+    "",
+    "<b>Часто используемые варианты начала истории</b>",
+    hooks,
+    "",
+    "Мозг проекта обновлён. Рекомендации будут уточняться после появления измеримых реакций и переходов."
+  ].join("\n"), mainTelegramKeyboard());
 }
 
 async function telegramResearch(chatId, category = "") {
   const result = await runInternetStoryResearch({ category, limit: 20 });
   const emotions = countBy(result.stories || [], (item) => item.emotion || "unknown")
     .slice(0, 5)
-    .map((item) => `- ${item.name}: ${item.count}`)
+    .map((item) => `• ${telegramRuLabel(item.name)}: ${item.count}`)
     .join("\n") || "Эмоций пока нет";
   const topStories = (result.stories || [])
     .slice(0, 5)
-    .map((item, index) => `${index + 1}. ${item.title}\nИсточник: ${item.source}\nviral_score: ${item.viral_score}\nsimilarity_score: ${item.similarity_score}`)
+    .map((item, index) => {
+      const title = telegramMaterialIsRussian(item.title)
+        ? item.title
+        : `Материал по теме «${telegramRuLabel(result.category)}»`;
+      return `${index + 1}. ${title}\nИсточник: ${item.source}\nВирусный потенциал: ${item.viral_score}/100\nСходство с аудиторией: ${item.similarity_score}/100`;
+    })
     .join("\n\n") || "Историй для анализа пока нет";
-  return sendTelegramMessage(chatId, `<b>Internet Research AI v2</b>\n\nКатегория: ${escapeHtml(result.category)}\nПровайдер: ${escapeHtml(result.provider_used)}\nРежим: ${escapeHtml(result.source_status)}\nНайдено: ${result.results_count}\nСохранено новых: ${result.saved_new}\nДубликатов пропущено: ${result.skipped_duplicates}\n\nЛучшие эмоции:\n${escapeHtml(emotions)}\n\nТоп-5 идей:\n${escapeHtml(topStories)}\n\nСохраняются только краткие summaries и ссылки. Тексты не копируются.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Исследователь идей</b>\n\nКатегория: ${escapeHtml(telegramRuLabel(result.category))}\nПровайдер: ${escapeHtml(result.provider_used)}\nИсточник данных: ${result.source_status === "live_search" ? "живой поиск" : "резервные примеры"}\nНайдено: ${result.results_count}\nСохранено новых: ${result.saved_new}\nПропущено повторов: ${result.skipped_duplicates}\n\nЧастые эмоции:\n${escapeHtml(emotions)}\n\nПять идей:\n${escapeHtml(topStories)}\n\nСохраняются только краткие выводы и ссылки. Исходные тексты не копируются.`, mainTelegramKeyboard());
 }
 
 async function telegramIdeas(chatId) {
   const result = await generateStoryIdeas({ count: 3 });
-  const ideas = result.new_ideas.map((idea, index) => `${index + 1}. ${idea.title}\nEmotion: ${idea.emotion}`).join("\n\n");
-  return sendTelegramMessage(chatId, `<b>Story Generator</b>\n\nGenerated: ${result.generated_count}\n\n${escapeHtml(ideas)}\n\nStatus: needs approval. Nothing was published.`, mainTelegramKeyboard());
+  const ideas = result.new_ideas.map((idea, index) => {
+    const title = telegramMaterialIsRussian(idea.title)
+      ? idea.title
+      : `Новая история: ${telegramRuLabel(idea.topic || idea.category || "семья")}`;
+    return `${index + 1}. ${title}\nЭмоция: ${telegramRuLabel(idea.emotion)}`;
+  }).join("\n\n");
+  return sendTelegramMessage(chatId, `<b>Генератор историй</b>\n\nСоздано: ${result.generated_count}\n\n${escapeHtml(ideas)}\n\nСтатус: требуется проверка. Ничего не опубликовано.`, mainTelegramKeyboard());
 }
 
 function parseTelegramCategoryAndCount(args = [], defaultCategory = "betrayal", defaultCount = 3) {
@@ -12730,25 +13254,25 @@ async function telegramGenerateStory(chatId, args = []) {
   const result = await generateOriginalStoriesV2({ category, length: "medium", count });
   const previews = result.stories.map((story, index) => [
     `${index + 1}. ${story.title}`,
-    `эмоция: ${story.emotion}`,
-    `viral_prediction_score: ${story.viral_prediction_score}/100`,
-    `editorial_score: ${story.editorial_review?.editorial_score || "pending"}/100`,
-    `readiness: ${story.editorial_review?.publication_readiness || "pending"}`,
+    `эмоция: ${telegramRuLabel(story.emotion)}`,
+    `прогноз интереса: ${story.viral_prediction_score}/100`,
+    `редакционная оценка: ${story.editorial_review?.editorial_score || "ожидается"}/100`,
+    `готовность: ${telegramRuLabel(story.editorial_review?.publication_readiness || "pending")}`,
     `крючок: ${story.hook}`
   ].join("\n")).join("\n\n");
   const text = [
-    "<b>Story Generator v2</b>",
+    "<b>Генератор историй</b>",
     "",
     `Создано черновиков: ${result.count}`,
-    `Категория: ${escapeHtml(normalizeResearchCategory(category))}`,
-    "Статус: needs_approval",
+    `Категория: ${escapeHtml(telegramRuLabel(normalizeResearchCategory(category)))}`,
+    "Статус: требуется проверка",
     "",
     escapeHtml(previews),
     "",
     "/черновики — очередь черновиков",
     "/черновик 1 — прочитать полностью",
     "/проверить_историю 1 — редакторский отчёт",
-    "/approve 1 или /reject 1 — проверить черновик",
+    "/одобрить 1 или /отклонить 1 — принять решение по черновику",
     "",
     "Ничего не опубликовано."
   ].join("\n");
@@ -12760,17 +13284,17 @@ async function telegramPlan(chatId) {
   await enqueueImagePromptsForIdeas();
   const result = await createDailyContentPlan({ days: 1, slots_per_day: 3 });
   const plan = result.plan.slice(0, 3).map((item) => `- ${item.local_time_hint}: ${item.title}`).join("\n");
-  return sendTelegramMessage(chatId, `<b>Daily Content Plan</b>\n\nCreated: ${result.created_count}\n\n${escapeHtml(plan)}\n\nEvery item is blocked until approval.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>Ежедневный план материалов</b>\n\nСоздано позиций: ${result.created_count}\n\n${escapeHtml(plan)}\n\nКаждая позиция заблокирована до прохождения обязательных проверок.`, mainTelegramKeyboard());
 }
 
 function scheduleLine(item, index) {
   return [
     `${index + 1}. ${item.title || item.draft_id}`,
     `время: ${new Date(item.scheduled_time).toLocaleString("ru-RU")}`,
-    `тема: ${item.theme || "story"} / ритм: ${item.rhythm_step || "mixed"}`,
-    `эмоция: ${item.emotion || "mixed"}`,
+    `тема: ${telegramRuLabel(item.theme || "история")} / ритм: ${telegramRuLabel(item.rhythm_step || "mixed")}`,
+    `эмоция: ${telegramRuLabel(item.emotion || "mixed")}`,
     `картинка: ${item.image_prompt_id ? "одобренный промпт прикреплён" : "нет одобренного промпта"}`,
-    `статус: ${item.status || "draft"}`
+    `статус: ${telegramRuLabel(item.status || "draft")}`
   ].join("\n");
 }
 
@@ -12780,7 +13304,7 @@ async function telegramSchedule(chatId, args = []) {
     const result = await createSchedulerV2Plan({ days: 7, slots_per_day: 3 });
     const text = result.plan.slice(0, 10).map(scheduleLine).join("\n\n") || "План не создан.";
     const warnings = result.warnings.length ? `\n\nПредупреждения:\n${result.warnings.map((item) => `- ${item}`).join("\n")}` : "";
-    return sendTelegramLongMessage(chatId, `<b>Scheduler v2: план на 7 дней</b>\n\nСоздано слотов: ${result.created_count}\n\n${escapeHtml(text)}${escapeHtml(warnings)}\n\n/очередь — посмотреть запланированные черновики\n/approve_schedule — одобрить расписание без публикации\n\nАвтопубликация отключена.`, mainTelegramKeyboard());
+    return sendTelegramLongMessage(chatId, `<b>Планировщик v2: план на 7 дней</b>\n\nСоздано слотов: ${result.created_count}\n\n${escapeHtml(text)}${escapeHtml(warnings)}\n\n/очередь — посмотреть запланированные черновики\n/одобрить_план — одобрить расписание без публикации\n\nАвтопубликация отключена.`, mainTelegramKeyboard());
   }
   let tomorrow = scheduleItemsForTomorrow();
   if (!tomorrow.length) {
@@ -12788,25 +13312,25 @@ async function telegramSchedule(chatId, args = []) {
     tomorrow = scheduleItemsForTomorrow();
   }
   const text = tomorrow.map(scheduleLine).join("\n\n") || "План на завтра пуст. Сначала создайте черновики и одобрите промпты картинок.";
-  return sendTelegramLongMessage(chatId, `<b>Scheduler v2: план на завтра</b>\n\n${escapeHtml(text)}\n\n/план неделя — план на 7 дней\n/очередь — очередь\n/move 1 tomorrow 19:30 — перенести слот\n/unschedule 1 — убрать из расписания\n\nАвтопубликация отключена.`, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Планировщик v2: план на завтра</b>\n\n${escapeHtml(text)}\n\n/план неделя — план на 7 дней\n/очередь — очередь\n/перенести 1 завтра 19:30 — перенести слот\n/убрать_из_плана 1 — убрать из расписания\n\nАвтопубликация отключена.`, mainTelegramKeyboard());
 }
 
 async function telegramQueue(chatId) {
   const queue = scheduledQueueItems(20);
   if (!queue.length) return sendTelegramMessage(chatId, "Очередь расписания пустая. Сначала используйте /план или /план неделя.", mainTelegramKeyboard());
-  return sendTelegramLongMessage(chatId, `<b>Очередь запланированных черновиков</b>\n\n${escapeHtml(queue.map(scheduleLine).join("\n\n"))}\n\n/move 1 tomorrow 19:30 — перенести\n/unschedule 1 — убрать из расписания`, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Очередь запланированных черновиков</b>\n\n${escapeHtml(queue.map(scheduleLine).join("\n\n"))}\n\n/перенести 1 завтра 19:30 — перенести\n/убрать_из_плана 1 — убрать из расписания`, mainTelegramKeyboard());
 }
 
 async function telegramMoveSchedule(chatId, args = []) {
   const [numberText, dayText, timeText] = args;
-  if (!numberText || !dayText || !timeText) return sendTelegramMessage(chatId, "Usage: /move 1 tomorrow 19:30", mainTelegramKeyboard());
+  if (!numberText || !dayText || !timeText) return sendTelegramMessage(chatId, "Формат команды: /перенести 1 завтра 19:30", mainTelegramKeyboard());
   const item = await moveScheduledPost(numberText, dayText, timeText);
-  return sendTelegramMessage(chatId, item ? `Moved #${numberText}\n${escapeHtml(item.title || item.draft_id)}\nNew time: ${escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU"))}\n\nNo publishing.` : "Scheduled draft not found. Use /queue.", mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, item ? `Слот #${numberText} перенесён\n${escapeHtml(item.title || item.draft_id)}\nНовое время: ${escapeHtml(new Date(item.scheduled_time).toLocaleString("ru-RU"))}\n\nПубликация не выполнялась.` : "Запланированный черновик не найден. Используйте /очередь.", mainTelegramKeyboard());
 }
 
 async function telegramUnschedule(chatId, numberText) {
   const item = await unschedulePost(numberText || "1");
-  return sendTelegramMessage(chatId, item ? `Unscheduled #${numberText || "1"}: ${escapeHtml(item.title || item.draft_id)}\n\nIt was removed from the schedule. Nothing was published.` : "Scheduled draft not found. Use /queue.", mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, item ? `Черновик #${numberText || "1"} удалён из расписания: ${escapeHtml(item.title || item.draft_id)}\n\nНичего не опубликовано.` : "Запланированный черновик не найден. Используйте /очередь.", mainTelegramKeyboard());
 }
 
 async function telegramApproveSchedule(chatId) {
@@ -12816,39 +13340,114 @@ async function telegramApproveSchedule(chatId) {
 
 function packageLine(pkg, index) {
   const details = publishingPackageDetails(pkg);
+  const readiness = readinessGateCheckPackageSync(pkg);
   const scheduleText = details?.schedule?.scheduled_time
     ? new Date(details.schedule.scheduled_time).toLocaleString("ru-RU")
     : "нет расписания";
   return [
     `${index + 1}. ${details?.draft?.title || pkg.draft_id}`,
-    `статус: ${pkg.status || "review"}`,
-    `картинка: ${pkg.image_prompt_id ? "прикреплена" : "нет"}`,
+    `статус: ${readiness.status === "ready" ? "готово к ручной публикации" : telegramRuLabel(pkg.status || "review")}`,
+    `изображение: ${telegramPackageImageStatus(details)}`,
     `расписание: ${scheduleText}`
   ].join("\n");
 }
 
 function publishingPackageTelegramKeyboard(pkg = {}) {
   const id = String(pkg.id || "");
+  const previewUrl = `${PUBLIC_BASE_URL}/story-preview/${encodeURIComponent(id)}`;
   return {
     inline_keyboard: [
       [
+        { text: "📖 Полный рассказ", callback_data: `pkg:story:${id}` },
+        { text: "📘 Текст для Facebook", callback_data: `pkg:facebook:${id}` }
+      ],
+      [
+        { text: "💬 Первый комментарий", callback_data: `pkg:comment:${id}` },
+        { text: "🌐 Открыть на сайте", url: previewUrl }
+      ],
+      [
         { text: "✅ Одобрить", callback_data: `pkg:approve:${id}` },
+        { text: "✏️ Изменить текст", callback_data: `pkg:edit:${id}` }
+      ],
+      [
+        { text: "🔄 Переделать", callback_data: `pkg:rewrite:${id}` },
+        { text: "🖼 Изменить изображение", callback_data: `pkg:image:${id}` }
+      ],
+      [
+        { text: "🕒 Время", callback_data: `pkg:time:${id}` },
         { text: "❌ Отклонить", callback_data: `pkg:reject:${id}` }
       ],
       [
-        { text: "✏️ Изменить текст", callback_data: `pkg:edit:${id}` },
-        { text: "🔄 Переделать", callback_data: `pkg:rewrite:${id}` }
-      ],
-      [
-        { text: "🎨 Изображение", callback_data: `pkg:image:${id}` },
-        { text: "🕒 Время", callback_data: `pkg:time:${id}` }
-      ],
-      [
-        { text: "🌐 Preview", callback_data: `pkg:preview:${id}` },
         { text: "📦 К очереди", callback_data: "pkg:queue" }
       ]
     ]
   };
+}
+
+function telegramMaterialIsRussian(text = "") {
+  const humanText = String(text || "")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi, " ");
+  const letters = humanText.match(/\p{L}/gu) || [];
+  if (!letters.length) return false;
+  const cyrillic = letters.filter((letter) => /\p{Script=Cyrillic}/u.test(letter)).length;
+  return cyrillic / letters.length >= 0.55;
+}
+
+function telegramPackageLanguageChecks(pkg = {}, details = publishingPackageDetails(pkg)) {
+  const draft = details?.draft || {};
+  return {
+    title: telegramMaterialIsRussian(draft.title),
+    summary: telegramMaterialIsRussian(draft.hook || draft.why_it_should_work),
+    full_story: telegramMaterialIsRussian(draft.full_story),
+    facebook_fragment: telegramMaterialIsRussian(pkg.facebook_fragment),
+    first_comment: telegramMaterialIsRussian(pkg.comment_text)
+  };
+}
+
+async function ensureRussianPackageForTelegram(pkg = {}, allowRewrite = true) {
+  const checks = telegramPackageLanguageChecks(pkg);
+  if (Object.values(checks).every(Boolean)) return { ok: true, package: pkg, language_checks: checks, rewritten: false };
+  if (!allowRewrite) {
+    return { ok: false, code: "telegram_material_language_failed", package: pkg, language_checks: checks };
+  }
+  const rewrite = await rewriteDraftFromEditorialReview(pkg.draft_id, "", { language: "ru" });
+  if (!rewrite.ok || !rewrite.improved_draft?.id) {
+    return { ok: false, code: "telegram_material_language_failed", package: pkg, language_checks: checks };
+  }
+  const packageResult = await createPublishingPackageFromDraft(rewrite.improved_draft.id);
+  if (!packageResult.ok) {
+    return { ok: false, code: "telegram_material_language_failed", package: pkg, language_checks: checks };
+  }
+  const rewrittenChecks = telegramPackageLanguageChecks(packageResult.package);
+  return {
+    ok: Object.values(rewrittenChecks).every(Boolean),
+    code: Object.values(rewrittenChecks).every(Boolean) ? "" : "telegram_material_language_failed",
+    package: packageResult.package,
+    original_package_id: pkg.id,
+    language_checks: rewrittenChecks,
+    rewritten: true
+  };
+}
+
+function telegramPackageImageStatus(details = {}) {
+  const state = details.image_readiness?.state || "image_prompt_missing";
+  const labels = {
+    image_prompt_missing: "промпт и изображение отсутствуют",
+    image_prompt_ready: "промпт изображения готов, самого изображения ещё нет",
+    image_uploaded: "изображение загружено, но ещё не проверено",
+    image_checked: "изображение проверено",
+    image_rejected: "изображение отклонено",
+    image_ready_for_publishing: "изображение готово к ручной публикации"
+  };
+  return labels[state] || "статус изображения неизвестен";
+}
+
+function telegramPackageDisplayStatus(pkg = {}, readiness = readinessGateCheckPackageSync(pkg)) {
+  if (pkg.status === "rejected") return "отклонено";
+  if (readiness.status === "ready") return "готово к ручной публикации";
+  if (readiness.blockers_json?.length) return "требуется доработка";
+  return "на редакторской проверке";
 }
 
 function publishingPackageTelegramCard(pkg = {}) {
@@ -12871,52 +13470,139 @@ function publishingPackageTelegramCard(pkg = {}) {
     "<b>📦 Публикационный пакет</b>",
     "",
     `<b>${escapeHtml(draft.title || pkg.draft_id || "История")}</b>`,
-    `Статус: <b>${escapeHtml(pkg.status || "review")}</b>`,
+    `Статус: <b>${escapeHtml(telegramPackageDisplayStatus(pkg, readiness))}</b>`,
     `Кратко: ${escapeHtml(shortText(draft.hook || draft.why_it_should_work || "", 420))}`,
     "",
     "<b>Качество</b>",
-    `Editorial: ${Number(editorial.editorial_score || draft.final_editorial_score || 0)}/100`,
-    `Safety: ${escapeHtml(safety.recommendation || draft.final_safety_recommendation || "pending")}`,
-    `Style realism: ${Number(style.human_realism_score || 0)}/100`,
-    `Emotion peak: ${escapeHtml(emotion.peak_emotion || "unknown")} (${Number(emotion.peak_position || 0)}%)`,
-    `Visual Quality: ${visualQuality ? `${Number(visualQuality.visual_quality_score || 0)}/100` : "не проверено"}`,
-    `Readiness: ${Number(readiness.readiness_score || 0)}/100, ${escapeHtml(readiness.status || "blocked")}`,
+    `Редакционная оценка: ${Number(editorial.editorial_score || draft.final_editorial_score || 0)}/100`,
+    `Безопасность: ${escapeHtml(telegramRuLabel(safety.recommendation || draft.final_safety_recommendation || "pending"))}`,
+    `Естественность стиля: ${Number(style.human_realism_score || 0)}/100`,
+    `Эмоциональный пик: ${escapeHtml(telegramRuLabel(emotion.peak_emotion || "не определён"))} (${Number(emotion.peak_position || 0)}%)`,
+    `Качество визуальной концепции: ${visualQuality ? `${Number(visualQuality.visual_quality_score || 0)}/100` : "не проверено"}`,
+    `Готовность: ${Number(readiness.readiness_score || 0)}/100, ${escapeHtml(telegramRuLabel(readiness.status || "blocked"))}`,
     "",
-    "<b>Facebook-фрагмент</b>",
-    `${Number(fragment.characters || 0)} знаков · ${Number(fragment.words || 0)} слов · ${Number(fragment.paragraphs || 0)} абзацев`,
-    `Точка обрыва: ${escapeHtml(fragment.break_point || "не определена")}`,
-    `Brain: ${Number(recommendation.confidence_score || 0)}% (${escapeHtml(recommendation.evidence_mode || "insufficient_data")})`,
-    escapeHtml(shortText(pkg.facebook_fragment || draft.hook || "", 900)),
-    "",
-    `<b>Первый комментарий</b>\n${escapeHtml(pkg.comment_text || "не создан")}`,
-    "",
-    `Изображение: ${pkg.image_prompt_id ? "prompt одобрен" : "не выбрано"}`,
+    `Изображение: ${escapeHtml(telegramPackageImageStatus(details))}`,
     `Время: ${escapeHtml(scheduleText)}`,
-    `Preview: ${escapeHtml(previewUrl)}`,
+    `Предпросмотр: ${escapeHtml(previewUrl)}`,
     "",
     "<b>Важно:</b> одобрение меняет только статус. Публикация в Facebook и автопубликация отключены."
   ].join("\n");
 }
 
-async function sendPublishingPackageToTelegram(pkgRef, chatId = process.env.CHAT_ID) {
-  const pkg = typeof pkgRef === "object" ? pkgRef : readinessPackageByRef(pkgRef);
-  if (!pkg || !chatId) {
-    return { ok: false, code: !pkg ? "package_not_found" : "telegram_chat_missing" };
+function telegramPackageFacebookText(pkg = {}) {
+  const fragment = pkg.fragment_metrics || {};
+  const recommendation = fragment.recommendation || {};
+  const breakPoint = fragment.break_point
+    ? telegramRussianizeVisibleText(fragment.break_point)
+    : "после первого конкретного конфликта, до признания или главного поворота";
+  return [
+    "<b>📘 Текст для Facebook</b>",
+    "",
+    escapeHtml(pkg.facebook_fragment || "Текст для Facebook не создан."),
+    "",
+    `<b>Объём:</b> ${Number(fragment.characters || 0)} знаков, ${Number(fragment.words || 0)} слов, ${Number(fragment.paragraphs || 0)} абзацев`,
+    `<b>Точка эмоционального обрыва:</b> ${escapeHtml(breakPoint)}`,
+    `<b>Рекомендация Мозга проекта:</b> уверенность ${Number(recommendation.confidence_score || 0)}%, ${escapeHtml(telegramRuLabel(recommendation.evidence_mode || "insufficient_data"))}`,
+    "",
+    "Ссылка в этот текст не добавлена. Она находится только в первом комментарии."
+  ].join("\n");
+}
+
+function telegramPackageCommentText(pkg = {}) {
+  return [
+    "<b>💬 Первый комментарий</b>",
+    "",
+    escapeHtml(pkg.comment_text || "Первый комментарий не создан."),
+    "",
+    "Ссылка привязана к этому публикационному пакету и используется для отслеживания переходов."
+  ].join("\n");
+}
+
+function telegramStoryChunksIntegrity(fullStory = "", chunks = []) {
+  const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const source = normalize(fullStory);
+  const joined = normalize(chunks.join("\n\n"));
+  return {
+    complete: source === joined,
+    source_characters: String(fullStory || "").length,
+    normalized_characters: source.length,
+    parts: chunks.length,
+    sha256: crypto.createHash("sha256").update(source).digest("hex")
+  };
+}
+
+async function sendTelegramPackageStory(chatId, pkg = {}, replyMarkup) {
+  const details = publishingPackageDetails(pkg);
+  const story = String(details?.draft?.full_story || details?.story?.website_text || "").trim();
+  if (!story) return { ok: false, code: "full_story_missing", message_ids: [], parts: 0, integrity: telegramStoryChunksIntegrity("", []) };
+  const chunks = splitTelegramTextSafely(story, 700);
+  const integrity = telegramStoryChunksIntegrity(story, chunks);
+  if (!integrity.complete) return { ok: false, code: "story_split_integrity_failed", message_ids: [], parts: chunks.length, integrity };
+  const messageIds = [];
+  for (let index = 0; index < chunks.length; index += 1) {
+    const result = await sendTelegramMessage(
+      chatId,
+      `<b>📖 Рассказ, часть ${index + 1} из ${chunks.length}</b>\n\n${escapeHtml(chunks[index])}`,
+      index === chunks.length - 1 ? replyMarkup : undefined
+    );
+    if (!result?.ok) return { ok: false, code: "telegram_story_delivery_failed", message_ids: messageIds, parts: chunks.length, integrity };
+    if (result.result?.message_id) messageIds.push(result.result.message_id);
   }
-  const result = await sendTelegramLongMessage(
+  return { ok: true, message_ids: messageIds, parts: chunks.length, integrity };
+}
+
+async function sendPublishingPackageToTelegram(pkgRef, chatId = process.env.CHAT_ID) {
+  const sourcePackage = typeof pkgRef === "object" ? pkgRef : readinessPackageByRef(pkgRef);
+  if (!sourcePackage || !chatId) {
+    return { ok: false, code: !sourcePackage ? "package_not_found" : "telegram_chat_missing" };
+  }
+  const language = await ensureRussianPackageForTelegram(sourcePackage, true);
+  if (!language.ok) {
+    return { ok: false, code: language.code, package_id: sourcePackage.id, language_checks: language.language_checks };
+  }
+  const pkg = language.package;
+  const details = publishingPackageDetails(pkg);
+  const messageIds = [];
+  const card = await sendTelegramMessage(chatId, publishingPackageTelegramCard(pkg));
+  if (card?.result?.message_id) messageIds.push(card.result.message_id);
+  if (!card?.ok) return { ok: false, code: "telegram_package_card_failed", package_id: pkg.id };
+  if (details?.image_readiness?.image_ready && /^https?:\/\//i.test(details.generated_image?.image_url || "")) {
+    const photo = await sendTelegramPhoto(
+      chatId,
+      details.generated_image.image_url,
+      "<b>🖼 Одобренное изображение</b>\nИзображение проверено и готово к дальнейшей ручной работе."
+    );
+    if (photo?.result?.message_id) messageIds.push(photo.result.message_id);
+  }
+  const storyResult = await sendTelegramPackageStory(chatId, pkg);
+  messageIds.push(...storyResult.message_ids);
+  if (!storyResult.ok) return { ok: false, code: storyResult.code, package_id: pkg.id, story_integrity: storyResult.integrity };
+  const facebook = await sendTelegramLongMessage(chatId, telegramPackageFacebookText(pkg));
+  messageIds.push(...(facebook?.message_ids || [facebook?.result?.message_id]).filter(Boolean));
+  const comment = await sendTelegramMessage(chatId, telegramPackageCommentText(pkg));
+  if (comment?.result?.message_id) messageIds.push(comment.result.message_id);
+  const controls = await sendTelegramMessage(
     chatId,
-    publishingPackageTelegramCard(pkg),
+    "<b>Редакторское управление</b>\n\nПроверьте весь рассказ, текст для Facebook, первый комментарий, изображение и время. Одобрение не запускает публикацию.",
     publishingPackageTelegramKeyboard(pkg)
   );
+  if (controls?.result?.message_id) messageIds.push(controls.result.message_id);
+  const resultOk = Boolean(card?.ok && storyResult.ok && facebook?.ok && comment?.ok && controls?.ok);
   const delivery = {
-    status: result?.ok ? "delivered" : "failed",
-    delivered_at: result?.ok ? new Date().toISOString() : null,
-    message_id: result?.result?.message_id || null,
-    error: result?.ok ? "" : shortText(result?.description || "telegram_delivery_failed", 300)
+    status: resultOk ? "delivered" : "failed",
+    delivered_at: resultOk ? new Date().toISOString() : null,
+    message_id: messageIds.at(-1) || null,
+    message_ids: messageIds,
+    story_parts: storyResult.parts,
+    story_integrity: storyResult.integrity,
+    language_checks: language.language_checks,
+    rewritten_to_russian: language.rewritten,
+    original_package_id: language.original_package_id || "",
+    error: resultOk ? "" : "telegram_delivery_failed"
   };
   const updated = { ...pkg, telegram_delivery: delivery, updated_at: new Date().toISOString() };
   await writePublishingPackages(readPublishingPackages().map((item) => item.id === pkg.id ? updated : item));
-  return { ok: Boolean(result?.ok), package_id: pkg.id, delivery };
+  return { ok: resultOk, package_id: pkg.id, delivery };
 }
 
 async function telegramPackages(chatId) {
@@ -12929,94 +13615,68 @@ async function telegramPackageDetails(chatId, numberText = "1") {
   const pkg = publishingPackageByNumber(numberText);
   const details = publishingPackageDetails(pkg);
   if (!details?.draft) return sendTelegramMessage(chatId, "Пакет не найден. Используйте /пакеты, чтобы увидеть номера 1-10.", mainTelegramKeyboard());
-  const scheduleText = details.schedule?.scheduled_time
-    ? new Date(details.schedule.scheduled_time).toLocaleString("ru-RU")
-    : "нет расписания";
-  const text = [
-    `<b>Пакет публикации ${escapeHtml(numberText)}</b>`,
-    "",
-    `<b>${escapeHtml(details.draft.title || "")}</b>`,
-    `статус: ${escapeHtml(pkg.status || "review")}`,
-    `тема: ${escapeHtml(details.draft.category || details.schedule?.theme || "")}`,
-    `эмоция: ${escapeHtml(details.draft.emotion || details.schedule?.emotion || "")}`,
-    `время: ${escapeHtml(scheduleText)}`,
-    "",
-    `<b>Крючок</b>`,
-    escapeHtml(details.draft.hook || ""),
-    "",
-    `<b>Превью истории</b>`,
-    escapeHtml(shortText(details.draft.full_story || "", 1400)),
-    "",
-    `<b>Превью промпта картинки</b>`,
-    escapeHtml(shortText(details.image_prompt?.prompt || "Одобренный промпт картинки не прикреплён.", 900)),
-    "",
-    "publish_allowed: false",
-    "approval_required: true",
-    "Автоматической публикации в Facebook нет."
-  ].join("\n");
-  return sendTelegramLongMessage(chatId, publishingPackageTelegramCard(pkg), publishingPackageTelegramKeyboard(pkg));
+  return sendPublishingPackageToTelegram(pkg, chatId);
 }
 
 async function telegramCreatePackage(chatId, draftNumber = "1") {
   const result = await createPublishingPackageFromDraft(draftNumber || "1");
   if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Не удалось создать пакет."), mainTelegramKeyboard());
-  const warnings = result.warnings.length ? `\n\nПредупреждения:\n${result.warnings.map((item) => `- ${item}`).join("\n")}` : "";
-  const details = result.details;
-  return sendTelegramMessage(chatId, `<b>Пакет публикации создан</b>\n\nЗаголовок: ${escapeHtml(details?.draft?.title || result.package.draft_id)}\nСтатус: ${escapeHtml(result.package.status)}\nКартинка: ${result.package.image_prompt_id ? "прикреплена" : "нет"}\nРасписание: ${result.package.schedule_id ? "прикреплено" : "нет"}${escapeHtml(warnings)}\n\n/пакеты — список\n/пакет 1 — детали\n\nПубликация не запускалась.`, mainTelegramKeyboard());
+  return sendPublishingPackageToTelegram(result.package, chatId);
 }
 
 async function telegramApprovePackage(chatId, numberText = "1") {
   const pkg = await updatePublishingPackageStatus(numberText, "approved");
   if (!pkg) return sendTelegramMessage(chatId, "Пакет не найден. Используйте /пакеты.", mainTelegramKeyboard());
-  if (pkg.safety_blocked) {
+  if (pkg.safety_blocked || pkg.approval_blocked) {
+    const blockers = (pkg.readiness_blockers || []).map((item) => `• ${item.message}`).join("\n") || "Пакет не прошёл обязательные проверки.";
     return sendTelegramLongMessage(chatId, [
-      `Пакет ${escapeHtml(numberText)} не может стать ready.`,
+      `Пакет ${escapeHtml(numberText)} пока нельзя одобрить.`,
       "",
-      telegramContentSafetyReviewText(pkg.safety_review || {}),
+      escapeHtml(blockers),
       "",
-      "Статус пакета оставлен review или rejected. Публикация не запускалась."
+      "Статус оставлен «на редакторской проверке». Публикация не запускалась."
     ].join("\n"), mainTelegramKeyboard());
   }
   const details = publishingPackageDetails(pkg);
-  return sendTelegramMessage(chatId, `Пакет ${numberText} одобрен.\nЗаголовок: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nСтатус: ${escapeHtml(pkg.status)}\n\nПубликация не запускалась.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `Пакет ${numberText} одобрен.\nЗаголовок: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nСтатус: ${escapeHtml(telegramPackageDisplayStatus(pkg))}\n\nОдобрение изменило только статус. Публикация не запускалась.`, mainTelegramKeyboard());
 }
 
 async function telegramRejectPackage(chatId, numberText = "1") {
   const pkg = await updatePublishingPackageStatus(numberText, "rejected");
   if (!pkg) return sendTelegramMessage(chatId, "Пакет не найден. Используйте /пакеты.", mainTelegramKeyboard());
   const details = publishingPackageDetails(pkg);
-  return sendTelegramMessage(chatId, `Пакет ${numberText} отклонён.\nЗаголовок: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nСтатус: ${escapeHtml(pkg.status)}\n\nНичего не опубликовано.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `Пакет ${numberText} отклонён.\nЗаголовок: ${escapeHtml(details?.draft?.title || pkg.draft_id)}\nСтатус: ${escapeHtml(telegramRuLabel(pkg.status))}\n\nНичего не опубликовано.`, mainTelegramKeyboard());
 }
 
 async function telegramReadyPackages(chatId) {
   const packages = readyPublishingPackages().slice(0, 10);
-  if (!packages.length) return sendTelegramMessage(chatId, "Одобренных пакетов пока нет. Используйте /одобрить_пакет 1.", mainTelegramKeyboard());
-  return sendTelegramLongMessage(chatId, `<b>Готово к публикации</b>\n\n${escapeHtml(packages.map(packageLine).join("\n\n"))}\n\nВажно: «готово» означает только одобрено. Публикация остаётся ручной и отключённой.`, mainTelegramKeyboard());
+  if (!packages.length) return sendTelegramMessage(chatId, "Пакетов, прошедших все обязательные проверки, пока нет. Используйте /проверить_готовность 1.", mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Готово к дальнейшей ручной работе</b>\n\n${escapeHtml(packages.map(packageLine).join("\n\n"))}\n\nПубликация остаётся ручной и отключённой.`, mainTelegramKeyboard());
 }
 
 function telegramReadinessGateText(result = {}) {
   const blockers = result.blockers_json || [];
   const nextActions = result.next_actions_json || [];
   return [
-    "<b>Final Readiness Gate v1</b>",
+    "<b>Финальная проверка готовности</b>",
     "",
-    `<b>${escapeHtml(result.title || result.package_id || "Package")}</b>`,
-    `status: ${escapeHtml(result.status || "blocked")}`,
-    `readiness_score: ${Number(result.readiness_score || 0)}/100`,
-    `package_status: ${escapeHtml(result.details?.package_status || "missing")}`,
-    `editorial_score: ${Number(result.editorial?.final_editorial_score || 0)}/100`,
-    `safety: ${escapeHtml(result.safety_review?.recommendation || "missing")}`,
-    `image: ${escapeHtml(result.details?.image_status || "missing")}`,
-    `schedule: ${escapeHtml(result.details?.scheduled_time || "missing")}`,
-    "publish_allowed: false",
+    `<b>${escapeHtml(result.title || result.package_id || "Пакет")}</b>`,
+    `Статус: ${escapeHtml(telegramRuLabel(result.status || "blocked"))}`,
+    `Оценка готовности: ${Number(result.readiness_score || 0)}/100`,
+    `Статус пакета: ${escapeHtml(telegramRuLabel(result.details?.package_status || "отсутствует"))}`,
+    `Редакционная оценка: ${Number(result.editorial?.final_editorial_score || 0)}/100`,
+    `Безопасность: ${escapeHtml(telegramRuLabel(result.safety_review?.recommendation || "отсутствует"))}`,
+    `Изображение: ${escapeHtml(telegramPackageImageStatus({ image_readiness: { state: result.details?.image_state || "image_prompt_missing" } }))}`,
+    `Расписание: ${escapeHtml(result.details?.scheduled_time || "отсутствует")}`,
+    "Автоматическая публикация: отключена",
     "",
     blockers.length
-      ? `<b>Blockers</b>\n${blockers.map((item) => `- ${item.code}: ${item.message}`).join("\n")}`
-      : "<b>Blockers</b>\nNone. Package is ready for manual publishing workflow.",
+      ? `<b>Причины блокировки</b>\n${blockers.map((item) => `• ${item.message}`).join("\n")}`
+      : "<b>Причины блокировки</b>\nНет. Пакет прошёл обязательные проверки.",
     "",
     nextActions.length
-      ? `<b>Next actions</b>\n${nextActions.map((item) => `- ${item.message}`).join("\n")}`
-      : "<b>Next actions</b>\nManual review only. No Facebook publishing is enabled."
+      ? `<b>Следующие действия</b>\n${nextActions.map((item) => `• ${item.message}`).join("\n")}`
+      : "<b>Следующие действия</b>\nВыполните ручную проверку. Публикация в Facebook отключена."
   ].join("\n");
 }
 
@@ -13032,17 +13692,17 @@ async function telegramReadyGatePackages(chatId) {
       "<b>Готовые пакеты</b>",
       "",
       "Пока нет пакетов, которые прошли все ворота готовности.",
-      `blocked: ${dashboard.blocked_count}`,
-      `needs_work: ${dashboard.needs_work_count}`,
+      `Заблокировано: ${dashboard.blocked_count}`,
+      `Требуют доработки: ${dashboard.needs_work_count}`,
       "",
       "Проверьте конкретный пакет: /проверить_готовность 1"
     ].join("\n"), mainTelegramKeyboard());
   }
   const text = dashboard.ready_packages.slice(0, 10).map((item, index) => [
     `${index + 1}. <b>${escapeHtml(item.title || item.package_id)}</b>`,
-    `score: ${Number(item.readiness_score || 0)}/100`,
-    `schedule: ${escapeHtml(item.details?.scheduled_time || "missing")}`,
-    `package_id: ${escapeHtml(item.package_id)}`
+    `оценка: ${Number(item.readiness_score || 0)}/100`,
+    `время: ${escapeHtml(item.details?.scheduled_time || "отсутствует")}`,
+    `ID пакета: ${escapeHtml(item.package_id)}`
   ].join("\n")).join("\n\n");
   return sendTelegramLongMessage(chatId, `<b>Готовые пакеты</b>\n\n${text}\n\nПубликация всё ещё отключена.`, mainTelegramKeyboard());
 }
@@ -13050,14 +13710,13 @@ async function telegramReadyGatePackages(chatId) {
 async function telegramReadinessBlockers(chatId, numberText = "1") {
   const result = await readinessGateCheckPackage(numberText || "1");
   const blockers = result.blockers_json || [];
-  if (!blockers.length) return sendTelegramMessage(chatId, `Пакет ${escapeHtml(numberText)} без blockers. readiness_score: ${Number(result.readiness_score || 0)}/100`, mainTelegramKeyboard());
+  if (!blockers.length) return sendTelegramMessage(chatId, `У пакета ${escapeHtml(numberText)} нет причин блокировки. Оценка готовности: ${Number(result.readiness_score || 0)}/100`, mainTelegramKeyboard());
   const text = blockers.map((item, index) => [
-    `${index + 1}. <b>${escapeHtml(item.code)}</b>`,
-    `severity: ${escapeHtml(item.severity)}`,
-    escapeHtml(item.message),
-    `next: ${escapeHtml(item.next_action)}`
+    `${index + 1}. <b>${escapeHtml(item.message)}</b>`,
+    `Важность: ${item.severity === "hard" ? "обязательное исправление" : "требует внимания"}`,
+    `Следующее действие: ${escapeHtml(item.next_action)}`
   ].join("\n")).join("\n\n");
-  return sendTelegramLongMessage(chatId, `<b>Blockers for package ${escapeHtml(numberText)}</b>\n\n${text}`, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Причины блокировки пакета ${escapeHtml(numberText)}</b>\n\n${text}`, mainTelegramKeyboard());
 }
 
 function telegramPrepublishPreviewText(result = {}) {
@@ -13065,44 +13724,44 @@ function telegramPrepublishPreviewText(result = {}) {
     const readiness = result.readiness || {};
     const blockers = (readiness.blockers_json || []).slice(0, 6).map((item) => `- ${item.code}: ${item.message}`).join("\n");
     return [
-      "<b>Pre-Publish Simulator</b>",
+      "<b>Предпросмотр перед публикацией</b>",
       "",
-      escapeHtml(result.message || "Package is not ready."),
-      `status: ${escapeHtml(readiness.status || "blocked")}`,
-      `readiness_score: ${Number(readiness.readiness_score || 0)}/100`,
+      "Пакет не прошёл финальную проверку и не может получить предпросмотр.",
+      `Статус: ${escapeHtml(telegramRuLabel(readiness.status || "blocked"))}`,
+      `Оценка готовности: ${Number(readiness.readiness_score || 0)}/100`,
       "",
-      blockers ? `<b>Blockers</b>\n${escapeHtml(blockers)}` : "No blockers returned.",
+      blockers ? `<b>Причины блокировки</b>\n${escapeHtml(blockers)}` : "Причины блокировки не возвращены.",
       "",
       "Публикация не запускалась."
     ].join("\n");
   }
   const preview = result.preview || {};
-  const checklist = (preview.checklist_json || []).map((item) => `${item.passed ? "OK" : "NO"} ${item.item}`).join("\n");
+  const checklist = (preview.checklist_json || []).map((item) => `${item.passed ? "ДА" : "НЕТ"} ${item.item}`).join("\n");
   const warnings = (preview.risk_warnings_json || []).map((item) => `- ${item.message}`).join("\n");
   return [
-    "<b>Pre-Publish Preview</b>",
+    "<b>Предпросмотр перед публикацией</b>",
     "",
     `<b>${escapeHtml(result.draft?.title || preview.package_id || "")}</b>`,
-    `package_id: ${escapeHtml(preview.package_id || "")}`,
-    `scheduled_time: ${escapeHtml(preview.scheduled_time || "")}`,
-    `safety_score: ${Number(preview.safety_score || 0)}/100`,
-    `editorial_score: ${Number(preview.editorial_score || 0)}/100`,
-    `readiness_score: ${Number(preview.readiness_score || 0)}/100`,
+    `ID пакета: ${escapeHtml(preview.package_id || "")}`,
+    `Время: ${escapeHtml(preview.scheduled_time || "")}`,
+    `Оценка безопасности: ${Number(preview.safety_score || 0)}/100`,
+    `Редакционная оценка: ${Number(preview.editorial_score || 0)}/100`,
+    `Оценка готовности: ${Number(preview.readiness_score || 0)}/100`,
     "",
-    "<b>Facebook post text</b>",
+    "<b>Текст для Facebook</b>",
     escapeHtml(shortText(preview.post_text || "", 1200)),
     "",
-    "<b>Image prompt / reference</b>",
-    escapeHtml(shortText(result.image_prompt?.prompt || preview.image_prompt_id || "missing", 800)),
+    "<b>Изображение и промпт</b>",
+    escapeHtml(shortText(result.image_prompt?.prompt || preview.image_prompt_id || "отсутствуют", 800)),
     "",
-    "<b>Expected audience reaction</b>",
+    "<b>Ожидаемая реакция аудитории</b>",
     escapeHtml(preview.expected_reaction || ""),
     "",
-    warnings ? `<b>Risk warnings</b>\n${escapeHtml(warnings)}` : "<b>Risk warnings</b>\nNone.",
+    warnings ? `<b>Предупреждения о рисках</b>\n${escapeHtml(warnings)}` : "<b>Предупреждения о рисках</b>\nНет.",
     "",
-    checklist ? `<b>Final checklist</b>\n${escapeHtml(checklist)}` : "",
+    checklist ? `<b>Итоговая проверка</b>\n${escapeHtml(checklist)}` : "",
     "",
-    "No publishing. No Facebook posting. No write permissions."
+    "Публикация не выполнялась. Разрешения на запись в Facebook не используются."
   ].join("\n");
 }
 
@@ -13113,14 +13772,14 @@ async function telegramPrepublishPreview(chatId, numberText = "1") {
 
 async function telegramPrepublishPreviews(chatId) {
   const previews = latestPrepublishPreviews(10);
-  if (!previews.length) return sendTelegramMessage(chatId, "Предпросмотров пока нет. Используйте /предпросмотр 1 для ready package.", mainTelegramKeyboard());
+  if (!previews.length) return sendTelegramMessage(chatId, "Предпросмотров пока нет. Используйте /предпросмотр 1 для готового пакета.", mainTelegramKeyboard());
   const text = previews.map((preview, index) => [
     `${index + 1}. <b>${escapeHtml(preview.package_id)}</b>`,
-    `scheduled: ${escapeHtml(preview.scheduled_time || "missing")}`,
-    `scores: safety ${Number(preview.safety_score || 0)} / editorial ${Number(preview.editorial_score || 0)} / ready ${Number(preview.readiness_score || 0)}`,
-    `reaction: ${escapeHtml(shortText(preview.expected_reaction || "", 140))}`
+    `время: ${escapeHtml(preview.scheduled_time || "отсутствует")}`,
+    `оценки: безопасность ${Number(preview.safety_score || 0)} / редактура ${Number(preview.editorial_score || 0)} / готовность ${Number(preview.readiness_score || 0)}`,
+    `реакция: ${escapeHtml(shortText(preview.expected_reaction || "", 140))}`
   ].join("\n")).join("\n\n");
-  return sendTelegramLongMessage(chatId, `<b>Pre-Publish Previews</b>\n\n${text}\n\nПубликация не включена.`, mainTelegramKeyboard());
+  return sendTelegramLongMessage(chatId, `<b>Предпросмотры перед публикацией</b>\n\n${text}\n\nПубликация не включена.`, mainTelegramKeyboard());
 }
 
 async function telegramDrafts(chatId) {
@@ -13128,10 +13787,10 @@ async function telegramDrafts(chatId) {
   if (!drafts.length) return sendTelegramMessage(chatId, "Черновиков пока нет. Сначала используйте /создать измена 3.", mainTelegramKeyboard());
   const text = drafts.map((draft, index) => [
     `${index + 1}. <b>${escapeHtml(draft.title)}</b>`,
-    `категория: ${escapeHtml(draft.category || "")}`,
-    `эмоция: ${escapeHtml(draft.emotion || "")}`,
+    `категория: ${escapeHtml(telegramRuLabel(draft.category || ""))}`,
+    `эмоция: ${escapeHtml(telegramRuLabel(draft.emotion || ""))}`,
     `оценка: ${Number(draft.viral_prediction_score || 0)}/100`,
-    `статус: ${escapeHtml(draft.status || "needs_approval")}`
+    `статус: ${escapeHtml(telegramRuLabel(draft.status || "needs_approval"))}`
   ].join("\n")).join("\n\n");
   return sendTelegramMessage(chatId, `<b>Черновики историй</b>\n\n${text}\n\n/черновик 1 — полный текст\n/approve 1 — одобрить черновик\n/reject 1 — отклонить черновик\n\nАвтопубликации нет.`, mainTelegramKeyboard());
 }
@@ -13143,8 +13802,8 @@ async function telegramDraftDetails(chatId, numberText) {
     `<b>Черновик ${escapeHtml(numberText)}</b>`,
     "",
     `<b>${escapeHtml(draft.title)}</b>`,
-    `категория: ${escapeHtml(draft.category || "")}`,
-    `эмоция: ${escapeHtml(draft.emotion || "")}`,
+    `категория: ${escapeHtml(telegramRuLabel(draft.category || ""))}`,
+    `эмоция: ${escapeHtml(telegramRuLabel(draft.emotion || ""))}`,
     `оценка: ${Number(draft.viral_prediction_score || 0)}/100`,
     `статус: ${escapeHtml(draft.status || "needs_approval")}`,
     "",
@@ -13163,7 +13822,7 @@ async function telegramDraftDetails(chatId, numberText) {
     `<b>Почему может сработать</b>`,
     escapeHtml(draft.why_it_should_work || ""),
     "",
-    "Нужно одобрение. Используйте /approve 1 или /reject 1. Автопубликации нет."
+    "Нужна проверка. Используйте /одобрить 1 или /отклонить 1. Автопубликации нет."
   ].join("\n");
   return sendTelegramLongMessage(chatId, header, mainTelegramKeyboard());
 }
@@ -13172,62 +13831,64 @@ async function telegramApproveCommand(chatId, id) {
   if (!id) return telegramDrafts(chatId);
   if (/^\d+$/.test(String(id))) {
     const draft = await updateGeneratedDraftStatusByNumber(id, "approved");
-    return sendTelegramMessage(chatId, draft ? `Approved draft ${id}: ${escapeHtml(draft.title)}\nStatus: ${escapeHtml(draft.status)}\n\nNot published. Manual publishing/approval flow is still required.` : "Draft not found. Use /drafts to see numbers 1-10.", mainTelegramKeyboard());
+    return sendTelegramMessage(chatId, draft ? `Черновик ${id} одобрен: ${escapeHtml(draft.title)}\nСтатус: ${escapeHtml(telegramRuLabel(draft.status))}\n\nМатериал не опубликован. Для публикации всё ещё требуется отдельное ручное решение.` : "Черновик не найден. Используйте /черновики, чтобы увидеть номера 1-10.", mainTelegramKeyboard());
   }
   const result = setStoryStatusFromTelegram(id, "approve");
-  return sendTelegramMessage(chatId, result ? `✅ Approved: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(result.status)}\n\nNothing was published automatically.` : "История не найдена.", mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, result ? `✅ Одобрено: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(telegramRuLabel(result.status))}\n\nАвтоматической публикации не было.` : "История не найдена.", mainTelegramKeyboard());
 }
 
 async function telegramRejectCommand(chatId, id) {
   if (!id) return telegramDrafts(chatId);
   if (/^\d+$/.test(String(id))) {
     const draft = await updateGeneratedDraftStatusByNumber(id, "rejected");
-    return sendTelegramMessage(chatId, draft ? `Rejected draft ${id}: ${escapeHtml(draft.title)}\nStatus: ${escapeHtml(draft.status)}\n\nNothing was deleted or published.` : "Draft not found. Use /drafts to see numbers 1-10.", mainTelegramKeyboard());
+    return sendTelegramMessage(chatId, draft ? `Черновик ${id} отклонён: ${escapeHtml(draft.title)}\nСтатус: ${escapeHtml(telegramRuLabel(draft.status))}\n\nНичего не удалено и не опубликовано.` : "Черновик не найден. Используйте /черновики, чтобы увидеть номера 1-10.", mainTelegramKeyboard());
   }
   const result = setStoryStatusFromTelegram(id, "reject");
-  return sendTelegramMessage(chatId, result ? `❌ Rejected: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(result.status)}\n\nNothing was deleted or published.` : "История не найдена.", mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, result ? `❌ Отклонено: ${escapeHtml(result.title)}\nСтатус: ${escapeHtml(telegramRuLabel(result.status))}\n\nНичего не удалено и не опубликовано.` : "История не найдена.", mainTelegramKeyboard());
 }
 
 async function telegramSettings(chatId) {
   const fb = facebookConfigStatus();
   const tg = telegramConfigStatus();
-  return sendTelegramMessage(chatId, `⚙ <b>Настройки</b>\n\nFacebook API: ${fb.configured ? "✅" : "⏳"}\nTelegram: ${tg.configured ? "✅" : "⏳"}\nPostgreSQL: ${pgPool ? "✅" : "JSON backup mode"}\n\nСекреты хранятся только локально в .env или environment variables.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `⚙ <b>Настройки</b>\n\nFacebook API: ${fb.configured ? "✅" : "⏳"}\nTelegram: ${tg.configured ? "✅" : "⏳"}\nPostgreSQL: ${pgPool ? "✅" : "резервный режим JSON"}\n\nСекреты хранятся только локально в .env или в переменных окружения.`, mainTelegramKeyboard());
 }
 
 function telegramBrainStatsText(recommendations = buildProjectBrainV2Recommendations()) {
   const topEmotions = recommendations.best_emotions.length
-    ? recommendations.best_emotions.slice(0, 3).map((item, index) => `${index + 1}. ${escapeHtml(item.name)} — score ${item.avg_score}`).join("\n")
+    ? recommendations.best_emotions.slice(0, 3).map((item, index) => `${index + 1}. ${escapeHtml(telegramRuLabel(item.name))} — оценка ${item.avg_score}`).join("\n")
     : "Пока недостаточно данных.";
   const topHooks = recommendations.best_hook_types.length
-    ? recommendations.best_hook_types.slice(0, 3).map((item, index) => `${index + 1}. ${escapeHtml(item.name)} — score ${item.avg_score}`).join("\n")
+    ? recommendations.best_hook_types.slice(0, 3).map((item, index) => `${index + 1}. ${escapeHtml(telegramRuLabel(item.name))} — оценка ${item.avg_score}`).join("\n")
     : "Пока недостаточно данных.";
   const avoid = recommendations.avoid_topics.length
-    ? recommendations.avoid_topics.slice(0, 4).map((item) => `• ${escapeHtml(item.name)} — слабый score ${item.avg_score}`).join("\n")
+    ? recommendations.avoid_topics.slice(0, 4).map((item) => `• ${escapeHtml(telegramRuLabel(item.name))} — слабая оценка ${item.avg_score}`).join("\n")
     : "Пока нет слабых тем. Продолжайте собирать данные.";
   const next = recommendations.suggested_next_story_type || {};
   return [
-    "🧠 <b>Project Brain v2</b>",
+    "🧠 <b>Мозг проекта v2</b>",
     "",
-    `Story DNA: ${recommendations.dna_count}`,
-    `Confidence score: ${recommendations.confidence_score}%`,
+    `Структурных профилей историй: ${recommendations.dna_count}`,
+    `Уверенность анализа: ${recommendations.confidence_score}%`,
     "",
     "<b>Топ эмоции</b>",
     topEmotions,
     "",
-    "<b>Топ hooks</b>",
+    "<b>Лучшие варианты начала истории</b>",
     topHooks,
     "",
     "<b>Следующая рекомендованная история</b>",
-    `Тема: ${escapeHtml(next.theme || "family conflict")}`,
-    `Эмоция: ${escapeHtml(next.emotion || "hope")}`,
-    `Hook: ${escapeHtml(next.hook_type || "hidden truth hook")}`,
-    `Конфликт: ${escapeHtml(next.conflict_type || "family moral conflict")}`,
-    `Длина: ${escapeHtml(next.story_length || "medium")}`,
+    `Тема: ${escapeHtml(telegramRuLabel(next.theme || "family conflict"))}`,
+    `Эмоция: ${escapeHtml(telegramRuLabel(next.emotion || "hope"))}`,
+    `Начало: ${escapeHtml(telegramRuLabel(next.hook_type || "hidden truth hook"))}`,
+    `Конфликт: ${escapeHtml(telegramRuLabel(next.conflict_type || "family moral conflict"))}`,
+    `Длина: ${escapeHtml(next.story_length === "medium" ? "средняя" : telegramRuLabel(next.story_length || "medium"))}`,
     "",
     "<b>Что избегать</b>",
     avoid,
     "",
-    escapeHtml(recommendations.reason_why || ""),
+    escapeHtml(recommendations.dna_count
+      ? `Рекомендация основана на ${recommendations.dna_count} структурных профилях историй. Система учитывает накопленные темы, эмоции, варианты начала и конфликты.`
+      : "Данных пока недостаточно. Сначала загрузите публикации Facebook, создайте истории или выполните исследование идей."),
     "",
     "Безопасность: полные чужие тексты не сохраняются. Публикации нет."
   ].join("\n");
@@ -13238,13 +13899,13 @@ async function telegramBrain(chatId, args = []) {
   if (mode === "обновить" || mode === "refresh") {
     const result = await refreshProjectBrainV2Expansion();
     return sendTelegramLongMessage(chatId, [
-      "🧠 <b>Project Brain v2 обновлён</b>",
+      "🧠 <b>Мозг проекта v2 обновлён</b>",
       "",
-      `Facebook imported: ${result.facebook_imported}`,
-      `Generated imported: ${result.generated_imported}`,
-      `Research imported: ${result.research_imported}`,
-      `Story DNA: ${result.story_dna_count}`,
-      `Confidence score: ${result.confidence_score}%`,
+      `Импортировано из Facebook: ${result.facebook_imported}`,
+      `Импортировано созданных историй: ${result.generated_imported}`,
+      `Импортировано исследований: ${result.research_imported}`,
+      `Структурных профилей историй: ${result.story_dna_count}`,
+      `Уверенность анализа: ${result.confidence_score}%`,
       "",
       telegramBrainStatsText(result.recommendations)
     ].join("\n"), mainTelegramKeyboard());
@@ -13260,27 +13921,27 @@ function telegramStyleBrainStatsText(recommendations = buildStyleBrainRecommenda
   const stats = recommendations.statistics || buildStyleBrainStatistics(readStyleBrainProfiles());
   const makeHuman = recommendations.how_to_make_stories_more_human
     .slice(0, 4)
-    .map((item) => `• ${item}`)
+    .map((item) => `• ${telegramRuLabel(item)}`)
     .join("\n");
   const avoid = recommendations.words_structures_to_avoid
     .slice(0, 5)
-    .map((item) => `• ${item}`)
+    .map((item) => `• ${telegramRuLabel(item)}`)
     .join("\n");
   return [
-    "✍️ <b>Style Brain v1</b>",
+    "✍️ <b>Анализ стиля v1</b>",
     "",
-    `Profiles: ${stats.profiles_count}`,
-    `Hook strength: ${stats.hook_strength}%`,
-    `Emotional intensity: ${stats.emotional_intensity}%`,
-    `Dialogue density: ${stats.dialogue_density}%`,
-    `Boring risk: ${stats.boring_risk}%`,
-    `Human realism: ${stats.human_realism_score}%`,
+    `Профилей: ${stats.profiles_count}`,
+    `Сила начала: ${stats.hook_strength}%`,
+    `Эмоциональная интенсивность: ${stats.emotional_intensity}%`,
+    `Доля диалогов: ${stats.dialogue_density}%`,
+    `Риск скучного текста: ${stats.boring_risk}%`,
+    `Естественность: ${stats.human_realism_score}%`,
     "",
     "<b>Рекомендации</b>",
-    `Opening: ${escapeHtml(recommendations.ideal_opening_style)}`,
-    `Hook: ${escapeHtml(recommendations.ideal_hook_type)}`,
-    `Dialogue: ${escapeHtml(recommendations.ideal_dialogue_density)}`,
-    `Paragraphs: ${escapeHtml(recommendations.paragraph_rhythm)}`,
+    `Вступление: ${escapeHtml(telegramRuLabel(recommendations.ideal_opening_style))}`,
+    `Начало: ${escapeHtml(telegramRuLabel(recommendations.ideal_hook_type))}`,
+    `Диалоги: ${escapeHtml(telegramRuLabel(recommendations.ideal_dialogue_density))}`,
+    `Ритм абзацев: ${escapeHtml(telegramRuLabel(recommendations.paragraph_rhythm))}`,
     "",
     "<b>Сделать живее</b>",
     escapeHtml(makeHuman),
@@ -13288,7 +13949,7 @@ function telegramStyleBrainStatsText(recommendations = buildStyleBrainRecommenda
     "<b>Избегать</b>",
     escapeHtml(avoid),
     "",
-    "Безопасность: Style Brain хранит только style signals и не публикует."
+    "Безопасность: анализ стиля хранит только структурные сигналы и ничего не публикует."
   ].join("\n");
 }
 
@@ -13297,10 +13958,10 @@ async function telegramStyleBrain(chatId, args = []) {
   if (mode === "обновить" || mode === "refresh" || mode === "update") {
     const result = await refreshStyleBrainV1();
     return sendTelegramLongMessage(chatId, [
-      "✍️ <b>Style Brain обновлён</b>",
+      "✍️ <b>Анализ стиля обновлён</b>",
       "",
-      `Analyzed: ${result.analyzed}`,
-      `Profiles: ${result.profiles_count}`,
+      `Проанализировано: ${result.analyzed}`,
+      `Профилей: ${result.profiles_count}`,
       "",
       telegramStyleBrainStatsText(result.recommendations)
     ].join("\n"), mainTelegramKeyboard());
@@ -13317,26 +13978,32 @@ function telegramEmotionEngineText(recommendations = buildEmotionEngineRecommend
   const curve = recommendations.best_emotional_curve.join(" -> ");
   const avoid = recommendations.emotions_to_avoid_repeating
     .slice(0, 5)
-    .map((item) => `• ${item}`)
+    .map((item) => `• ${telegramRuLabel(item)}`)
     .join("\n");
-  const tips = recommendations.how_to_make_next_story_more_emotional
-    .slice(0, 5)
-    .map((item) => `• ${item}`)
-    .join("\n");
+  const tips = [
+    "• начать с любопытства или спокойствия, а не с объяснения",
+    "• усиливать напряжение каждые 2-3 абзаца через конкретные бытовые детали",
+    "• поместить самый сильный момент примерно на 65-75% истории",
+    "• после пика дать читателю живую сцену эмоционального восстановления",
+    `• завершить эмоцией «${telegramRuLabel(recommendations.best_ending_emotion)}», а не только нравоучением`
+  ].join("\n");
+  const rhythm = String(recommendations.recommended_story_rhythm || "").startsWith("fast hook")
+    ? `быстрое начало → раннее напряжение → резкий пик на ${recommendations.ideal_peak_position} → тёплое восстановление`
+    : `медленное любопытство → растущее напряжение → эмоциональный пик на ${recommendations.ideal_peak_position} → удовлетворяющий финал`;
   return [
-    "💓 <b>Human Emotion Engine v1</b>",
+    "💓 <b>Анализ эмоциональной кривой v1</b>",
     "",
-    `Timelines: ${stats.timelines_count}`,
-    `Average peak position: ${stats.average_peak_position}%`,
-    `Ending satisfaction: ${stats.average_ending_satisfaction}%`,
-    `Reader recovery: ${stats.average_reader_recovery}%`,
-    `Emotion volatility: ${stats.average_volatility}%`,
+    `Эмоциональных шкал: ${stats.timelines_count}`,
+    `Средняя позиция пика: ${stats.average_peak_position}%`,
+    `Удовлетворённость финалом: ${stats.average_ending_satisfaction}%`,
+    `Эмоциональное восстановление читателя: ${stats.average_reader_recovery}%`,
+    `Изменчивость эмоций: ${stats.average_volatility}%`,
     "",
     "<b>Рекомендации</b>",
-    `Best curve: ${escapeHtml(curve)}`,
-    `Ideal peak: ${escapeHtml(recommendations.ideal_peak_position)}`,
-    `Best ending emotion: ${escapeHtml(recommendations.best_ending_emotion)}`,
-    `Rhythm: ${escapeHtml(recommendations.recommended_story_rhythm)}`,
+    `Лучшая кривая: ${escapeHtml(curve.split(" -> ").map(telegramRuLabel).join(" → "))}`,
+    `Идеальный пик: ${escapeHtml(telegramRuLabel(recommendations.ideal_peak_position))}`,
+    `Лучшая эмоция финала: ${escapeHtml(telegramRuLabel(recommendations.best_ending_emotion))}`,
+    `Ритм: ${escapeHtml(rhythm)}`,
     "",
     "<b>Как усилить следующую историю</b>",
     escapeHtml(tips),
@@ -13353,10 +14020,10 @@ async function telegramEmotionEngine(chatId, args = []) {
   if (mode === "обновить" || mode === "refresh" || mode === "update") {
     const result = await refreshEmotionEngineV1();
     return sendTelegramLongMessage(chatId, [
-      "💓 <b>Emotion Engine обновлён</b>",
+      "💓 <b>Анализ эмоциональной кривой обновлён</b>",
       "",
-      `Analyzed: ${result.analyzed}`,
-      `Timelines: ${result.timelines_count}`,
+      `Проанализировано: ${result.analyzed}`,
+      `Эмоциональных шкал: ${result.timelines_count}`,
       "",
       telegramEmotionEngineText(result.recommendations)
     ].join("\n"), mainTelegramKeyboard());
@@ -13376,29 +14043,29 @@ function telegramContentSafetyReviewText(resultOrReview = {}) {
   if (!review?.id) return "Проверка безопасности не найдена.";
   const issues = (review.issues_json || [])
     .slice(0, 8)
-    .map((item) => `• [${item.type || "risk"}] ${item.message || item}`)
+    .map((item) => `• ${item.message || item}`)
     .join("\n") || "Критичных замечаний нет.";
   const suggestions = (review.suggestions_json || [])
     .slice(0, 8)
     .map((item) => `• ${item.message || item}`)
     .join("\n") || "Можно оставить как есть после ручной проверки.";
   return [
-    "🛡 <b>Content Safety AI v1</b>",
+    "🛡 <b>Проверка безопасности</b>",
     "",
-    `Safety Score: ${Number(review.safety_score || 0)}/100`,
-    `Originality Score: ${Number(review.originality_score || 0)}/100`,
-    `Facebook Risk: ${escapeHtml(review.facebook_risk || "low")}`,
-    `Quality Risk: ${escapeHtml(review.quality_risk || "low")}`,
-    `Policy Risk: ${escapeHtml(review.policy_risk || "low")}`,
-    `Recommendation: ${escapeHtml(review.recommendation || "needs_edit")}`,
+    `Оценка безопасности: ${Number(review.safety_score || 0)}/100`,
+    `Оценка оригинальности: ${Number(review.originality_score || 0)}/100`,
+    `Риск для Facebook: ${escapeHtml(telegramRuLabel(review.facebook_risk || "low"))}`,
+    `Риск качества: ${escapeHtml(telegramRuLabel(review.quality_risk || "low"))}`,
+    `Риск нарушения правил: ${escapeHtml(telegramRuLabel(review.policy_risk || "low"))}`,
+    `Рекомендация: ${escapeHtml(telegramRuLabel(review.recommendation || "needs_edit"))}`,
     "",
-    "<b>Issues</b>",
+    "<b>Замечания</b>",
     escapeHtml(issues),
     "",
-    "<b>Suggestions</b>",
+    "<b>Предложения</b>",
     escapeHtml(suggestions),
     "",
-    "Публикация не запускается. Facebook posting disabled."
+    "Публикация не запускается. Запись в Facebook отключена."
   ].join("\n");
 }
 
@@ -13417,68 +14084,68 @@ async function telegramCheckPackageSafety(chatId, numberText = "1") {
 async function telegramContentSafetyStatus(chatId) {
   const data = buildContentSafetyDashboardData();
   const latest = data.latest_reviews.slice(0, 5).map((item, index) =>
-    `${index + 1}. safety ${item.safety_score}/100, originality ${item.originality_score}/100, ${item.recommendation}`
+    `${index + 1}. безопасность ${item.safety_score}/100, оригинальность ${item.originality_score}/100, ${telegramRuLabel(item.recommendation)}`
   ).join("\n") || "Проверок пока нет.";
   return sendTelegramLongMessage(chatId, [
-    "🛡 <b>Content Safety AI</b>",
+    "🛡 <b>Проверка безопасности</b>",
     "",
-    `Reviews: ${data.reviews_count}`,
-    `Average Safety Score: ${data.average_safety_score}/100`,
-    `High Risk Drafts: ${data.high_risk_drafts.length}`,
-    `Needs Edit Drafts: ${data.needs_edit_drafts.length}`,
-    `Safe Packages: ${data.safe_packages.length}`,
+    `Всего проверок: ${data.reviews_count}`,
+    `Средняя оценка безопасности: ${data.average_safety_score}/100`,
+    `Черновики высокого риска: ${data.high_risk_drafts.length}`,
+    `Требуют правок: ${data.needs_edit_drafts.length}`,
+    `Безопасные пакеты: ${data.safe_packages.length}`,
     "",
-    "<b>Latest Reviews</b>",
+    "<b>Последние проверки</b>",
     escapeHtml(latest),
     "",
     "/проверить_черновик 1 — проверить черновик",
     "/проверить_пакет 1 — проверить пакет",
     "",
-    "Публикации нет. Safety gate только блокирует ready, если есть риск."
+    "Публикации нет. Проверка безопасности блокирует готовность при наличии риска."
   ].join("\n"), mainTelegramKeyboard());
 }
 
 function telegramEditorialReviewText(resultOrReview = {}, full = false) {
   const review = resultOrReview.review || resultOrReview;
   const draft = resultOrReview.draft || readGeneratedStories().find((item) => item.id === review.draft_id) || {};
-  const strengths = (review.strengths_json || []).slice(0, full ? 10 : 4).map((item) => `- ${item}`).join("\n") || "- No strengths saved yet.";
-  const weaknesses = (review.weaknesses_json || []).slice(0, full ? 10 : 4).map((item) => `- ${item}`).join("\n") || "- No weaknesses saved yet.";
-  const plan = (review.improvement_plan_json || []).slice(0, full ? 10 : 5).map((item) => `- ${item}`).join("\n") || "- No improvement plan saved yet.";
+  const strengths = (review.strengths_json || []).slice(0, full ? 10 : 4).map((item) => `• ${item}`).join("\n") || "• Сильные стороны пока не сохранены.";
+  const weaknesses = (review.weaknesses_json || []).slice(0, full ? 10 : 4).map((item) => `• ${item}`).join("\n") || "• Замечания пока не сохранены.";
+  const plan = (review.improvement_plan_json || []).slice(0, full ? 10 : 5).map((item) => `• ${item}`).join("\n") || "• План улучшения пока не сохранён.";
   const metrics = [
-    `Hook: ${Number(review.hook_score || 0)}/100`,
-    `Opening: ${Number(review.opening_score || 0)}/100`,
-    `Emotion: ${Number(review.emotion_score || 0)}/100`,
-    `Dialogue: ${Number(review.dialogue_score || 0)}/100`,
-    `Rhythm: ${Number(review.rhythm_score || 0)}/100`,
-    `Twist: ${Number(review.twist_score || 0)}/100`,
-    `Ending: ${Number(review.ending_score || 0)}/100`,
-    `Human realism: ${Number(review.human_score || 0)}/100`,
-    `Facebook readability: ${Number(review.facebook_score || 0)}/100`,
-    `Originality: ${Number(review.originality_score || 0)}/100`
+    `Сила начала: ${Number(review.hook_score || 0)}/100`,
+    `Качество вступления: ${Number(review.opening_score || 0)}/100`,
+    `Эмоциональное развитие: ${Number(review.emotion_score || 0)}/100`,
+    `Диалоги: ${Number(review.dialogue_score || 0)}/100`,
+    `Ритм: ${Number(review.rhythm_score || 0)}/100`,
+    `Поворот: ${Number(review.twist_score || 0)}/100`,
+    `Сила финала: ${Number(review.ending_score || 0)}/100`,
+    `Человечность: ${Number(review.human_score || 0)}/100`,
+    `Читаемость для Facebook: ${Number(review.facebook_score || 0)}/100`,
+    `Оригинальность: ${Number(review.originality_score || 0)}/100`
   ].join("\n");
   return [
-    "<b>AI Editorial Board v1</b>",
+    "<b>Редакционная коллегия</b>",
     "",
-    `<b>${escapeHtml(draft.title || "Generated story")}</b>`,
-    `Editorial Score: ${Number(review.editorial_score || 0)}/100`,
-    `Reader Retention: ${Number(review.reader_retention_prediction || 0)}/100`,
-    `Comment Prediction: ${Number(review.comment_prediction || 0)}/100`,
-    `Share Prediction: ${Number(review.share_prediction || 0)}/100`,
-    `Publication Readiness: ${escapeHtml(review.publication_readiness || "needs_edit")}`,
+    `<b>${escapeHtml(draft.title || "Созданная история")}</b>`,
+    `Редакционная оценка: ${Number(review.editorial_score || 0)}/100`,
+    `Прогноз удержания читателя: ${Number(review.reader_retention_prediction || 0)}/100`,
+    `Прогноз комментариев: ${Number(review.comment_prediction || 0)}/100`,
+    `Прогноз репостов: ${Number(review.share_prediction || 0)}/100`,
+    `Готовность материала: ${escapeHtml(telegramRuLabel(review.publication_readiness || "needs_edit"))}`,
     "",
-    "<b>Scores</b>",
+    "<b>Оценки</b>",
     escapeHtml(metrics),
     "",
-    "<b>What is good</b>",
+    "<b>Что удалось</b>",
     escapeHtml(strengths),
     "",
-    "<b>What is weak</b>",
+    "<b>Что нужно улучшить</b>",
     escapeHtml(weaknesses),
     "",
-    "<b>Improvement Plan</b>",
+    "<b>План улучшения</b>",
     escapeHtml(plan),
     "",
-    "Оригинальный черновик не изменён. Публикация отключена. Content Safety используется обязательно."
+    "Оригинальный черновик не изменён. Публикация отключена. Проверка безопасности обязательна."
   ].join("\n");
 }
 
@@ -13513,24 +14180,24 @@ async function telegramEditorialReport(chatId, numberText = "1") {
 }
 
 async function telegramImproveDraft(chatId, numberText = "1") {
-  const result = await rewriteDraftFromEditorialReview(numberText || "1");
+  const result = await rewriteDraftFromEditorialReview(numberText || "1", "", { language: "ru" });
   if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Черновик не найден."), mainTelegramKeyboard());
   const improved = result.improved_draft || {};
   const review = result.editorial_review || {};
   const safety = result.content_safety_review || {};
   const text = [
-    "<b>Editorial Rewriter v1</b>",
+    "<b>Редактор текста</b>",
     "",
-    `<b>${escapeHtml(improved.title || "Improved draft")}</b>`,
-    `Revision: ${Number(improved.revision_number || 0)}`,
-    `Before: ${Number(result.score_before || 0)}/100`,
-    `After: ${Number(result.score_after || 0) || "pending"}/100`,
-    `Expected: ${Number(result.expected_editorial_score || 0)}/100`,
-    `Readiness: ${escapeHtml(review.publication_readiness || "pending")}`,
-    `Safety: ${escapeHtml(safety.recommendation || "pending")}`,
-    `Status: ${escapeHtml(improved.status || "needs_approval")}`,
+    `<b>${escapeHtml(improved.title || "Улучшенный черновик")}</b>`,
+    `Версия: ${Number(improved.revision_number || 0)}`,
+    `Оценка до: ${Number(result.score_before || 0)}/100`,
+    `Оценка после: ${Number(result.score_after || 0) || "ожидается"}/100`,
+    `Ожидаемая оценка: ${Number(result.expected_editorial_score || 0)}/100`,
+    `Готовность: ${escapeHtml(telegramRuLabel(review.publication_readiness || "pending"))}`,
+    `Безопасность: ${escapeHtml(telegramRuLabel(safety.recommendation || "pending"))}`,
+    `Статус: ${escapeHtml(telegramRuLabel(improved.status || "needs_approval"))}`,
     "",
-    "<b>New hook</b>",
+    "<b>Новое начало</b>",
     escapeHtml(shortText(improved.hook || "", 700)),
     "",
     "/версии 1 — показать цепочку версий",
@@ -13543,57 +14210,57 @@ async function telegramImproveDraft(chatId, numberText = "1") {
 
 async function telegramImproveToReady(chatId, numberText = "1") {
   const result = await improveDraftToReady(numberText || "1");
-  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Draft not found."), mainTelegramKeyboard());
+  if (!result.ok) return sendTelegramMessage(chatId, "Черновик не найден.", mainTelegramKeyboard());
   const finalDraft = result.final_draft || {};
   const firstScore = result.first_pass ? Number(result.first_pass.editorial_review?.editorial_score || 0) : null;
   const finalScore = Number(result.final_editorial_score || 0);
   const finalSafety = result.final_safety_recommendation || "pending";
   const text = [
-    "<b>Editorial Auto-Pass v1</b>",
+    "<b>Дополнительная редакционная проверка</b>",
     "",
-    `<b>${escapeHtml(finalDraft.title || "Improved draft")}</b>`,
-    `Already ready: ${result.already_ready ? "yes" : "no"}`,
-    `First pass: ${firstScore === null ? "not needed" : `${firstScore}/100`}`,
-    `Second pass used: ${result.second_pass_used ? "yes" : "no"}`,
-    `Final score: ${finalScore}/100`,
-    `Safety: ${escapeHtml(finalSafety)}`,
-    `Ready 75+: ${result.reached_ready ? "yes" : "needs edit"}`,
-    `Revision type: ${escapeHtml(finalDraft.revision_type || "editorial_rewrite")}`,
-    `Status: ${escapeHtml(finalDraft.status || "needs_approval")}`,
+    `<b>${escapeHtml(finalDraft.title || "Улучшенный черновик")}</b>`,
+    `Уже был готов: ${result.already_ready ? "да" : "нет"}`,
+    `Первый проход: ${firstScore === null ? "не требовался" : `${firstScore}/100`}`,
+    `Использован второй проход: ${result.second_pass_used ? "да" : "нет"}`,
+    `Итоговая оценка: ${finalScore}/100`,
+    `Безопасность: ${escapeHtml(telegramRuLabel(finalSafety))}`,
+    `Достигнут порог 75: ${result.reached_ready ? "да" : "требуются правки"}`,
+    `Тип версии: ${escapeHtml(telegramRuLabel(finalDraft.revision_type || "editorial_rewrite"))}`,
+    `Статус: ${escapeHtml(telegramRuLabel(finalDraft.status || "needs_approval"))}`,
     "",
-    "<b>Hook</b>",
+    "<b>Начало истории</b>",
     escapeHtml(shortText(finalDraft.hook || "", 700)),
     "",
-    "/готовность 1 - readiness status",
-    "/версии 1 - revision chain",
+    "/готовность 1 — состояние готовности",
+    "/версии 1 — цепочка версий",
     "",
-    "Original is preserved. Content Safety was not bypassed. Publishing is disabled."
+    "Оригинал сохранён. Проверка безопасности не обходилась. Публикация отключена."
   ].join("\n");
   return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
 }
 
 async function telegramDraftReadiness(chatId, numberText = "1") {
   const result = await editorialReadinessStatus(numberText || "1");
-  if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Draft not found."), mainTelegramKeyboard());
+  if (!result.ok) return sendTelegramMessage(chatId, "Черновик не найден.", mainTelegramKeyboard());
   const rows = result.versions.slice(-5).map((item, index) => [
     `${index + 1}. <b>${escapeHtml(shortText(item.title || item.id, 60))}</b>`,
-    `type: ${escapeHtml(item.revision_type || "original")}`,
-    `score: ${Number(item.editorial_score || 0)}/100`,
-    `safety: ${escapeHtml(item.safety_recommendation || "pending")}`,
-    `second pass: ${item.second_pass_used ? "yes" : "no"}`,
-    `status: ${escapeHtml(item.status || "")}`
+    `тип: ${escapeHtml(telegramRuLabel(item.revision_type || "original"))}`,
+    `оценка: ${Number(item.editorial_score || 0)}/100`,
+    `безопасность: ${escapeHtml(telegramRuLabel(item.safety_recommendation || "pending"))}`,
+    `второй проход: ${item.second_pass_used ? "да" : "нет"}`,
+    `статус: ${escapeHtml(telegramRuLabel(item.status || ""))}`
   ].join("\n")).join("\n\n");
   const text = [
-    "<b>Draft Readiness</b>",
+    "<b>Редакционная готовность черновика</b>",
     "",
-    `Ready 75+: ${result.reached_ready ? "yes" : "no"}`,
-    `Second pass used: ${result.second_pass_used ? "yes" : "no"}`,
-    `Best score: ${Number(result.best?.editorial_score || 0)}/100`,
-    `Best safety: ${escapeHtml(result.best?.safety_recommendation || "pending")}`,
+    `Достигнут порог 75: ${result.reached_ready ? "да" : "нет"}`,
+    `Использован второй проход: ${result.second_pass_used ? "да" : "нет"}`,
+    `Лучшая оценка: ${Number(result.best?.editorial_score || 0)}/100`,
+    `Лучшая оценка безопасности: ${escapeHtml(telegramRuLabel(result.best?.safety_recommendation || "pending"))}`,
     "",
     rows,
     "",
-    "Publishing is disabled. This is editorial readiness only."
+    "Публикация отключена. Это только редакционная оценка готовности."
   ].join("\n");
   return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
 }
@@ -13606,10 +14273,10 @@ async function telegramDraftVersions(chatId, numberText = "1") {
     const review = latestEditorialReviewForDraft(draft.id);
     return [
       `${index + 1}. <b>${escapeHtml(draft.title || "")}</b>`,
-      `type: ${escapeHtml(draft.revision_type || "original")}`,
-      `revision: ${Number(draft.revision_number || 0)}`,
-      `score: ${Number(review?.editorial_score || draft.previous_editorial_score || 0)}/100`,
-      `status: ${escapeHtml(draft.status || "")}`,
+      `тип: ${escapeHtml(telegramRuLabel(draft.revision_type || "original"))}`,
+      `версия: ${Number(draft.revision_number || 0)}`,
+      `оценка: ${Number(review?.editorial_score || draft.previous_editorial_score || 0)}/100`,
+      `статус: ${escapeHtml(telegramRuLabel(draft.status || ""))}`,
       `id: ${escapeHtml(shortText(draft.id || "", 16))}`
     ].join("\n");
   }).join("\n\n");
@@ -13630,24 +14297,24 @@ async function telegramCompareDrafts(chatId, leftRef = "1", rightRef = "2") {
     "<b>Сравнение черновиков</b>",
     "",
     `<b>1. ${escapeHtml(left.title || "")}</b>`,
-    `score: ${Number(leftReview?.editorial_score || 0)}/100`,
-    `readiness: ${escapeHtml(leftReview?.publication_readiness || "pending")}`,
-    `length: ${leftText.length} chars`,
-    `status: ${escapeHtml(left.status || "")}`,
+    `оценка: ${Number(leftReview?.editorial_score || 0)}/100`,
+    `готовность: ${escapeHtml(telegramRuLabel(leftReview?.publication_readiness || "pending"))}`,
+    `длина: ${leftText.length} знаков`,
+    `статус: ${escapeHtml(telegramRuLabel(left.status || ""))}`,
     "",
     `<b>2. ${escapeHtml(right.title || "")}</b>`,
-    `score: ${Number(rightReview?.editorial_score || 0)}/100`,
-    `readiness: ${escapeHtml(rightReview?.publication_readiness || "pending")}`,
-    `length: ${rightText.length} chars`,
-    `status: ${escapeHtml(right.status || "")}`,
+    `оценка: ${Number(rightReview?.editorial_score || 0)}/100`,
+    `готовность: ${escapeHtml(telegramRuLabel(rightReview?.publication_readiness || "pending"))}`,
+    `длина: ${rightText.length} знаков`,
+    `статус: ${escapeHtml(telegramRuLabel(right.status || ""))}`,
     "",
-    "<b>Hook 1</b>",
+    "<b>Начало 1</b>",
     escapeHtml(shortText(left.hook || "", 420)),
     "",
-    "<b>Hook 2</b>",
+    "<b>Начало 2</b>",
     escapeHtml(shortText(right.hook || "", 420)),
     "",
-    `Similarity: ${contentSafetySimilarity(leftText, rightText)}%`,
+    `Сходство: ${contentSafetySimilarity(leftText, rightText)}%`,
     "Ничего не опубликовано."
   ].join("\n");
   return sendTelegramLongMessage(chatId, text, mainTelegramKeyboard());
@@ -13658,12 +14325,12 @@ async function telegramForceBrainSync(chatId) {
 }
 
 async function legacyTelegramHelp(chatId) {
-  return sendTelegramMessage(chatId, `<b>AI Story Traffic Platform Commands</b>\n\n/status — system connection status\n/stats — stories and traffic stats\n/drafts — drafts and stories waiting for review\n/approve — show approval list\n/approve STORY_ID — approve a story locally\n/reject — show rejection list\n/reject STORY_ID — reject a story locally\n/help — command list\n\nButtons:\n✅ Approve — marks story as approved\n✏ Edit — returns story to review\n❌ Reject — marks story as rejected\n\nPublishing is never automatic.`, mainTelegramKeyboard());
+  return sendTelegramMessage(chatId, `<b>ИИ-редакция историй: команды</b>\n\n/статус — состояние подключений\n/статистика — статистика историй и переходов\n/черновики — черновики на проверке\n/одобрить ID — одобрить историю локально\n/отклонить ID — отклонить историю локально\n/помощь — список команд\n\nОдобрение меняет только редакционный статус. Автоматической публикации нет.`, mainTelegramKeyboard());
 }
 
 async function telegramHelp(chatId) {
   return sendTelegramMessage(chatId, [
-    "<b>AI Story Traffic Platform — команды</b>",
+    "<b>ИИ-редакция историй: команды</b>",
     "",
     "<b>Русский интерфейс</b>",
     "/старт — главное меню",
@@ -13675,7 +14342,7 @@ async function telegramHelp(chatId) {
     "/картинка 1 — создать 3 промпта картинки",
     "/картинки — очередь промптов",
     "/одобрить_картинку 1 — одобрить промпт",
-    "/сгенерировать_картинку 1 — создать реальную картинку из approved prompt",
+    "/сгенерировать_картинку 1 — создать изображение из одобренного промпта",
     "/картинки_готовые — готовые сгенерированные картинки",
     "/одобрить_готовую_картинку 1 — одобрить готовую картинку",
     "/отклонить_готовую_картинку 1 — отклонить готовую картинку",
@@ -13690,35 +14357,35 @@ async function telegramHelp(chatId) {
     "/готово — одобренные пакеты",
     "/проверить_готовность 1 — финальная проверка пакета",
     "/готовые — пакеты, прошедшие все ворота",
-    "/блокеры 1 — что мешает пакету стать ready",
+    "/блокеры 1 — что мешает пакету пройти проверку",
     "/предпросмотр 1 — показать, что было бы опубликовано",
     "/предпросмотры — последние предпросмотры",
-    "/мозг — Project Brain v2",
-    "/мозг обновить — импорт Facebook/generated/research в Story DNA",
-    "/обновить_мозг — принудительная полная синхронизация Project Brain",
-    "/рекомендации — рекомендации Project Brain",
-    "/стиль — Style Brain v1",
-    "/стиль обновить — проанализировать Facebook/generated/research/approved packages",
+    "/мозг — состояние Мозга проекта",
+    "/мозг обновить — импорт сигналов Facebook, генератора и исследований",
+    "/обновить_мозг — принудительная полная синхронизация Мозга проекта",
+    "/рекомендации — рекомендации Мозга проекта",
+    "/стиль — анализ стиля",
+    "/стиль обновить — проанализировать данные Facebook, созданные истории, исследования и одобренные пакеты",
     "/стиль рекомендации — рекомендации по живому стилю",
-    "/эмоции — Human Emotion Engine v1",
-    "/эмоции обновить — пересчитать emotional timelines",
+    "/эмоции — анализ эмоциональной кривой",
+    "/эмоции обновить — пересчитать эмоциональные шкалы",
     "/эмоции рекомендации — рекомендации по эмоциональной кривой",
-    "/безопасность — статус Content Safety AI",
-    "/проверить_черновик 1 — safety/originality check черновика",
-    "/проверить_пакет 1 — safety/originality check пакета",
+    "/безопасность — состояние проверки безопасности",
+    "/проверить_черновик 1 — проверить безопасность и оригинальность",
+    "/проверить_пакет 1 — проверить безопасность и оригинальность пакета",
     "/редактор — последний редакторский отчёт",
-    "/проверить_историю 1 — запустить Editorial Board для черновика",
+    "/проверить_историю 1 — запустить редакционную проверку",
     "/отчет 1 — полный редакторский отчёт по черновику",
     "/улучшить 1 — создать улучшенную версию черновика",
     "/версии 1 — показать все версии черновика",
     "/сравнить 1 2 — сравнить два черновика",
     "/помощь — эта справка",
     "",
-    "/улучшить_до_готовности 1 - auto-pass to 75+ with one extra pass",
-    "/готовность 1 - editorial readiness status",
+    "/улучшить_до_готовности 1 — выполнить не более двух редакционных проходов",
+    "/готовность 1 — показать редакционную готовность",
     "",
-    "<b>English commands still work</b>",
-    "/status, /research betrayal, /generate betrayal 3, /drafts, /draft 1, /emotions, /update_emotions, /emotion_recommendations, /check_draft 1, /check_package 1, /safety, /editor, /review_story 1, /editorial_report 1, /improve 1, /improve_to_ready 1, /readiness 1, /check_ready 1, /ready_packages, /blockers 1, /preview 1, /previews, /versions 1, /compare 1 2, /image 1, /images, /visual 1, /visuals, /select_visual 1, /check_visual 1, /visual_quality, /generate_image 1, /generated_images, /approve_generated_image 1, /reject_generated_image 1, /schedule, /schedule week, /queue, /create_package 1, /packages, /package 1, /approve_package 1, /reject_package 1, /ready, /brain, /recommendations, /help",
+    "<b>Примечание</b>",
+    "Старые английские команды сохранены для совместимости, но все ответы и подсказки бота отображаются по-русски.",
     "",
     "Кнопки снизу показывают подсказки для ежедневной работы.",
     "",
@@ -13742,15 +14409,15 @@ function telegramCommandList() {
     { command: "image_prompt", description: "Полный промпт" },
     { command: "approve_image", description: "Одобрить промпт" },
     { command: "reject_image", description: "Отклонить промпт" },
-    { command: "generate_image", description: "Generate real image from approved prompt" },
-    { command: "generated_images", description: "Latest generated images" },
-    { command: "approve_generated_image", description: "Approve generated image" },
-    { command: "reject_generated_image", description: "Reject generated image" },
-    { command: "visual", description: "Create 5 visual concepts" },
-    { command: "visuals", description: "Latest visual concepts" },
-    { command: "select_visual", description: "Select preferred visual concept" },
-    { command: "check_visual", description: "Check selected visual concept quality" },
-    { command: "visual_quality", description: "Latest visual quality reviews" },
+    { command: "generate_image", description: "Создать изображение из одобренного промпта" },
+    { command: "generated_images", description: "Последние созданные изображения" },
+    { command: "approve_generated_image", description: "Одобрить созданное изображение" },
+    { command: "reject_generated_image", description: "Отклонить созданное изображение" },
+    { command: "visual", description: "Создать пять визуальных концепций" },
+    { command: "visuals", description: "Последние визуальные концепции" },
+    { command: "select_visual", description: "Выбрать визуальную концепцию" },
+    { command: "check_visual", description: "Проверить визуальную концепцию" },
+    { command: "visual_quality", description: "Последние проверки визуальных концепций" },
     { command: "schedule", description: "План публикаций" },
     { command: "queue", description: "Очередь расписания" },
     { command: "packages", description: "Пакеты публикаций" },
@@ -13763,31 +14430,31 @@ function telegramCommandList() {
     { command: "unschedule", description: "Убрать из расписания" },
     { command: "approve_schedule", description: "Одобрить расписание" },
     { command: "stats", description: "Статистика" },
-    { command: "brain", description: "Project Brain v2" },
-    { command: "update_brain", description: "Force Project Brain sync" },
+    { command: "brain", description: "Состояние Мозга проекта" },
+    { command: "update_brain", description: "Обновить Мозг проекта" },
     { command: "recommendations", description: "Рекомендации мозга" },
-    { command: "style", description: "Style Brain v1" },
-    { command: "update_style", description: "Refresh Style Brain" },
-    { command: "style_recommendations", description: "Style recommendations" },
-    { command: "emotions", description: "Human Emotion Engine" },
-    { command: "update_emotions", description: "Refresh emotions" },
-    { command: "emotion_recommendations", description: "Emotion recommendations" },
-    { command: "safety", description: "Content Safety status" },
-    { command: "check_draft", description: "Check draft safety" },
-    { command: "check_package", description: "Check package safety" },
-    { command: "editor", description: "Latest editorial review" },
-    { command: "review_story", description: "Run editorial review" },
-    { command: "editorial_report", description: "Full editorial report" },
-    { command: "improve", description: "Create editorial rewrite" },
-    { command: "improve_to_ready", description: "Rewrite once more if score is below 75" },
-    { command: "readiness", description: "Show editorial readiness" },
-    { command: "check_ready", description: "Run final package readiness gate" },
-    { command: "ready_packages", description: "Show packages that passed final gate" },
-    { command: "blockers", description: "Show package readiness blockers" },
-    { command: "preview", description: "Pre-publish package preview" },
-    { command: "previews", description: "Latest pre-publish previews" },
-    { command: "versions", description: "Show draft revisions" },
-    { command: "compare", description: "Compare two drafts" },
+    { command: "style", description: "Анализ стиля" },
+    { command: "update_style", description: "Обновить анализ стиля" },
+    { command: "style_recommendations", description: "Рекомендации по стилю" },
+    { command: "emotions", description: "Анализ эмоциональной кривой" },
+    { command: "update_emotions", description: "Обновить эмоциональные данные" },
+    { command: "emotion_recommendations", description: "Рекомендации по эмоциям" },
+    { command: "safety", description: "Состояние проверки безопасности" },
+    { command: "check_draft", description: "Проверить безопасность черновика" },
+    { command: "check_package", description: "Проверить безопасность пакета" },
+    { command: "editor", description: "Последняя редакционная проверка" },
+    { command: "review_story", description: "Проверить историю редактором" },
+    { command: "editorial_report", description: "Полный редакционный отчёт" },
+    { command: "improve", description: "Создать улучшенную версию" },
+    { command: "improve_to_ready", description: "Улучшить историю до готовности" },
+    { command: "readiness", description: "Показать редакционную готовность" },
+    { command: "check_ready", description: "Проверить готовность пакета" },
+    { command: "ready_packages", description: "Пакеты, прошедшие проверку" },
+    { command: "blockers", description: "Причины блокировки пакета" },
+    { command: "preview", description: "Предпросмотр пакета" },
+    { command: "previews", description: "Последние предпросмотры" },
+    { command: "versions", description: "Показать версии черновика" },
+    { command: "compare", description: "Сравнить два черновика" },
     { command: "approve", description: "Одобрить черновик" },
     { command: "reject", description: "Отклонить черновик" },
     { command: "help", description: "Помощь" }
@@ -13796,7 +14463,29 @@ function telegramCommandList() {
 
 async function registerTelegramCommands() {
   if (!telegramConfigStatus().configured) return null;
-  return telegramApi("setMyCommands", { commands: telegramCommandList() });
+  const commands = telegramCommandList();
+  const russian = await telegramApi("setMyCommands", { commands, language_code: "ru" });
+  await telegramApi("setMyCommands", { commands });
+  return russian;
+}
+
+async function configureTelegramProfile() {
+  if (!telegramConfigStatus().configured) return { ok: false, configured: false };
+  const name = "ИИ-редакция историй";
+  const shortDescription = "Русская ИИ-редакция жизненных историй: проверка, аналитика и подготовка материалов.";
+  const description = "Личный редакционный центр для жизненных историй. Показывает полный текст, Facebook-фрагмент, первый комментарий, проверки и рекомендации. Публикация возможна только после решения владельца.";
+  const results = [];
+  for (const payload of [
+    ["setMyName", { name }],
+    ["setMyName", { name, language_code: "ru" }],
+    ["setMyShortDescription", { short_description: shortDescription }],
+    ["setMyShortDescription", { short_description: shortDescription, language_code: "ru" }],
+    ["setMyDescription", { description }],
+    ["setMyDescription", { description, language_code: "ru" }]
+  ]) {
+    results.push({ method: payload[0], ...(safeTelegramApiResult(await telegramApi(payload[0], payload[1]))) });
+  }
+  return { ok: results.every((item) => item.ok), results };
 }
 
 async function setStoryStatusFromTelegram(id, action) {
@@ -13805,15 +14494,15 @@ async function setStoryStatusFromTelegram(id, action) {
   if (!story) return null;
   if (action === "approve") {
     story.status = "approved";
-    story.ai_assistant_notes = [story.ai_assistant_notes || "", "Telegram: approved. Nothing was published automatically."].filter(Boolean).join("\n");
+    story.ai_assistant_notes = [story.ai_assistant_notes || "", "Telegram: одобрено редактором, автоматической публикации не было."].filter(Boolean).join("\n");
   }
   if (action === "rewrite") {
     story.status = "review";
-    story.ai_assistant_notes = [story.ai_assistant_notes || "", "Telegram: edit requested. Needs human review."].filter(Boolean).join("\n");
+    story.ai_assistant_notes = [story.ai_assistant_notes || "", "Telegram: запрошены правки, требуется проверка редактором."].filter(Boolean).join("\n");
   }
   if (action === "reject" || action === "delete") {
     story.status = "rejected";
-    story.ai_assistant_notes = [story.ai_assistant_notes || "", "Telegram: rejected. Story was kept for audit history and was not published."].filter(Boolean).join("\n");
+    story.ai_assistant_notes = [story.ai_assistant_notes || "", "Telegram: отклонено, история сохранена для журнала проверки и не опубликована."].filter(Boolean).join("\n");
   }
   story.updated_at = new Date().toISOString();
   await writeStories(stories.map((item) => item.id === id ? story : item));
@@ -13825,15 +14514,19 @@ async function handlePublishingPackageCallback(chatId, data) {
   const [, action, packageId] = data.split(":");
   const pkg = readinessPackageByRef(packageId);
   if (!pkg) return sendTelegramMessage(chatId, "Публикационный пакет не найден.", mainTelegramKeyboard());
+  if (action === "story") return sendTelegramPackageStory(chatId, pkg, publishingPackageTelegramKeyboard(pkg));
+  if (action === "facebook") return sendTelegramLongMessage(chatId, telegramPackageFacebookText(pkg), publishingPackageTelegramKeyboard(pkg));
+  if (action === "comment") return sendTelegramMessage(chatId, telegramPackageCommentText(pkg), publishingPackageTelegramKeyboard(pkg));
   if (action === "approve") {
     const updated = await updatePublishingPackageStatus(pkg.id, "approved");
-    if (updated?.safety_blocked) {
+    if (updated?.safety_blocked || updated?.approval_blocked) {
+      const blockers = (updated.readiness_blockers || []).map((item) => `• ${item.message}`).join("\n") || "Пакет не прошёл обязательные проверки.";
       return sendTelegramLongMessage(chatId, [
-        "<b>Одобрение заблокировано Content Safety</b>",
+        "<b>Пакет пока нельзя одобрить</b>",
         "",
-        telegramContentSafetyReviewText(updated.safety_review || {}),
+        escapeHtml(blockers),
         "",
-        "Материал не опубликован."
+        "Статус оставлен «на редакторской проверке». Материал не опубликован."
       ].join("\n"), publishingPackageTelegramKeyboard(updated));
     }
     return sendTelegramLongMessage(chatId, publishingPackageTelegramCard(updated), publishingPackageTelegramKeyboard(updated));
@@ -13846,21 +14539,21 @@ async function handlePublishingPackageCallback(chatId, data) {
     await updatePublishingPackageStatus(pkg.id, "review");
     return sendTelegramMessage(chatId, [
       "<b>Пакет возвращён на редактирование</b>",
-      "Используйте /улучшить 1 для редакционной версии или откройте черновик в админке.",
+      `Используйте /улучшить ${pkg.draft_id} для новой редакционной версии или откройте черновик в админке.`,
       "Исходная версия сохранена. Ничего не опубликовано."
     ].join("\n"), publishingPackageTelegramKeyboard(pkg));
   }
   if (action === "rewrite") {
-    const result = await rewriteDraftFromEditorialReview(pkg.draft_id);
+    const result = await rewriteDraftFromEditorialReview(pkg.draft_id, "", { language: "ru" });
     if (!result.ok) return sendTelegramMessage(chatId, escapeHtml(result.message || "Не удалось переделать текст."), publishingPackageTelegramKeyboard(pkg));
     const improved = result.improved_draft || {};
     return sendTelegramLongMessage(chatId, [
       "<b>Создана новая редакционная версия</b>",
       "",
       `<b>${escapeHtml(improved.title || "Новая версия")}</b>`,
-      `Editorial: ${Number(result.score_after || 0)}/100`,
-      `Safety: ${escapeHtml(result.content_safety_review?.recommendation || "pending")}`,
-      `Новый draft ID: ${escapeHtml(improved.id || "")}`,
+      `Редакционная оценка: ${Number(result.score_after || 0)}/100`,
+      `Безопасность: ${escapeHtml(telegramRuLabel(result.content_safety_review?.recommendation || "pending"))}`,
+      `ID нового черновика: ${escapeHtml(improved.id || "")}`,
       "",
       "Исходный текст не перезаписан. Создайте пакет для новой версии после проверки."
     ].join("\n"), mainTelegramKeyboard());
@@ -13872,11 +14565,7 @@ async function handlePublishingPackageCallback(chatId, data) {
       : escapeHtml(result.message || "Не удалось создать визуальные концепции."), publishingPackageTelegramKeyboard(pkg));
   }
   if (action === "time") {
-    return sendTelegramMessage(chatId, "Чтобы изменить время, отправьте: /move 1 tomorrow 19:30. Номер слота смотрите в /очередь.", publishingPackageTelegramKeyboard(pkg));
-  }
-  if (action === "preview") {
-    const previewUrl = `${PUBLIC_BASE_URL}/story-preview/${encodeURIComponent(pkg.id)}`;
-    return sendTelegramMessage(chatId, `<b>Website Preview</b>\n${escapeHtml(previewUrl)}\n\nЭто закрытый рабочий preview. История ещё не опубликована.`, publishingPackageTelegramKeyboard(pkg));
+    return sendTelegramMessage(chatId, "Чтобы изменить время, отправьте: /перенести 1 завтра 19:30. Номер слота смотрите в /очередь. Публикация не запускается.", publishingPackageTelegramKeyboard(pkg));
   }
   return sendTelegramMessage(chatId, "Неизвестное действие пакета.", publishingPackageTelegramKeyboard(pkg));
 }
@@ -14007,17 +14696,17 @@ async function handleTelegramMessage(message) {
   if (command === "/старт") return telegramStart(chatId);
   if (command === "/help" || command === "/помощь") return telegramHelp(chatId);
   if (command === "/status" || command === "/статус") return telegramStatus(chatId);
-  if (command === "/load_posts") return telegramLoadPosts(chatId);
-  if (command === "/analyze") return telegramAnalyze(chatId);
+  if (command === "/load_posts" || command === "/загрузить_посты") return telegramLoadPosts(chatId);
+  if (command === "/analyze" || command === "/анализ") return telegramAnalyze(chatId);
   if (command === "/research" || command === "/поиск") return telegramResearch(chatId, args.join(" "));
   if (command === "/generate" || command === "/создать") return telegramGenerateStory(chatId, args);
   if (command === "/ideas") return telegramIdeas(chatId);
   if (command === "/plan") return telegramPlan(chatId);
   if (command === "/schedule" || command === "/план") return telegramSchedule(chatId, args);
   if (command === "/queue" || command === "/очередь") return telegramQueue(chatId);
-  if (command === "/move") return telegramMoveSchedule(chatId, args);
-  if (command === "/unschedule") return telegramUnschedule(chatId, args[0]);
-  if (command === "/approve_schedule") return telegramApproveSchedule(chatId);
+  if (command === "/move" || command === "/перенести") return telegramMoveSchedule(chatId, args);
+  if (command === "/unschedule" || command === "/убрать_из_плана") return telegramUnschedule(chatId, args[0]);
+  if (command === "/approve_schedule" || command === "/одобрить_план") return telegramApproveSchedule(chatId);
   if (command === "/packages" || command === "/пакеты") return telegramPackages(chatId);
   if (command === "/package" || command === "/пакет") return telegramPackageDetails(chatId, args[0] || "1");
   if (command === "/create_package" || command === "/создать_пакет") return telegramCreatePackage(chatId, args[0] || "1");
@@ -14052,15 +14741,15 @@ async function handleTelegramMessage(message) {
   if (command === "/improve" || command === "/улучшить") return telegramImproveDraft(chatId, args[0] || "1");
   if (command === "/versions" || command === "/версии") return telegramDraftVersions(chatId, args[0] || "1");
   if (command === "/compare" || command === "/сравнить") return telegramCompareDrafts(chatId, args[0] || "1", args[1] || "2");
-  if (command === "/stats") return telegramStats(chatId);
+  if (command === "/stats" || command === "/статистика") return telegramStats(chatId);
   if (command === "/drafts" || command === "/черновики") return telegramDrafts(chatId);
   if (command === "/draft" || command === "/черновик") return telegramDraftDetails(chatId, args[0]);
   if (command === "/approve" || command === "/одобрить") return telegramApproveCommand(chatId, args[0]);
   if (command === "/reject" || command === "/отклонить") return telegramRejectCommand(chatId, args[0]);
-  if (command === "/stories") return telegramStories(chatId);
+  if (command === "/stories" || command === "/истории") return telegramStories(chatId);
   if (command === "/image" || command === "/картинка") return telegramCreateImagePrompts(chatId, args[0] || "1");
   if (command === "/images" || command === "/картинки") return telegramImageQueueV2(chatId);
-  if (command === "/image_prompt") return telegramImagePromptDetailsV2(chatId, args[0] || "1");
+  if (command === "/image_prompt" || command === "/промпт_картинки") return telegramImagePromptDetailsV2(chatId, args[0] || "1");
   if (command === "/approve_image" || command === "/одобрить_картинку") return telegramApproveImageCommand(chatId, args[0] || "1");
   if (command === "/reject_image" || command === "/отклонить_картинку") return telegramRejectImageCommand(chatId, args[0] || "1");
   if (command === "/generate_image" || command === "/сгенерировать_картинку") return telegramGenerateImageV3(chatId, args[0] || "1");
@@ -14072,10 +14761,10 @@ async function handleTelegramMessage(message) {
   if (command === "/select_visual" || command === "/выбрать_визуал") return telegramSelectVisualConcept(chatId, args[0] || "1");
   if (command === "/check_visual" || command === "/проверить_визуал") return telegramCheckVisualQuality(chatId, args[0] || "1");
   if (command === "/visual_quality" || command === "/качество_визуала") return telegramVisualQuality(chatId);
-  if (command === "/audience") return telegramAudience(chatId);
-  if (command === "/competitors") return telegramCompetitors(chatId);
-  if (command === "/autopilot") return telegramAutopilot(chatId);
-  if (command === "/settings") return telegramSettings(chatId);
+  if (command === "/audience" || command === "/аудитория") return telegramAudience(chatId);
+  if (command === "/competitors" || command === "/конкуренты") return telegramCompetitors(chatId);
+  if (command === "/autopilot" || command === "/автопилот") return telegramAutopilot(chatId);
+  if (command === "/settings" || command === "/настройки") return telegramSettings(chatId);
   return telegramStart(chatId);
 }
 
@@ -14108,7 +14797,7 @@ async function sendDailyTelegramReports() {
   const realData = buildRealDataLayer();
   if (hour >= 8 && hour < 10 && telegramDailyState.morning !== dateKey) {
     telegramDailyState.morning = dateKey;
-    await sendTelegramMessage(process.env.CHAT_ID, `Доброе утро, Алексей.\n\nСегодня рекомендую:\n\n📖 История:\n${escapeHtml(brain.best_topics?.[0]?.topic || "Мать и взрослый сын")}\n\n🖼 Изображение:\n${escapeHtml(brain.best_images?.[0]?.image_type || "Пожилая женщина на кухне")}\n\n🕒 Время:\n${escapeHtml(brain.best_times?.[0]?.time || "19:00")}\n\n📈 Основано на:\n• Audience Analyst\n• Competitor Analyst\n• Project Brain`, mainTelegramKeyboard());
+    await sendTelegramMessage(process.env.CHAT_ID, `Доброе утро, Алексей.\n\nСегодня рекомендую:\n\n📖 История:\n${escapeHtml(brain.best_topics?.[0]?.topic || "Мать и взрослый сын")}\n\n🖼 Изображение:\n${escapeHtml(brain.best_images?.[0]?.image_type || "Пожилая женщина на кухне")}\n\n🕒 Время:\n${escapeHtml(brain.best_times?.[0]?.time || "19:00")}\n\n📈 Основано на:\n• анализе аудитории\n• анализе конкурентов\n• Мозге проекта`, mainTelegramKeyboard());
     if (realData.warnings.length) {
       await sendTelegramMessage(process.env.CHAT_ID, `⚠ <b>Данных не хватает</b>\n\n${escapeHtml(realData.warnings.slice(0, 4).map((item) => `• ${item}`).join("\n"))}`, mainTelegramKeyboard());
     }
@@ -14118,7 +14807,7 @@ async function sendDailyTelegramReports() {
     const storiesToday = readStories().filter((story) => (story.created_at || "").slice(0, 10) === dateKey);
     await sendTelegramMessage(process.env.CHAT_ID, `Отчёт за день:\n\nСоздано историй: ${storiesToday.length}\nСоздано изображений: ${storiesToday.filter((story) => story.image).length}\nЛучший пост: ${escapeHtml(readFacebookPosts()[0]?.message ? shortText(readFacebookPosts()[0].message, 120) : "недостаточно данных")}\nЛучшее изображение: ${escapeHtml(brain.best_images?.[0]?.image_type || "недостаточно данных")}\nЛучшее время: ${escapeHtml(brain.best_times?.[0]?.time || "недостаточно данных")}`, mainTelegramKeyboard());
     if (realData.warnings.length) {
-      await sendTelegramMessage(process.env.CHAT_ID, `⚠ <b>Статус Real Data Layer</b>\n\n${escapeHtml(realData.notice)}\n\n${escapeHtml(realData.warnings.slice(0, 4).map((item) => `• ${item}`).join("\n"))}`, mainTelegramKeyboard());
+      await sendTelegramMessage(process.env.CHAT_ID, `⚠ <b>Статус слоя реальных данных</b>\n\n${escapeHtml(realData.notice)}\n\n${escapeHtml(realData.warnings.slice(0, 4).map((item) => `• ${item}`).join("\n"))}`, mainTelegramKeyboard());
     }
   }
 }
@@ -14129,10 +14818,11 @@ function startTelegramControlCenter() {
     return;
   }
   console.log("Telegram Control Center: enabled.");
+  configureTelegramProfile().catch((error) => console.warn(`Telegram profile setup failed: ${error.message}`));
   registerTelegramCommands().catch((error) => console.warn(`Telegram setMyCommands failed: ${error.message}`));
   setInterval(pollTelegram, 2500);
   setInterval(sendDailyTelegramReports, 60 * 1000);
-  sendTelegramMessage(process.env.CHAT_ID, "🤖 Telegram Control Center запущен.\n\nПубликация отключена. Доступны уведомления, просмотр, одобрение и отклонение.", mainTelegramKeyboard());
+  sendTelegramMessage(process.env.CHAT_ID, "🤖 ИИ-редакция историй запущена.\n\nПубликация отключена. Доступны уведомления, просмотр, одобрение и отклонение.", mainTelegramKeyboard());
 }
 
 async function createCompetitor(payload) {
@@ -14327,7 +15017,7 @@ function buildImagePrompt(payload) {
 
   return {
     analysis: { title, emotion, age, place, conflict, scene },
-    prompt: `Photorealistic editorial lifestyle photo for a Facebook story post. Scene: ${scene}. Main emotion: ${emotion}. Characters: ${age}. Setting: ${place}. Conflict shown visually: ${conflict}. The image should feel like a real everyday family photograph from Eastern Europe: natural faces, imperfect real skin texture, ordinary clothing, modest home details, lived-in interior, no glamour, no staged advertising look. Capture a tense emotional moment before or after an important conversation, with subtle body language and believable facial expressions. Use natural window light or warm kitchen light, documentary photography style, 35mm lens, shallow but realistic depth of field, horizontal 16:9 composition, strong visual hook for Facebook feed, clear central subject, no text, no logos, no watermark.\n\nAudience Analyst guidance: ${guidance}\n\nNegative prompt: cartoon, illustration, plastic faces, AI-looking skin, overly perfect people, glossy fashion photo, fantasy, melodrama poster, distorted hands, extra fingers, unreadable text, fake smiles, heavy filters, surreal lighting, stock photo style.`
+    prompt: `Фотореалистичная редакционная бытовая фотография для истории в Facebook. Сцена: ${scene}. Главная эмоция: ${emotion}. Персонажи: ${age}. Место: ${place}. Визуальный конфликт: ${conflict}. Изображение должно выглядеть как настоящая повседневная семейная фотография из Восточной Европы: естественные лица, несовершенная текстура кожи, обычная одежда, скромные домашние детали, жилой интерьер, без гламура и рекламной постановки. Покажите напряжённый эмоциональный момент до или после важного разговора через тонкий язык тела и правдоподобную мимику. Естественный свет из окна или тёплый свет кухни, документальный стиль, объектив 35 мм, небольшая реалистичная глубина резкости, горизонтальная композиция 16:9, сильный визуальный крючок для ленты Facebook, один ясный главный объект, без текста, логотипов и водяного знака.\n\nРекомендация анализа аудитории: ${guidance}\n\nИсключить: мультяшность, иллюстрацию, пластиковые лица, искусственную кожу, чрезмерно идеальных людей, глянцевую модную съёмку, фантазию, афишу мелодрамы, искажённые руки, лишние пальцы, нечитаемый текст, неестественные улыбки, тяжёлые фильтры, сюрреалистический свет и вид стоковой фотографии.`
   };
 }
 
@@ -16653,7 +17343,11 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/autopilot/v1/packages" && req.method === "POST") {
     const payload = await parseBody(req);
-    return sendJson(res, 200, await createPublishingPackageFromDraft(payload.draft || payload.draft_id || payload.index || "1"));
+    const result = await createPublishingPackageFromDraft(payload.draft || payload.draft_id || payload.index || "1");
+    if (result.ok && telegramConfigStatus().configured) {
+      result.telegram_delivery = await sendPublishingPackageToTelegram(result.package);
+    }
+    return sendJson(res, 200, result);
   }
 
   if (pathname === "/api/autopilot/v1/package-status" && req.method === "POST") {
@@ -16798,7 +17492,15 @@ async function router(req, res) {
       const redirectParams = new URLSearchParams();
       if (campaignId) redirectParams.set("campaign", campaignId);
       redirectParams.set("source", url.searchParams.get("source") || "facebook_comment");
-      res.writeHead(302, { location: `/story/${story.slug}?${redirectParams.toString()}` });
+      const destination = story.status === "published"
+        ? `/story/${story.slug}`
+        : pkg?.id
+          ? `/story-preview/${pkg.id}`
+          : "";
+      if (!destination) {
+        return send(res, 200, await renderStory(req, story, { countView: false, preview: true }));
+      }
+      res.writeHead(302, { location: `${destination}?${redirectParams.toString()}` });
       return res.end();
     }
 
@@ -16806,7 +17508,7 @@ async function router(req, res) {
       const packageId = pathname.split("/").filter(Boolean)[1];
       const pkg = readPublishingPackages().find((item) => item.id === packageId);
       const story = pkg ? readStories().find((item) => item.id === pkg.story_id || item.source_draft_id === pkg.draft_id) : null;
-      if (!story) return send(res, 404, layout("Preview not found", `${renderHeader()}<main class="empty-state"><h1>Preview not found</h1></main>`));
+      if (!story) return send(res, 404, layout("Предпросмотр не найден", `${renderHeader()}<main class="empty-state"><h1>Предпросмотр не найден</h1></main>`));
       return send(res, 200, await renderStory(req, story, { countView: false, preview: true }));
     }
 

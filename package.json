@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "check": "node scripts/check-syntax.js",
+    "check:telegram-ru": "node scripts/check-telegram-russian.js",
     "test:rc1": "node scripts/rc1-smoke.js",
     "db:restore-point": "node scripts/create-db-restore-point.js",
     "db:migrate": "node scripts/migrate.js",
