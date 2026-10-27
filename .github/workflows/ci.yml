@@ -47,5 +47,8 @@ jobs:
       - name: Audit Russian Telegram UI text
         run: npm run check:telegram-ru
 
+      - name: Verify genuine longform writer contract (mock API only)
+        run: npm run test:story-writer
+
       - name: Run isolated RC-1 smoke tests
         run: npm run test:rc1
