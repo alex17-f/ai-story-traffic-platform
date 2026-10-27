@@ -1,0 +1,51 @@
+name: AI Story Traffic CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Syntax, Russian Telegram, and RC-1 smoke tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      LOAD_LOCAL_ENV: "false"
+      DATABASE_URL: ""
+      TELEGRAM_DRY_RUN: "true"
+      ENABLE_OPENAI_IMAGES: "false"
+    steps:
+      - name: Checkout code (read-only)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      # A lockfile is not present in the current repository, so npm ci cannot run yet.
+      # --ignore-scripts avoids third-party install lifecycle execution in this CI job.
+      - name: Install dependencies without lifecycle scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Check JavaScript syntax
+        run: npm run check
+
+      - name: Audit Russian Telegram UI text
+        run: npm run check:telegram-ru
+
+      - name: Run isolated RC-1 smoke tests
+        run: npm run test:rc1
