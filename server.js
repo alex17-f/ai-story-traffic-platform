@@ -9890,6 +9890,10 @@ function viralPredictionScore(researchSignals, facebookSignals, length) {
 async function generateOriginalStoryV2(payload = {}) {
   const category = normalizeResearchCategory(payload.category || "betrayal");
   const length = normalizeGeneratedLength(payload.length || "medium");
+  // Explicit opt-in only: never generate a short template when the model is requested.
+  if (process.env.STORY_TEXT_PROVIDER === "openai" && !process.env.OPENAI_API_KEY) {
+    return { ok: false, code: "story_text_api_key_missing", publishing_enabled: false };
+  }
   const language = String(payload.language || "ru").toLowerCase().startsWith("en") ? "en" : "ru";
   let researchSignals = topResearchSignalsForStory(category, 8);
   if (!researchSignals.some((item) => item.source_status === "live_search")) {
@@ -9956,8 +9960,9 @@ async function generateOriginalStoryV2(payload = {}) {
   commitNarrativeBatchMemory(sharedBatchMemory, bestCandidate?.memory);
   const profile = bestCandidate.profile;
   const diversity = bestCandidate.diversity;
-  const draft = bestCandidate.draft;
-  const generationSimilarity = {
+  const modelGeneration = process.env.STORY_TEXT_PROVIDER === "openai";
+  let draft = bestCandidate.draft;
+  let generationSimilarity = {
     ...bestCandidate.generationSimilarity,
     warning: bestCandidate.generationSimilarity.similarity_score >= 38
       ? "generated_similarity_remains_high_after_retries"
@@ -9965,13 +9970,38 @@ async function generateOriginalStoryV2(payload = {}) {
         ? "generated_regenerated_for_originality"
         : ""
   };
+  if (modelGeneration) {
+    const { generateLongformDraft } = require("./lib/longform-writer");
+    const written = await generateLongformDraft({
+      apiKey: process.env.OPENAI_API_KEY,
+      model: process.env.STORY_TEXT_MODEL || "gpt-6.1-sol",
+      category, emotion, diversity, seed, researchSignals, styleGuidance, emotionGuidance
+    });
+    if (!written.ok) {
+      return { ok: false, module: "Story Generator v2", code: written.code,
+        issues: written.issues || [], publishing_enabled: false };
+    }
+    draft = written.draft;
+    const similarity = generatedStorySimilarityCheck(draft);
+    generationSimilarity = {
+      ...similarity,
+      attempts: 1,
+      candidate_offset: 0,
+      narrative_frame: diversity.frame_id,
+      warning: similarity.similarity_score >= 38 ? "model_story_too_similar" : ""
+    };
+    if (similarity.similarity_score >= 38) {
+      return { ok: false, module: "Story Generator v2",
+        code: "story_text_originality_check_failed", publishing_enabled: false };
+    }
+  }
   const score = viralPredictionScore(researchSignals, facebookSignals, length);
   const story = {
     id: crypto.randomUUID(),
     title: draft.title,
     category,
     emotion,
-    length,
+    length: modelGeneration ? "long" : length,
     language,
     hook: draft.hook,
     full_story: draft.full_story,
@@ -9985,7 +10015,9 @@ async function generateOriginalStoryV2(payload = {}) {
       generationSimilarity.warning ? `Pre-safety similarity check: ${generationSimilarity.warning}, score ${generationSimilarity.similarity_score}.` : `Pre-safety similarity check passed, score ${generationSimilarity.similarity_score}.`,
       `Style Brain guidance: ${styleGuidance.opening_style}, ${styleGuidance.dialogue_density}, ${styleGuidance.paragraph_rhythm}.`,
       `Emotion Engine guidance: ${emotionGuidance.rhythm || "slow-build emotional escalation"}, peak near ${emotionGuidance.peak_position || 70}%, ending with ${emotionGuidance.ending_emotion || "relief"}.`,
-      "Original draft: new characters, new setting, new ending, no copied text."
+      modelGeneration
+        ? "Full-length Russian story generated via text model; length, language and repetition gate passed. Human approval required."
+        : "Template draft: original generation requires opt-in STORY_TEXT_PROVIDER=openai."
     ].join(" "),
     research_signals: researchSignals,
     facebook_signals: facebookSignals,
@@ -10052,6 +10084,11 @@ async function generateOriginalStoriesV2(payload = {}) {
       frame_index: batchFrameOffset + index,
       batch_memory: batchMemory
     });
+    if (!result.ok) {
+      return { ok: false, module: "Story Generator v2", code: result.code,
+        issues: result.issues || [], generated_count: generated.length,
+        publish_allowed: false };
+    }
     generated.push({
       ...result.story,
       emotion_timeline: result.emotion_timeline || null,
@@ -13252,6 +13289,11 @@ async function updateGeneratedDraftStatusByNumber(numberText, status) {
 async function telegramGenerateStory(chatId, args = []) {
   const { category, count } = parseTelegramCategoryAndCount(args, "betrayal", 3);
   const result = await generateOriginalStoriesV2({ category, length: "medium", count });
+  if (!result.ok) {
+    return sendTelegramMessage(chatId,
+      "Генерация остановлена: " + escapeHtml(result.code || "ошибка качества") +
+      ". Шаблон вместо полноценного текста не подставлен.", mainTelegramKeyboard());
+  }
   const previews = result.stories.map((story, index) => [
     `${index + 1}. ${story.title}`,
     `эмоция: ${telegramRuLabel(story.emotion)}`,
